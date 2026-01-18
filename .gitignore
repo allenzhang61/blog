@@ -14,3 +14,4 @@ settings.json
 *.data
 *.mbr
 *.elf
+.VSCodeCounter/

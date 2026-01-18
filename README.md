@@ -23,7 +23,3 @@ https://chrome.google.com/webstore/detail/mathjax-plugin-for-github/ioemnmodlmaf
 - 算法导论
 - 汇编语言：基于x86处理器（原书第7版） : 基于x86处理器（原书第7版）
   - 太难搞了，环境搭建不出来；适合windows环境
-
-## 好文章
-
-- [原来 8 张图，就可以搞懂「零拷贝」了](https://www.cnblogs.com/xiaolincoding/p/13719610.html)

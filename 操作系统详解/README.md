@@ -144,3 +144,6 @@
 
 - 24201606 - Multiprocessor Specification.pdf
 - Linux内核完全注释，赵炯
+
+
+- 好文章 [原来 8 张图，就可以搞懂「零拷贝」了](https://www.cnblogs.com/xiaolincoding/p/13719610.html)
