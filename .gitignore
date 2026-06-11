@@ -15,3 +15,7 @@ settings.json
 *.mbr
 *.elf
 .VSCodeCounter/
+
+# MNIST 等数据集缓存
+mnist/
+.ipynb_checkpoints/
