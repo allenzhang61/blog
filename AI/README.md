@@ -1,17 +1,27 @@
 ## 目录
 
 - 概率论
+  - [分布函数](chapter-01/01-001.md)
 - 代数
 - LLM
 - 深度学习
+  - [问题分类](chapter-04/04-005.ipynb)
   - [激活函数](chapter-04/04-001.ipynb)
+  - [线性神经网络](chapter-04/04-006.ipynb)
+    - [线性神经网络 - 实现](chapter-04/04-008.ipynb)
+    - [线性神经网络 - 简洁实现](chapter-04/04-009.ipynb)
   - [三层神经网络](chapter-04/04-002.ipynb)
   - [损失函数](chapter-04/04-004.ipynb)
+    - [为什么线性回归要用 MSE，而不是其他损失函数](chapter-04/04-007.ipynb)
   - [MNIST 数据集](chapter-04/04-003.ipynb)
 - 机器学习
 - pytorch
-
-
+- huggingface-transformers
+- competitions
+    - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
+- 性能优化
+  - [矢量加速原理](chapter-09/09-001.ipynb)
+    
 ![](/static/images/2606/p001.png)
 
 
@@ -22,3 +32,4 @@
 ## 资料
 
 - 深度学习入门：基于 Python 的理论与实现
+- dive into deep learning
