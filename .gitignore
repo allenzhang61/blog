@@ -19,3 +19,5 @@ settings.json
 # MNIST 等数据集缓存
 mnist/
 .ipynb_checkpoints/
+
+AI/data/
