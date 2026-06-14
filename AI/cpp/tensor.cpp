@@ -232,13 +232,15 @@ Tensor Tensor::matmul(const Tensor &other) const {
         throw std::invalid_argument("number of shapes do not match");
     }
     Tensor out({shape_[0], other.shape_[1]});
+    // 直接用 strides_ 做下标运算，避免 at() 每次 vector 堆分配
     for (int i = 0; i < shape_[0]; i++) {
         for (int j = 0; j < other.shape_[1]; j++) {
             float s = 0;
-            for (int k = 0; k < other.shape_[0]; k++) {
-                s += at({i, k}) * other.at({k, j});
+            for (int k = 0; k < shape_[1]; k++) {
+                s += data_[i * strides_[0] + k * strides_[1]]
+                   * other.data_[k * other.strides_[0] + j * other.strides_[1]];
             }
-            out.at({i, j}) = s;
+            out.data_[i * out.strides_[0] + j * out.strides_[1]] = s;
         }
     }
     if (requires_grad_ || other.requires_grad_) {

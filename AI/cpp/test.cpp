@@ -3,6 +3,9 @@
 #include <cmath>
 #include <functional>
 #include <random>
+#include <fstream>
+#include <algorithm>
+#include <chrono>
 
 // ============================================================
 // 数值梯度检验辅助（有限差分）
@@ -18,6 +21,38 @@ static Tensor numerical_gradient(std::function<float(Tensor)> f,
         grad.data_[i] = (f(xp) - f(xm)) / (2.f * eps);
     }
     return grad;
+}
+
+// ============================================================
+// MNIST IDX 格式读取辅助
+// ============================================================
+static std::vector<uint8_t> read_idx_images(const std::string &path, int &n) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return {};
+    auto read32 = [&]() {
+        uint8_t b[4]; f.read((char *)b, 4);
+        return (int)((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
+    };
+    read32();           // magic
+    n = read32();
+    int rows = read32(), cols = read32();
+    std::vector<uint8_t> data(n * rows * cols);
+    f.read((char *)data.data(), data.size());
+    return data;
+}
+
+static std::vector<uint8_t> read_idx_labels(const std::string &path, int &n) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return {};
+    auto read32 = [&]() {
+        uint8_t b[4]; f.read((char *)b, 4);
+        return (int)((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
+    };
+    read32();           // magic
+    n = read32();
+    std::vector<uint8_t> labels(n);
+    f.read((char *)labels.data(), labels.size());
+    return labels;
 }
 
 static bool tensors_near(const Tensor &a, const Tensor &b, float tol = 1e-2f) {
@@ -482,7 +517,147 @@ TEST(LinearRegression, RecoverWeights) {
 }
 
 // ============================================================
-// 13. zero_grad
+// 13. 多层感知机 MNIST 识别
+// ============================================================
+TEST(MLP, MnistDigitRecognition) {
+    const std::string dir =
+        "/Users/zyl/codes/mygithub/blog/AI/chapter-04/mnist/";
+    int n_tr_img, n_tr_lbl, n_te_img, n_te_lbl;
+    auto tr_img = read_idx_images(dir + "train-images-idx3-ubyte", n_tr_img);
+    auto tr_lbl = read_idx_labels(dir + "train-labels-idx1-ubyte", n_tr_lbl);
+    auto te_img = read_idx_images(dir + "t10k-images-idx3-ubyte",  n_te_img);
+    auto te_lbl = read_idx_labels(dir + "t10k-labels-idx1-ubyte",  n_te_lbl);
+    if (tr_img.empty() || te_img.empty())
+        GTEST_SKIP() << "MNIST 数据文件未找到：" << dir;
+
+    // 超参数
+    const int D = 784, H = 128, C = 10;
+    const int N_TRAIN = 5000, BATCH = 32, EPOCHS = 10;
+    const float LR = 0.05f;
+
+    // He 初始化（针对 ReLU）
+    std::mt19937 rng(42);
+    std::normal_distribution<float> nd(0.f, 1.f);
+
+    Tensor W1({D, H}, true);
+    float s1 = std::sqrt(2.f / D);
+    for (float &v : W1.data_) v = nd(rng) * s1;
+
+    Tensor W2({H, C}, true);
+    float s2 = std::sqrt(2.f / H);
+    for (float &v : W2.data_) v = nd(rng) * s2;
+
+    // 训练：784 --[W1]--> relu --> 128 --[W2]--> sigmoid --> 10
+    // 损失：MSE（与 one-hot 标签比较）
+    for (int epoch = 0; epoch < EPOCHS; epoch++) {
+        float total_loss = 0.f;
+        int n_batches = 0;
+
+        for (int start = 0; start < N_TRAIN; start += BATCH) {
+            int bs = std::min(BATCH, N_TRAIN - start);
+
+            // 构建 mini-batch
+            Tensor X_b({bs, D});
+            Tensor y_b({bs, C});   // one-hot，初始为全零
+            for (int i = 0; i < bs; i++) {
+                int idx = start + i;
+                for (int j = 0; j < D; j++)
+                    X_b.data_[i * D + j] = tr_img[idx * D + j] / 255.f;
+                y_b.data_[i * C + (int)tr_lbl[idx]] = 1.f;
+            }
+
+            // 前向
+            auto h    = X_b.matmul(W1).relu();
+            auto out  = h.matmul(W2).sigmoid();
+            auto diff = out - y_b;
+            auto loss = (diff * diff).mean();
+
+            total_loss += loss.data_[0];
+            n_batches++;
+
+            // 反向 + SGD
+            W1.zero_grad();
+            W2.zero_grad();
+            loss.backward();
+
+            for (int i = 0; i < W1.numel(); i++) W1.data_[i] -= LR * W1.grad_->data_[i];
+            for (int i = 0; i < W2.numel(); i++) W2.data_[i] -= LR * W2.grad_->data_[i];
+        }
+
+        std::printf("epoch %2d  loss=%.4f\n", epoch + 1, total_loss / n_batches);
+    }
+
+    // 在前 1000 个测试样本上评估准确率
+    int correct = 0;
+    const int N_TEST = 1000;
+    for (int i = 0; i < N_TEST; i++) {
+        Tensor x({1, D});
+        for (int j = 0; j < D; j++)
+            x.data_[j] = te_img[i * D + j] / 255.f;
+
+        auto out = x.matmul(W1).relu().matmul(W2);
+
+        int pred = 0;
+        for (int j = 1; j < C; j++)
+            if (out.data_[j] > out.data_[pred]) pred = j;
+
+        if (pred == (int)te_lbl[i]) correct++;
+    }
+
+    float acc = (float)correct / N_TEST;
+    std::printf("test accuracy = %.1f%%  (%d/%d)\n", acc * 100.f, correct, N_TEST);
+    EXPECT_GT(acc, 0.70f);
+}
+
+// ============================================================
+// 14. matmul 访问方式性能对比
+// ============================================================
+TEST(Benchmark, MatmulAtVsStride) {
+    // 模拟 MLP 第一层：(32, 784) @ (784, 128)
+    Tensor A({32, 784}), B({784, 128}), C({32, 128});
+    std::mt19937 rng(0);
+    std::uniform_real_distribution<float> d(-1.f, 1.f);
+    for (float &v : A.data_) v = d(rng);
+    for (float &v : B.data_) v = d(rng);
+
+    const int REPEAT = 20;
+
+    // --- at() 版 ---
+    auto t0 = std::chrono::high_resolution_clock::now();
+    for (int r = 0; r < REPEAT; r++) {
+        for (int i = 0; i < 32; i++)
+            for (int j = 0; j < 128; j++) {
+                float s = 0;
+                for (int k = 0; k < 784; k++)
+                    s += A.at({i, k}) * B.at({k, j});
+                C.at({i, j}) = s;
+            }
+    }
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    // --- 直接 strides 版 ---
+    auto t2 = std::chrono::high_resolution_clock::now();
+    for (int r = 0; r < REPEAT; r++) {
+        for (int i = 0; i < 32; i++)
+            for (int j = 0; j < 128; j++) {
+                float s = 0;
+                for (int k = 0; k < 784; k++)
+                    s += A.data_[i * A.strides_[0] + k * A.strides_[1]]
+                       * B.data_[k * B.strides_[0] + j * B.strides_[1]];
+                C.data_[i * C.strides_[0] + j * C.strides_[1]] = s;
+            }
+    }
+    auto t3 = std::chrono::high_resolution_clock::now();
+
+    auto ms_at     = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    auto ms_stride = std::chrono::duration<double, std::milli>(t3 - t2).count();
+    std::printf("at() x%d:     %.1f ms  (%.2f ms/matmul)\n", REPEAT, ms_at,     ms_at     / REPEAT);
+    std::printf("stride x%d:   %.1f ms  (%.2f ms/matmul)\n", REPEAT, ms_stride, ms_stride / REPEAT);
+    std::printf("speedup:      %.1fx\n", ms_at / ms_stride);
+}
+
+// ============================================================
+// 15. zero_grad
 // ============================================================
 TEST(ZeroGrad, ClearsGradient) {
     Tensor a({1, 2, 3, 4}, {4}, true);
