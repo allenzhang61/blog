@@ -28,6 +28,8 @@
     - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
 - 性能优化
   - [矢量加速原理](chapter-09/09-001.ipynb)
+- 实践
+  - [cpp](./cpp/)
     
 ![](/static/images/2606/p001.png)
 

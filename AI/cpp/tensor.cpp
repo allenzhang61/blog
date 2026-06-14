@@ -192,31 +192,39 @@ static Tensor elementwise_op(
     return out;
 }
 
+static std::shared_ptr<Tensor> autograd_edge(const Tensor& t) {
+    if (t.is_leaf_)
+        return std::shared_ptr<Tensor>(const_cast<Tensor*>(&t), [](Tensor*) {});
+    return std::make_shared<Tensor>(t);
+}
+
+static std::shared_ptr<Tensor> save_for_backward(const Tensor& t) {
+    return std::make_shared<Tensor>(t);
+}
+
 Tensor Tensor::operator+(const Tensor &other) const {
     auto fn = std::make_shared<AddBackward>();
-    fn->inputs_     = { std::make_shared<Tensor>(*this), std::make_shared<Tensor>(other) };
-    fn->input_refs_ = { const_cast<Tensor*>(this), const_cast<Tensor*>(&other) };
+    fn->next_ = { autograd_edge(*this), autograd_edge(other) };
     return elementwise_op(*this, other, [](float a, float b) { return a + b; }, fn);
 }
 
 Tensor Tensor::operator-(const Tensor &other) const {
     auto fn = std::make_shared<SubBackward>();
-    fn->inputs_     = { std::make_shared<Tensor>(*this), std::make_shared<Tensor>(other) };
-    fn->input_refs_ = { const_cast<Tensor*>(this), const_cast<Tensor*>(&other) };
+    fn->next_ = { autograd_edge(*this), autograd_edge(other) };
     return elementwise_op(*this, other, [](float a, float b) { return a - b; }, fn);
 }
 
 Tensor Tensor::operator*(const Tensor &other) const {
     auto fn = std::make_shared<MulBackward>();
-    fn->inputs_     = { std::make_shared<Tensor>(*this), std::make_shared<Tensor>(other) };
-    fn->input_refs_ = { const_cast<Tensor*>(this), const_cast<Tensor*>(&other) };
+    fn->next_ = { autograd_edge(*this), autograd_edge(other) };
+    fn->saved_tensors_ = { save_for_backward(*this), save_for_backward(other) };
     return elementwise_op(*this, other, [](float a, float b) { return a * b; }, fn);
 }
 
 Tensor Tensor::operator/(const Tensor &other) const {
     auto fn = std::make_shared<DivBackward>();
-    fn->inputs_     = { std::make_shared<Tensor>(*this), std::make_shared<Tensor>(other) };
-    fn->input_refs_ = { const_cast<Tensor*>(this), const_cast<Tensor*>(&other) };
+    fn->next_ = { autograd_edge(*this), autograd_edge(other) };
+    fn->saved_tensors_ = { save_for_backward(*this), save_for_backward(other) };
     return elementwise_op(*this, other, [](float a, float b) { return a / b; }, fn);
 }
 
@@ -224,7 +232,7 @@ Tensor Tensor::matmul(const Tensor &other) const {
     //   1. 检查 ndim()==2 且 shape_[1] == other.shape_[0]
     //   2. 分配 result shape = {shape_[0], other.shape_[1]}，全零
     //   3. 三层循环：i, j, k: result[i][j] += this[i][k] * other[k][j]
-    //   4. 构造 MatmulBackward，inputs_ = {this, other}，挂到 result.grad_fn_
+    //   4. 构造 MatmulBackward，将输入接入计算图并按需保存 forward 值
     if (ndim() != 2 || other.ndim() != 2) {
         throw std::invalid_argument("number of dimensions do not match");
     }
@@ -247,8 +255,8 @@ Tensor Tensor::matmul(const Tensor &other) const {
         out.requires_grad_ = true;
         out.is_leaf_ = false;
         auto fn = std::make_shared<MatmulBackward>();
-        fn->inputs_     = { std::make_shared<Tensor>(*this), std::make_shared<Tensor>(other) };
-        fn->input_refs_ = { const_cast<Tensor*>(this), const_cast<Tensor*>(&other) };
+        fn->next_ = { autograd_edge(*this), autograd_edge(other) };
+        fn->saved_tensors_ = { save_for_backward(*this), save_for_backward(other) };
         out.grad_fn_ = fn;
     }
     return out;
@@ -273,8 +281,7 @@ Tensor Tensor::sum(int dim) const {
         out.requires_grad_ = true;
         out.is_leaf_ = false;
         auto fn = std::make_shared<SumBackward>();
-        fn->inputs_     = { std::make_shared<Tensor>(*this) };
-        fn->input_refs_ = { const_cast<Tensor*>(this) };
+        fn->next_ = { autograd_edge(*this) };
         fn->input_shape_ = shape_;
         out.grad_fn_ = fn;
     }
@@ -301,8 +308,7 @@ Tensor Tensor::mean(int dim) const {
         out.requires_grad_ = true;
         out.is_leaf_ = false;
         auto fn = std::make_shared<MeanBackward>();
-        fn->inputs_      = { std::make_shared<Tensor>(*this) };
-        fn->input_refs_  = { const_cast<Tensor*>(this) };
+        fn->next_        = { autograd_edge(*this) };
         fn->input_shape_ = shape_;
         fn->n_           = numel();
         out.grad_fn_     = fn;
@@ -340,8 +346,8 @@ Tensor Tensor::relu() const {
     if (requires_grad_) {
         out.is_leaf_ = false;
         auto fn = std::make_shared<ReluBackward>();
-        fn->inputs_     = { std::make_shared<Tensor>(*this) };
-        fn->input_refs_ = { const_cast<Tensor*>(this) };
+        fn->next_ = { autograd_edge(*this) };
+        fn->saved_tensors_ = { save_for_backward(*this) };
         out.grad_fn_ = fn;
     }
     return out;
@@ -354,9 +360,8 @@ Tensor Tensor::sigmoid() const {
     if (requires_grad_) {
         out.is_leaf_ = false;
         auto fn = std::make_shared<SigmoidBackward>();
-        fn->inputs_     = { std::make_shared<Tensor>(*this) };
-        fn->input_refs_ = { const_cast<Tensor*>(this) };
-        fn->output_     = std::make_shared<Tensor>(out);
+        fn->next_   = { autograd_edge(*this) };
+        fn->output_ = std::make_shared<Tensor>(out);
         out.grad_fn_ = fn;
     }
     return out;
@@ -369,9 +374,8 @@ Tensor Tensor::tanh_() const {
     if (requires_grad_) {
         out.is_leaf_ = false;
         auto fn = std::make_shared<TanhBackward>();
-        fn->inputs_     = { std::make_shared<Tensor>(*this) };
-        fn->input_refs_ = { const_cast<Tensor*>(this) };
-        fn->output_     = std::make_shared<Tensor>(out);
+        fn->next_   = { autograd_edge(*this) };
+        fn->output_ = std::make_shared<Tensor>(out);
         out.grad_fn_ = fn;
     }
     return out;

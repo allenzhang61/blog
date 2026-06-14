@@ -366,7 +366,7 @@ TEST(GradGraph, NoGradPropagates) {
 TEST(NumericalGrad, Add) {
     Tensor a({1, 2, 3, 4}, {2, 2}, true);
     Tensor b({4, 3, 2, 1}, {2, 2}, true);
-    auto num = numerical_gradient([&](Tensor x) { return (x + b).sum().data_[0]; }, a);
+    auto num = numerical_gradient([&](const Tensor& x) { return (x + b).sum().data_[0]; }, a);
 
     auto out = (a + b).sum();
     out.backward();
@@ -411,7 +411,7 @@ TEST(NumericalGrad, Sigmoid) {
 
 TEST(NumericalGrad, Tanh) {
     Tensor a({-1, 0, 1, 2}, {4}, true);
-    auto num = numerical_gradient([&](Tensor x) { return x.tanh_().sum().data_[0]; }, a);
+    auto num = numerical_gradient([&](const Tensor& x) { return x.tanh_().sum().data_[0]; }, a);
 
     auto out = a.tanh_().sum();
     out.backward();

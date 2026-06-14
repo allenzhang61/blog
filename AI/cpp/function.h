@@ -10,11 +10,12 @@ class Tensor;
 //   backward() 接收上游梯度，计算并向输入节点传播
 // ============================================================
 struct Function {
-    // 保存 forward 时输入的值拷贝（用于计算局部梯度，如 MulBackward 需要 a、b 的值）
-    std::vector<std::shared_ptr<Tensor>> inputs_;
-    // 指向原始 Tensor 的裸指针（用于将梯度写回原始对象，而非拷贝）
-    // 调用方需保证 backward 执行时原始 Tensor 仍然存活
-    std::vector<Tensor*> input_refs_;
+    // 梯度传播目标。叶子节点引用原始 Tensor；非叶节点保存一份带 grad_fn_ 的节点副本。
+    std::vector<std::shared_ptr<Tensor>> next_;
+
+    // forward 时按需保存的值拷贝，用于计算局部梯度。
+    // 例如 MulBackward 需要 forward 当时的 a、b；AddBackward 不需要保存。
+    std::vector<std::shared_ptr<Tensor>> saved_tensors_;
 
     virtual ~Function() = default;
 
@@ -40,7 +41,7 @@ struct SubBackward : public Function {
 // z = a * b  (element-wise)  => dL/da = grad*b, dL/db = grad*a
 struct MulBackward : public Function {
     // 需要保存 forward 时的 a, b 用于求偏导
-    // inputs_[0] = a, inputs_[1] = b
+    // saved_tensors_[0] = a, saved_tensors_[1] = b
     // todo: 实现 backward
     void backward(std::shared_ptr<Tensor> grad) override;
 };
@@ -74,7 +75,7 @@ struct MeanBackward : public Function {
 
 // z = relu(x)  => dL/dx = grad * (x > 0 ? 1 : 0)
 struct ReluBackward : public Function {
-    // inputs_[0] = x（forward 时的输入，用于判断正负）
+    // saved_tensors_[0] = x（forward 时的输入，用于判断正负）
     // todo: 实现 backward
     void backward(std::shared_ptr<Tensor> grad) override;
 };
