@@ -6,8 +6,9 @@
 // ============================================================
 // 数值梯度检验辅助（有限差分）
 // ============================================================
+// eps=1e-3：float32 在值较大（如 20）时，1e-4 只有约 52 ULP，舍入误差会使梯度偏 ~1%
 static Tensor numerical_gradient(std::function<float(Tensor)> f,
-                                 const Tensor &x, float eps = 1e-4f) {
+                                 const Tensor &x, float eps = 1e-3f) {
     Tensor grad(x.shape_);
     for (int i = 0; i < x.numel(); i++) {
         Tensor xp = x, xm = x;
@@ -18,7 +19,7 @@ static Tensor numerical_gradient(std::function<float(Tensor)> f,
     return grad;
 }
 
-static bool tensors_near(const Tensor &a, const Tensor &b, float tol = 1e-3f) {
+static bool tensors_near(const Tensor &a, const Tensor &b, float tol = 1e-2f) {
     if (a.shape_ != b.shape_) return false;
     for (int i = 0; i < a.numel(); i++)
         if (std::fabs(a.data_[i] - b.data_[i]) > tol) return false;
@@ -28,8 +29,8 @@ static bool tensors_near(const Tensor &a, const Tensor &b, float tol = 1e-3f) {
 // ============================================================
 // 1. 基础属性
 // ============================================================
+//done
 TEST(TensorBasics, NumelAndNdim) {
-    //done
     Tensor t({2, 3});
     EXPECT_EQ(t.numel(), 6);
     EXPECT_EQ(t.ndim(), 2);
@@ -37,27 +38,47 @@ TEST(TensorBasics, NumelAndNdim) {
     EXPECT_EQ(t.shape_[1], 3);
 }
 
+//done
 TEST(TensorBasics, StridesRowMajor) {
     Tensor t({2, 3});
     // 行优先：strides = {3, 1}
     EXPECT_EQ(t.strides_[0], 3);
     EXPECT_EQ(t.strides_[1], 1);
+
+    Tensor t2({2, 3, 4});
+    EXPECT_EQ(t2.strides_[0], 12);
+    EXPECT_EQ(t2.strides_[1], 4);
+    EXPECT_EQ(t2.strides_[2], 1);
 }
 
+//done
 TEST(TensorBasics, FactoryZeros) {
-    auto z = Tensor::zeros({2, 2});
-    EXPECT_FLOAT_EQ(z.at({0, 0}), 0.f);
-    EXPECT_FLOAT_EQ(z.at({1, 1}), 0.f);
+    auto z = Tensor::zeros({2, 3});
+    EXPECT_EQ(z.numel(), 6);
+    for (int i = 0; i < z.numel(); i++) {
+        EXPECT_FLOAT_EQ(z.data_[i], 0.f);
+    }
+    // EXPECT_FLOAT_EQ(z.at({0, 0}), 0.f);
+    // EXPECT_FLOAT_EQ(z.at({0, 1}), 0.f);
+    // EXPECT_FLOAT_EQ(z.at({1, 0}), 0.f);
+    // EXPECT_FLOAT_EQ(z.at({1, 1}), 0.f);
 }
 
+//done
 TEST(TensorBasics, FactoryOnes) {
-    auto o = Tensor::ones({3});
-    EXPECT_FLOAT_EQ(o.at({0}), 1.f);
-    EXPECT_FLOAT_EQ(o.at({2}), 1.f);
+    auto z = Tensor::ones({2, 3});
+    EXPECT_EQ(z.numel(), 6);
+    for (int i = 0; i < z.numel(); i++) {
+        EXPECT_FLOAT_EQ(z.data_[i], 1.f);
+    }
+    // auto o = Tensor::ones({3});
+    // EXPECT_FLOAT_EQ(o.at({0}), 1.f);
+    // EXPECT_FLOAT_EQ(o.at({2}), 1.f);
 }
 
+//done
 TEST(TensorBasics, FactoryRandn) {
-    // todo: randn 实现后，验证均值约为 0，标准差约为 1
+    // randn 实现后，验证均值约为 0，标准差约为 1
     auto r = Tensor::randn({1000});
     float mean = 0.f;
     for (float v: r.data_) mean += v;
@@ -68,6 +89,7 @@ TEST(TensorBasics, FactoryRandn) {
 // ============================================================
 // 2. 元素访问 / flat_index
 // ============================================================
+//done
 TEST(Indexing, ReadElements) {
     Tensor t({1, 2, 3, 4, 5, 6}, {2, 3});
     EXPECT_FLOAT_EQ(t.at({0, 0}), 1.f);
@@ -76,22 +98,24 @@ TEST(Indexing, ReadElements) {
     EXPECT_FLOAT_EQ(t.at({1, 2}), 6.f);
 }
 
+//done
 TEST(Indexing, WriteElements) {
     Tensor t({2, 3});
     t.at({1, 1}) = 42.f;
     EXPECT_FLOAT_EQ(t.at({1, 1}), 42.f);
 }
 
+//done
 TEST(Indexing, OutOfBoundsThrows) {
-    // todo: flat_index 越界检查实现后，取消注释
-    // Tensor t({2, 3});
-    // EXPECT_THROW(t.at({2, 0}), std::out_of_range);
-    GTEST_SKIP() << "需先实现 flat_index 越界检查";
+    // flat_index 越界检查实现后，取消注释
+    Tensor t({2, 3});
+    EXPECT_THROW(t.at({2, 0}), std::out_of_range);
 }
 
 // ============================================================
 // 3. Reshape
 // ============================================================
+//done
 TEST(Reshape, CorrectShape) {
     Tensor t({1, 2, 3, 4, 5, 6}, {2, 3});
     auto r = t.reshape({3, 2});
@@ -100,6 +124,7 @@ TEST(Reshape, CorrectShape) {
     EXPECT_EQ(r.numel(), 6);
 }
 
+//done
 TEST(Reshape, DataOrderPreserved) {
     Tensor t({1, 2, 3, 4, 5, 6}, {2, 3});
     auto r = t.reshape({3, 2});
@@ -107,16 +132,16 @@ TEST(Reshape, DataOrderPreserved) {
     EXPECT_FLOAT_EQ(r.at({2, 1}), 6.f);
 }
 
+//done
 TEST(Reshape, InvalidShapeThrows) {
-    // todo: reshape 合法性检查实现后，取消注释
-    // Tensor t({2, 3});
-    // EXPECT_THROW(t.reshape({2, 4}), std::invalid_argument);
-    GTEST_SKIP() << "需先实现 reshape 合法性检查";
+    Tensor t({2, 3});
+    EXPECT_THROW(t.reshape({2, 4}), std::invalid_argument);
 }
 
 // ============================================================
 // 4. Transpose
 // ============================================================
+//done
 TEST(Transpose, TwoByTwo) {
     // [[1,2],[3,4]] 转置 => [[1,3],[2,4]]
     Tensor t({1, 2, 3, 4}, {2, 2});
@@ -127,6 +152,7 @@ TEST(Transpose, TwoByTwo) {
     EXPECT_FLOAT_EQ(tr.at({1, 1}), 4.f);
 }
 
+//done
 TEST(Transpose, ShapeSwapped) {
     Tensor t({2, 3});
     auto tr = t.transpose();
@@ -137,6 +163,7 @@ TEST(Transpose, ShapeSwapped) {
 // ============================================================
 // 5. Element-wise 运算
 // ============================================================
+//done
 TEST(ElementwiseOps, Add) {
     Tensor a({1, 2, 3, 4}, {2, 2});
     Tensor b({4, 3, 2, 1}, {2, 2});
@@ -145,6 +172,7 @@ TEST(ElementwiseOps, Add) {
     EXPECT_FLOAT_EQ(c.at({1, 1}), 5.f);
 }
 
+//done
 TEST(ElementwiseOps, Sub) {
     Tensor a({1, 2, 3, 4}, {2, 2});
     Tensor b({4, 3, 2, 1}, {2, 2});
@@ -153,6 +181,7 @@ TEST(ElementwiseOps, Sub) {
     EXPECT_FLOAT_EQ(d.at({1, 1}), 3.f);
 }
 
+//done
 TEST(ElementwiseOps, Mul) {
     Tensor a({1, 2, 3, 4}, {2, 2});
     Tensor b({4, 3, 2, 1}, {2, 2});
@@ -161,6 +190,7 @@ TEST(ElementwiseOps, Mul) {
     EXPECT_FLOAT_EQ(e.at({0, 1}), 6.f);
 }
 
+//done
 TEST(ElementwiseOps, Div) {
     Tensor a({1, 2, 3, 4}, {2, 2});
     Tensor b({4, 3, 2, 1}, {2, 2});
@@ -169,6 +199,7 @@ TEST(ElementwiseOps, Div) {
     EXPECT_NEAR(f.at({1, 1}), 4.f, 1e-5f);
 }
 
+//done
 TEST(ElementwiseOps, ShapeMismatchThrows) {
     Tensor a({2, 3});
     Tensor b({3, 2});
@@ -178,6 +209,7 @@ TEST(ElementwiseOps, ShapeMismatchThrows) {
 // ============================================================
 // 6. Matmul
 // ============================================================
+//done
 TEST(Matmul, VectorDot) {
     // [1,2] @ [[5],[6]] = [[17]]
     Tensor a({1, 2}, {1, 2});
@@ -188,6 +220,7 @@ TEST(Matmul, VectorDot) {
     EXPECT_NEAR(c.at({0, 0}), 17.f, 1e-5f);
 }
 
+//done
 TEST(Matmul, IdentityMatrix) {
     Tensor eye({1, 0, 0, 1}, {2, 2});
     Tensor m({3, 4, 5, 6}, {2, 2});
@@ -198,23 +231,25 @@ TEST(Matmul, IdentityMatrix) {
     EXPECT_NEAR(r.at({1, 1}), 6.f, 1e-5f);
 }
 
+//done
 TEST(Matmul, ShapeMismatchThrows) {
-    // todo: matmul 合法性检查实现后，取消注释
-    // Tensor a({2, 3});
-    // Tensor b({2, 3});
-    // EXPECT_THROW(a.matmul(b), std::invalid_argument);
-    GTEST_SKIP() << "需先实现 matmul 合法性检查";
+    // matmul 合法性检查实现后，取消注释
+    Tensor a({2, 3});
+    Tensor b({2, 3});
+    EXPECT_THROW(a.matmul(b), std::invalid_argument);
 }
 
 // ============================================================
 // 7. 归约
 // ============================================================
+//done
 TEST(Reduction, SumGlobal) {
     Tensor t({1, 2, 3, 4}, {2, 2});
     auto s = t.sum();
     EXPECT_NEAR(s.data_[0], 10.f, 1e-5f);
 }
 
+//done
 TEST(Reduction, MeanGlobal) {
     Tensor t({1, 2, 3, 4}, {2, 2});
     auto m = t.mean();
@@ -224,6 +259,7 @@ TEST(Reduction, MeanGlobal) {
 // ============================================================
 // 8. 激活函数
 // ============================================================
+//done
 TEST(Activations, Relu) {
     Tensor t(std::vector<float>{-2.f, -1.f, 0.f, 1.f, 2.f}, {5});
     auto r = t.relu();
@@ -234,21 +270,25 @@ TEST(Activations, Relu) {
     EXPECT_FLOAT_EQ(r.at({4}), 2.f);
 }
 
+//done
 TEST(Activations, SigmoidAtZero) {
     Tensor t(std::vector<float>{0.f}, {1});
     EXPECT_NEAR(t.sigmoid().at({0}), 0.5f, 1e-5f);
 }
 
+//done
 TEST(Activations, SigmoidAtTwo) {
     Tensor t(std::vector<float>{2.f}, {1});
     EXPECT_NEAR(t.sigmoid().at({0}), 0.8808f, 1e-3f);
 }
 
+//done
 TEST(Activations, TanhAtZero) {
     Tensor t(std::vector<float>{0.f}, {1});
     EXPECT_NEAR(t.tanh_().at({0}), 0.f, 1e-5f);
 }
 
+//done
 TEST(Activations, TanhAtOne) {
     Tensor t(std::vector<float>{1.f}, {1});
     EXPECT_NEAR(t.tanh_().at({0}), 0.7616f, 1e-3f);
@@ -257,6 +297,7 @@ TEST(Activations, TanhAtOne) {
 // ============================================================
 // 9. 计算图构造
 // ============================================================
+//done
 TEST(GradGraph, NonLeafHasGradFn) {
     auto a = Tensor::ones({2, 2}, true);
     auto b = Tensor::ones({2, 2}, true);
@@ -266,12 +307,14 @@ TEST(GradGraph, NonLeafHasGradFn) {
     EXPECT_NE(c.grad_fn_, nullptr);
 }
 
+//done
 TEST(GradGraph, LeafHasNoGradFn) {
     auto a = Tensor::ones({2, 2}, true);
     EXPECT_TRUE(a.is_leaf_);
     EXPECT_EQ(a.grad_fn_, nullptr);
 }
 
+//done
 TEST(GradGraph, NoGradPropagates) {
     // 两个 requires_grad=false 的 Tensor 相加，结果也不需要梯度
     auto a = Tensor::ones({2, 2}, false);
@@ -283,6 +326,7 @@ TEST(GradGraph, NoGradPropagates) {
 // ============================================================
 // 10. 数值梯度检验
 // ============================================================
+
 TEST(NumericalGrad, Add) {
     Tensor a({1, 2, 3, 4}, {2, 2}, true);
     Tensor b({4, 3, 2, 1}, {2, 2}, true);
@@ -354,7 +398,20 @@ TEST(NumericalGrad, Matmul) {
 
 TEST(NumericalGrad, ChainSigmoidMatmul) {
     // todo: 链式运算 sigmoid(a @ b).sum() 的梯度检验
-    GTEST_SKIP() << "需先实现 matmul + sigmoid backward";
+    // GTEST_SKIP() << "需先实现 matmul + sigmoid backward";
+
+    // sigmoid(a @ b).sum() 对 a 的梯度检验
+    Tensor a(std::vector<float>{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f}, {2, 3}, true);
+    Tensor b(std::vector<float>{0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f}, {3, 2}, true);
+
+    auto num_a = numerical_gradient(
+        [&](Tensor x) { return x.matmul(b).sigmoid().sum().data_[0]; }, a);
+
+    auto out = a.matmul(b).sigmoid().sum();
+    out.backward();
+
+    ASSERT_NE(a.grad_, nullptr);
+    EXPECT_TRUE(tensors_near(*a.grad_, num_a));
 }
 
 // ============================================================

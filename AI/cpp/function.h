@@ -10,15 +10,14 @@ class Tensor;
 //   backward() 接收上游梯度，计算并向输入节点传播
 // ============================================================
 struct Function {
-    // 保存 forward 时的输入（weak_ptr 避免循环引用）
-    // 但为简单起见，这里直接存 shared_ptr，实际可按需改为 weak_ptr
+    // 保存 forward 时输入的值拷贝（用于计算局部梯度，如 MulBackward 需要 a、b 的值）
     std::vector<std::shared_ptr<Tensor>> inputs_;
+    // 指向原始 Tensor 的裸指针（用于将梯度写回原始对象，而非拷贝）
+    // 调用方需保证 backward 执行时原始 Tensor 仍然存活
+    std::vector<Tensor*> input_refs_;
 
     virtual ~Function() = default;
 
-    // 接收来自下游的梯度 grad（与 output 同 shape），
-    // 计算各 input 的梯度并调用 input->accumulate_grad()
-    // todo: 每个子类必须实现此方法，写出对应运算的偏导数公式
     virtual void backward(std::shared_ptr<Tensor> grad) = 0;
 };
 

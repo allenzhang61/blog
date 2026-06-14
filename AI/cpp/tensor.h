@@ -35,6 +35,15 @@ public:
            bool requires_grad = false);
 
     // 拷贝 / 移动
+    /*
+    * = default 告诉编译器自动生成拷贝构造函数，行为是对每个成员依次调用其自身的拷贝构造：
+
+data_：std::vector<float> → vector 的拷贝构造会复制底层数组，深拷贝
+shape_、strides_：同上，深拷贝
+requires_grad_、is_leaf_：基本类型，直接复制值
+grad_、grad_fn_：std::shared_ptr → 拷贝的是指针本身（引用计数 +1），不是深拷贝，两个 Tensor 共享同一个 grad 对象
+     *
+     */
     Tensor(const Tensor&)            = default;
     Tensor& operator=(const Tensor&) = default;
     Tensor(Tensor&&)                 = default;

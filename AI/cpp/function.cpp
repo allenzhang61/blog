@@ -10,6 +10,11 @@ void AddBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: 将 grad 分别 accumulate 到 inputs_[0] 和 inputs_[1]
     //   若对应 input 不 requires_grad 则跳过
     //   若 input 是非叶节点，还需递归调用 input->backward(local_grad)
+    // z = a + b，dL/da = grad，dL/db = grad，直接把上游梯度传给两个输入
+    for (Tensor* input : input_refs_) {
+        if (input->requires_grad_)
+            input->backward(grad);
+    }
 }
 
 // ============================================================
@@ -21,6 +26,15 @@ void SubBackward::backward(std::shared_ptr<Tensor> grad) {
     //       neg_grad = -grad （逐元素取负）
     //       inputs_[1].accumulate_grad(*neg_grad)
     //       非叶节点递归 backward
+    if (input_refs_[0]->requires_grad_)
+        input_refs_[0]->backward(grad);
+
+    if (input_refs_[1]->requires_grad_) {
+        Tensor neg_grad(grad->shape_);
+        for (int i = 0; i < grad->numel(); i++)
+            neg_grad.data_[i] = -grad->data_[i];
+        input_refs_[1]->backward(std::make_shared<Tensor>(neg_grad));
+    }
 }
 
 // ============================================================
@@ -31,6 +45,19 @@ void MulBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: grad_a = element-wise(grad * inputs_[1])
     //       grad_b = element-wise(grad * inputs_[0])
     //       分别 accumulate 并递归
+    // inputs_[0] = copy of a，inputs_[1] = copy of b（用于读取值）
+    if (input_refs_[0]->requires_grad_) {
+        Tensor grad_a(grad->shape_);
+        for (int i = 0; i < grad->numel(); i++)
+            grad_a.data_[i] = grad->data_[i] * inputs_[1]->data_[i];
+        input_refs_[0]->backward(std::make_shared<Tensor>(grad_a));
+    }
+    if (input_refs_[1]->requires_grad_) {
+        Tensor grad_b(grad->shape_);
+        for (int i = 0; i < grad->numel(); i++)
+            grad_b.data_[i] = grad->data_[i] * inputs_[0]->data_[i];
+        input_refs_[1]->backward(std::make_shared<Tensor>(grad_b));
+    }
 }
 
 // ============================================================
@@ -41,6 +68,20 @@ void DivBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: grad_a[i] = grad[i] / b[i]
     //       grad_b[i] = -grad[i] * a[i] / (b[i] * b[i])
     //       分别 accumulate 并递归
+    if (input_refs_[0]->requires_grad_) {
+        Tensor grad_a(grad->shape_);
+        for (int i = 0; i < grad->numel(); i++)
+            grad_a.data_[i] = grad->data_[i] / inputs_[1]->data_[i];
+        input_refs_[0]->backward(std::make_shared<Tensor>(grad_a));
+    }
+    if (input_refs_[1]->requires_grad_) {
+        Tensor grad_b(grad->shape_);
+        for (int i = 0; i < grad->numel(); i++) {
+            float b = inputs_[1]->data_[i];
+            grad_b.data_[i] = -grad->data_[i] * inputs_[0]->data_[i] / (b * b);
+        }
+        input_refs_[1]->backward(std::make_shared<Tensor>(grad_b));
+    }
 }
 
 // ============================================================
@@ -53,6 +94,20 @@ void MatmulBackward::backward(std::shared_ptr<Tensor> grad) {
     //   grad_A = grad.matmul(B.transpose())
     //   grad_B = A.transpose().matmul(grad)
     //   分别 accumulate 并递归
+    auto& A = inputs_[0];  // copy of A，shape (M, K)
+    auto& B = inputs_[1];  // copy of B，shape (K, N)
+    // grad shape: (M, N)
+
+    if (input_refs_[0]->requires_grad_) {
+        // dL/dA = grad @ B^T，shape (M, K)
+        Tensor grad_A = grad->matmul(B->transpose());
+        input_refs_[0]->backward(std::make_shared<Tensor>(grad_A));
+    }
+    if (input_refs_[1]->requires_grad_) {
+        // dL/dB = A^T @ grad，shape (K, N)
+        Tensor grad_B = A->transpose().matmul(*grad);
+        input_refs_[1]->backward(std::make_shared<Tensor>(grad_B));
+    }
 }
 
 // ============================================================
@@ -62,6 +117,13 @@ void MatmulBackward::backward(std::shared_ptr<Tensor> grad) {
 void SumBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: 构造与 input_shape_ 相同的 Tensor，每个元素 = grad->data_[0]
     //       inputs_[0]->accumulate_grad(expanded_grad) 并递归
+    Tensor expanded(input_shape_);
+    for (float& x : expanded.data_)
+        x = grad->data_[0];
+    auto ep = std::make_shared<Tensor>(expanded);
+    // 叶节点走 input_refs_（原始对象），非叶走 inputs_（拷贝持有有效 grad_fn_）
+    if (inputs_[0]->is_leaf_) input_refs_[0]->backward(ep);
+    else                       inputs_[0]->backward(ep);
 }
 
 // ============================================================
@@ -70,6 +132,13 @@ void SumBackward::backward(std::shared_ptr<Tensor> grad) {
 // ============================================================
 void MeanBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: 与 SumBackward 类似，但每个元素 = grad->data_[0] / n_
+    //       inputs_[0]->accumulate_grad(expanded_grad) 并递归
+    Tensor expanded(input_shape_);
+    for (float& x : expanded.data_)
+        x = grad->data_[0] / n_;
+    auto ep = std::make_shared<Tensor>(expanded);
+    if (inputs_[0]->is_leaf_) input_refs_[0]->backward(ep);
+    else                       inputs_[0]->backward(ep);
 }
 
 // ============================================================
@@ -79,6 +148,12 @@ void MeanBackward::backward(std::shared_ptr<Tensor> grad) {
 void ReluBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: local_grad[i] = (inputs_[0]->data_[i] > 0) ? grad->data_[i] : 0
     //       inputs_[0]->accumulate_grad(local_grad) 并递归
+    Tensor local_grad(grad->shape_);
+    for (int i = 0; i < grad->numel(); i++)
+        local_grad.data_[i] = inputs_[0]->data_[i] > 0 ? grad->data_[i] : 0.f;
+    auto lp = std::make_shared<Tensor>(local_grad);
+    if (inputs_[0]->is_leaf_) input_refs_[0]->backward(lp);
+    else                       inputs_[0]->backward(lp);
 }
 
 // ============================================================
@@ -88,6 +163,14 @@ void ReluBackward::backward(std::shared_ptr<Tensor> grad) {
 void SigmoidBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: local_grad[i] = grad[i] * output_[i] * (1 - output_[i])
     //       inputs_[0]->accumulate_grad(local_grad) 并递归
+    Tensor local_grad(grad->shape_);
+    for (int i = 0; i < grad->numel(); i++) {
+        float z = output_->data_[i];
+        local_grad.data_[i] = grad->data_[i] * z * (1.f - z);
+    }
+    auto lp = std::make_shared<Tensor>(local_grad);
+    if (inputs_[0]->is_leaf_) input_refs_[0]->backward(lp);
+    else                       inputs_[0]->backward(lp);
 }
 
 // ============================================================
@@ -97,4 +180,12 @@ void SigmoidBackward::backward(std::shared_ptr<Tensor> grad) {
 void TanhBackward::backward(std::shared_ptr<Tensor> grad) {
     // todo: local_grad[i] = grad[i] * (1 - output_[i] * output_[i])
     //       inputs_[0]->accumulate_grad(local_grad) 并递归
+    Tensor local_grad(grad->shape_);
+    for (int i = 0; i < grad->numel(); i++) {
+        float z = output_->data_[i];
+        local_grad.data_[i] = grad->data_[i] * (1.f - z * z);
+    }
+    auto lp = std::make_shared<Tensor>(local_grad);
+    if (inputs_[0]->is_leaf_) input_refs_[0]->backward(lp);
+    else                       inputs_[0]->backward(lp);
 }
