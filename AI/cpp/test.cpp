@@ -2,6 +2,7 @@
 #include "tensor.h"
 #include <cmath>
 #include <functional>
+#include <random>
 
 // ============================================================
 // 数值梯度检验辅助（有限差分）
@@ -435,7 +436,53 @@ TEST(ChainBackward, ReluMul) {
 }
 
 // ============================================================
-// 12. zero_grad
+// 12. 线性回归
+// ============================================================
+TEST(LinearRegression, RecoverWeights) {
+    // 真实关系：y = 2x + 3
+    // 偏置技巧：X = [x, 1]，w_param = [w, b]^T
+    //           y_pred = X @ w_param，避免 broadcasting
+    // loss = mean((y_pred - y_true)^2)，全批梯度下降
+    const int N = 50;
+    const float true_w = 2.f, true_b = 3.f;
+
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> x_dist(-1.f, 1.f);
+    std::normal_distribution<float> noise(0.f, 0.1f);  // σ=0.1 的高斯噪声
+
+    Tensor X({N, 2});
+    Tensor y_true({N, 1});
+    for (int i = 0; i < N; i++) {
+        float xi = x_dist(rng);
+        X.at({i, 0}) = xi;
+        X.at({i, 1}) = 1.f;
+        y_true.at({i, 0}) = true_w * xi + true_b + noise(rng);
+    }
+
+    Tensor w_param({2, 1}, true);  // [w, b]，初始化为零
+
+    const float lr = 0.1f;
+    for (int epoch = 0; epoch < 300; epoch++) {
+        auto y_pred = X.matmul(w_param);
+        auto diff   = y_pred - y_true;
+        auto loss   = (diff * diff).mean();
+
+        w_param.zero_grad();
+        loss.backward();
+
+        for (int i = 0; i < w_param.numel(); i++)
+            w_param.data_[i] -= lr * w_param.grad_->data_[i];
+
+        if (epoch % 50 == 0)
+            std::printf("epoch %3d  loss=%.6f\n", epoch, loss.data_[0]);
+    }
+
+    EXPECT_NEAR(w_param.at({0, 0}), true_w, 0.1f);
+    EXPECT_NEAR(w_param.at({1, 0}), true_b, 0.1f);
+}
+
+// ============================================================
+// 13. zero_grad
 // ============================================================
 TEST(ZeroGrad, ClearsGradient) {
     Tensor a({1, 2, 3, 4}, {4}, true);
