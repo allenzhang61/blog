@@ -1,0 +1,15 @@
+- google: adk
+	- https://adk.dev/
+	- 优势
+		- 集成了google search tool
+- bytedance: enio
+	- https://www.cloudwego.io/zh/docs/eino/
+- 阅读进度：
+	- openai
+		- https://developers.openai.com/api/docs/guides/agents/models
+	- claude code
+		- https://code.claude.com/docs/en/overview
+	- google adk
+		- https://adk.dev/tutorials/agent-team/
+	- enio
+		- https://www.cloudwego.io/zh/docs/eino/overview/eino_adk0_1/
