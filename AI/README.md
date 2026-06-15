@@ -17,11 +17,11 @@
     - [softmax 回归 - 从 0 实现](chapter-04/04-010.ipynb)
     - [softmax 回归 - 简洁实现](chapter-04/04-012.ipynb)
   - 多层感知机
-    - [基础流程介绍](chapter-04/04-016.ipynb)
-    - [数学推导](chapter-04/04-017.ipynb)
-    - [y=x^2 简单计算](chapter-04/04-018.ipynb)
-    - [y=x^2 训练](chapter-04/04-019.ipynb)
-    - [非线性回归](chapter-04/04-015.ipynb)
+    - 基础案例
+      - [基础流程介绍](chapter-04/04-016.ipynb)
+      - [数学推导](chapter-04/04-017.ipynb)
+      - [y=x^2 简单计算](chapter-04/04-018.ipynb)
+      - [y=x^2 训练](chapter-04/04-019.ipynb)
     - [MNIST 数据集 - numpy版本](chapter-04/04-003.ipynb)
     - [多层感知机 - 从 0 实现](chapter-04/04-013.ipynb)
     - [多层感知机 - 简洁实现](chapter-04/04-014.ipynb)
