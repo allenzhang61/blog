@@ -28,7 +28,11 @@
   - 卷积神经网络
     - [卷积神经网络](chapter-04/04-020.ipynb)
 - 机器学习
-- pytorch
+- python
+  - pytorch
+  - numpy
+    - [np.max](chapter-06/06-001.ipynb)
+
 - huggingface-transformers
 - competitions
     - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)

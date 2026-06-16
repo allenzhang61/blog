@@ -26,3 +26,5 @@ AI/data/
 AI/cpp/build/
 AI/cpp/build_release/
 AI/cpp/cmake-build-debug/
+
+.venv/
