@@ -25,6 +25,8 @@
     - [MNIST 数据集 - numpy版本](chapter-04/04-003.ipynb)
     - [多层感知机 - 从 0 实现](chapter-04/04-013.ipynb)
     - [多层感知机 - 简洁实现](chapter-04/04-014.ipynb)
+  - 卷积神经网络
+    - [卷积神经网络](chapter-04/04-020.ipynb)
 - 机器学习
 - pytorch
 - huggingface-transformers
