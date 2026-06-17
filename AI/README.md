@@ -4,10 +4,14 @@
   - [分布函数](chapter-01/01-001.md)
 - 代数
 - LLM
-  - [介绍](chapter-03/03-001.md)
-  - [tokenizer](chapter-03/03-002.ipynb)
-  - [滑动采样](chapter-03/03-003.ipynb)
-  - [构建词嵌入层](chapter-03/03-004.ipynb)
+  - 处理文本数据
+    - [介绍](chapter-03/03-001.md)
+    - [tokenizer](chapter-03/03-002.ipynb)
+    - [滑动采样](chapter-03/03-003.ipynb)
+    - [构建词嵌入层](chapter-03/03-004.ipynb)
+    - 位置编码//todo
+  - 实现一个用于文本生成的GPT模型
+    - [实现LLM架构](chapter-03/03-005.ipynb)
 - 机器学习
   - [xgboost](chapter-05/05-001.ipynb)
 - 深度学习
