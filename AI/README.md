@@ -8,6 +8,8 @@
   - [tokenizer](chapter-03/03-002.ipynb)
   - [滑动采样](chapter-03/03-003.ipynb)
   - [构建词嵌入层](chapter-03/03-004.ipynb)
+- 机器学习
+  - [xgboost](chapter-05/05-001.ipynb)
 - 深度学习
   - [问题分类](chapter-04/04-005.ipynb)
   - 激活函数
@@ -34,12 +36,14 @@
   - RNN
   - BERT
     - [BERT](chapter-04/04-002.ipynb)
-- 机器学习
+- 运筹学/Operations Research
+  - [线性规划](chapter-10/10-001.ipynb)
+  - [混合整数线性规划](chapter-10/10-002.ipynb)
+- 最优化/Optimization
 - python
   - pytorch
   - numpy
     - [np.max](chapter-06/06-001.ipynb)
-
 - huggingface-transformers
 - competitions
     - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
@@ -52,9 +56,6 @@
 
 ![](/static/images/2606/p002.png)
 
-- 线性回归
-- RNN
-- LLM
 
 ## 资料
 
@@ -62,3 +63,4 @@
 - 代码：https://github.com/rasbt/LLMs-from-scratch
 - 深度学习入门：基于 Python 的理论与实现
 - dive into deep learning
+- https://hands1ml.apachecn.org/2/

@@ -28,3 +28,4 @@ AI/cpp/build_release/
 AI/cpp/cmake-build-debug/
 
 .venv/
+__pycache__/
