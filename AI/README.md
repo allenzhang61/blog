@@ -4,6 +4,10 @@
   - [分布函数](chapter-01/01-001.md)
 - 代数
 - LLM
+  - [介绍](chapter-03/03-001.md)
+  - [tokenizer](chapter-03/03-002.ipynb)
+  - [滑动采样](chapter-03/03-003.ipynb)
+  - [构建词嵌入层](chapter-03/03-004.ipynb)
 - 深度学习
   - [问题分类](chapter-04/04-005.ipynb)
   - 激活函数
@@ -25,8 +29,11 @@
     - [MNIST 数据集 - numpy版本](chapter-04/04-003.ipynb)
     - [多层感知机 - 从 0 实现](chapter-04/04-013.ipynb)
     - [多层感知机 - 简洁实现](chapter-04/04-014.ipynb)
-  - 卷积神经网络
+  - CNN卷积神经网络
     - [卷积神经网络](chapter-04/04-020.ipynb)
+  - RNN
+  - BERT
+    - [BERT](chapter-04/04-002.ipynb)
 - 机器学习
 - python
   - pytorch
@@ -43,6 +50,7 @@
     
 ![](/static/images/2606/p001.png)
 
+![](/static/images/2606/p002.png)
 
 - 线性回归
 - RNN
@@ -50,5 +58,7 @@
 
 ## 资料
 
+- 中文翻译：https://skindhu.github.io/Build-A-Large-Language-Model-CN/
+- 代码：https://github.com/rasbt/LLMs-from-scratch
 - 深度学习入门：基于 Python 的理论与实现
 - dive into deep learning
