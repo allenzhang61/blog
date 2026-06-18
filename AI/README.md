@@ -14,6 +14,8 @@
     - [实现LLM架构](chapter-03/03-005.ipynb)
     - [在无标记数据集上进行预训练](chapter-03/03-006.ipynb)
     - [从 OpenAI 加载预训练权重](chapter-03/03-008.ipynb)
+    - [用于分类任务的微调](chapter-03/03-010.ipynb)
+    - [指令遵循微调](chapter-03/03-011.ipynb)
 - 机器学习
   - [xgboost](chapter-05/05-001.ipynb)
 - 深度学习

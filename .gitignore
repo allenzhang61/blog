@@ -28,7 +28,13 @@ AI/cpp/build_release/
 AI/cpp/cmake-build-debug/
 
 AI/chapter-03/data/*.pt
+AI/chapter-03/data/*.csv
 AI/chapter-03/gpt2/
+AI/chapter-03/sms_spam_collection/
+AI/chapter-03/sms_spam_collection.zip
+AI/chapter-03/instruction-data.json
+AI/chapter-03/gpt2-medium355M-sft.pth
+AI/chapter-03/instruction-data-with-response.json
 
 .venv/
 __pycache__/
