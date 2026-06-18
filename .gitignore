@@ -27,5 +27,8 @@ AI/cpp/build/
 AI/cpp/build_release/
 AI/cpp/cmake-build-debug/
 
+AI/chapter-03/data/*.pt
+AI/chapter-03/gpt2/
+
 .venv/
 __pycache__/
