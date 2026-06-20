@@ -3,19 +3,6 @@
 - 概率论
   - [分布函数](chapter-01/01-001.md)
 - 代数
-- LLM
-  - 处理文本数据
-    - [介绍](chapter-03/03-001.md)
-    - [tokenizer](chapter-03/03-002.ipynb)
-    - [滑动采样](chapter-03/03-003.ipynb)
-    - [构建词嵌入层](chapter-03/03-004.ipynb)
-    - 位置编码//todo
-  - 实现一个用于文本生成的GPT模型
-    - [实现LLM架构](chapter-03/03-005.ipynb)
-    - [在无标记数据集上进行预训练](chapter-03/03-006.ipynb)
-    - [从 OpenAI 加载预训练权重](chapter-03/03-008.ipynb)
-    - [用于分类任务的微调](chapter-03/03-010.ipynb)
-    - [指令遵循微调](chapter-03/03-011.ipynb)
 - 机器学习
   - [xgboost](chapter-05/05-001.ipynb)
 - 深度学习
@@ -41,9 +28,30 @@
     - [多层感知机 - 简洁实现](chapter-04/04-014.ipynb)
   - CNN卷积神经网络
     - [卷积神经网络](chapter-04/04-020.ipynb)
-  - RNN
+  - RNN（在 Transformer 出现之前，循环神经网络（RNN）是最流行的用于语言翻译的编码器-解码器架构）
   - BERT
     - [BERT](chapter-04/04-002.ipynb)
+  - LNN 液态神经网络
+- LLM
+  - 处理文本数据
+    - [介绍](chapter-03/03-001.md)
+    - [tokenizer](chapter-03/03-002.ipynb)
+    - [滑动采样](chapter-03/03-003.ipynb)
+    - [构建词嵌入层](chapter-03/03-004.ipynb)
+    - 位置编码//todo
+  - 注意力机制
+    - [简化计算过程](chapter-03/03-012.ipynb)
+    - [逐步计算注意力权重](chapter-03/03-013.ipynb)
+    - [实现一个简洁的自注意力机制 Python 类](chapter-03/03-014.ipynb)
+    - [使用因果注意力机制来屏蔽后续词](chapter-03/03-015.ipynb)
+  - 实现一个用于文本生成的GPT模型
+    - [实现 dummy 框架](chapter-03/03-007.ipynb)
+    - [快捷连接示例](chapter-03/03-009.ipynb)
+    - [实现正式LLM架构](chapter-03/03-005.ipynb)
+  - [在无标记数据集上进行预训练](chapter-03/03-006.ipynb)
+  - [从 OpenAI 加载预训练权重](chapter-03/03-008.ipynb)
+  - [用于分类任务的微调](chapter-03/03-010.ipynb)
+  - [指令遵循微调](chapter-03/03-011.ipynb)
 - 运筹学/Operations Research
   - [线性规划](chapter-10/10-001.ipynb)
   - [混合整数线性规划](chapter-10/10-002.ipynb)
