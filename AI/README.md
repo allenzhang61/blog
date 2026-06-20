@@ -43,7 +43,6 @@
     - [简化计算过程](chapter-03/03-012.ipynb)
     - [逐步计算注意力权重](chapter-03/03-013.ipynb)
     - [实现一个简洁的自注意力机制 Python 类](chapter-03/03-014.ipynb)
-    - [使用因果注意力机制来屏蔽后续词](chapter-03/03-015.ipynb)
   - 实现一个用于文本生成的GPT模型
     - [实现 dummy 框架](chapter-03/03-007.ipynb)
     - [快捷连接示例](chapter-03/03-009.ipynb)
