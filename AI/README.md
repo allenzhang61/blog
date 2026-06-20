@@ -5,6 +5,7 @@
 - 代数
 - 机器学习
   - [xgboost](chapter-05/05-001.ipynb)
+  - SVM
 - 深度学习
   - [问题分类](chapter-04/04-005.ipynb)
   - 激活函数
@@ -28,6 +29,7 @@
     - [多层感知机 - 简洁实现](chapter-04/04-014.ipynb)
   - CNN卷积神经网络
     - [卷积神经网络](chapter-04/04-020.ipynb)
+    - AlexNet：大家就把特征提取以及分类两者合到一块儿去了，就是训练一个神经网络。这个神经网络既可以做特征提取，也可以做分类，它可以实现端到端训练
   - RNN（在 Transformer 出现之前，循环神经网络（RNN）是最流行的用于语言翻译的编码器-解码器架构）
   - BERT
     - [BERT](chapter-04/04-002.ipynb)
@@ -55,6 +57,37 @@
   - [线性规划](chapter-10/10-001.ipynb)
   - [混合整数线性规划](chapter-10/10-002.ipynb)
 - 最优化/Optimization
+- 强化学习
+  - 监督学习算法的上限（upper bound）就是人类的表现；强化学习，它在环境里面自己探索，有非常大的潜力，它可以获得超越人类的能力的表现
+  - 标准强化学习：比如 TD-Gammon 玩 Backgammon 游戏的过程，其实就是设计特征，然后训练价值函数的过程。标准强化学习先设计很多特征，这些特征可以描述现在整个状态。 得到这些特征后，我们就可以通过训练一个分类网络或者分别训练一个价值估计函数来采取动作。
+  - 深度强化学习：自从我们有了深度学习，有了神经网络，就可以把智能体玩游戏的过程改进成一个端到端训练（end-to-end training）的过程。我们不需要设计特征，直接输入状态就可以输出动作。我们可以用一个神经网络来拟合价值函数或策略网络，省去特征工程（feature engineering）的过程。
+  - MDP（问题定义）
+  - Bellman Equation（数学理论）
+  - Dynamic Programming（已知环境求解）
+    - 对于网格迷宫问题可以使用 动态规划 求解
+  - Q-Learning（未知环境求解）
+    - [网格迷宫](chapter-11/11-001.ipynb)
+  - Deep Q Network (DQN)（Q-Learning + 神经网络）
+    - [CartPole](chapter-11/11-002.ipynb)
+  - Policy Gradient
+  - Actor-Critic
+  - PPO（Proximal Policy Optimization，一种让 Agent 稳定学习、又不会突然学坏的训练方法）
+  - RLHF（Reinforcement Learning from Human Feedback）
+- 图算法
+  - GNN，把深度学习从“表格数据、图片、文本”扩展到“图结构数据”；GNN 的核心思想：每个节点不断从邻居那里收集信息。
+    - [Karate Club](chapter-12/12-001.ipynb)
+  - 图数据库
+  - 经典方法
+    - 图的表示，邻接矩阵，邻接表
+    - 图遍历，BFS，DFS
+    - 最短路，Dijkstra，Bellman-Ford，Floyd-Warshall
+    - 最小生成树，Prim，Kruskal
+    - 网络流，Max Flow，Min Cost Flow
+    - PageRank
+- 推荐系统
+- 搜索排序
+- NLP
+- 计算机视觉
 - python
   - pytorch
   - numpy
@@ -74,8 +107,21 @@
 
 ## 资料
 
-- 中文翻译：https://skindhu.github.io/Build-A-Large-Language-Model-CN/
-- 代码：https://github.com/rasbt/LLMs-from-scratch
 - 深度学习入门：基于 Python 的理论与实现
 - dive into deep learning
 - https://hands1ml.apachecn.org/2/
+- Build a Large Language Model (From Scratch)
+	- https://github.com/rasbt/LLMs-from-scratch
+- 中文翻译：https://skindhu.github.io/Build-A-Large-Language-Model-CN/
+- 代码：https://github.com/rasbt/LLMs-from-scratch
+- CS336
+	- https://cs336.stanford.edu/
+	- https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_
+- Hugging Face LLM Course
+	- https://huggingface.co/learn/llm-course/chapter1/1
+- https://www.anthropic.com/news/theo-hourmouzis-general-manager-australia-new-zealand?utm_source=chatgpt.com
+- 强化学习
+  - https://web.stanford.edu/class/psych209/Readings/SuttonBartoIPRLBook2ndEd.pdf
+  - https://datawhalechina.github.io/easy-rl/#/
+- 大模型训练/推理框架：推理（vLLM、TensorRT-LLM、SGLang等）、机器学习框架（Tensorflow/PyTorch等）;Kubeflow
+- 定位和解决复杂系统性能瓶颈，运用各类性能分析工具（Perf、eBPF、Nsight等）；
