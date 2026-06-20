@@ -4,7 +4,14 @@
   - [分布函数](chapter-01/01-001.md)
 - 代数
 - 机器学习
-  - [xgboost](chapter-05/05-001.ipynb)
+  - 线性回归，逻辑回归
+  - 决策树，随机森林
+  - GBDT，XGBoost，LightGBM
+    - [xgboost](chapter-05/05-001.ipynb)
+  - KNN，朴素贝叶斯
+  - K-Means，PCA
+  - 过拟合，正则化，交叉验证
+  - Precision，Recall，F1，ROC-AUC
   - SVM
 - 深度学习
   - [问题分类](chapter-04/04-005.ipynb)
@@ -53,6 +60,62 @@
   - [从 OpenAI 加载预训练权重](chapter-03/03-008.ipynb)
   - [用于分类任务的微调](chapter-03/03-010.ipynb)
   - [指令遵循微调](chapter-03/03-011.ipynb)
+  - todo
+    - kv cache
+    - masked attention
+    - 从 transformer 到 GPT、BERT、ViT
+    - 现代 LLM 训练与后训练
+      - 数据清洗、去重、混合比例
+      - Scaling Law
+      - LoRA、QLoRA、PEFT
+      - SFT
+      - Reward Model
+      - RLHF、DPO、GRPO
+      - 模型测评、幻觉、安全对齐
+    - RAG
+      - Embedding
+      - 向量数据库
+      - Chunking
+      - 稀疏检索 BM25
+      - Dense Retrieval
+      - Hybrid Search
+      - Reranker
+      - RAG 测评
+      - Agentic RAG
+    - 生成模型
+      - AutoEncoder、VAE
+      - GAN
+      - Diffusion
+      - Stable Diffusion
+      - Flow Matching
+      - Diffusion Transformer
+      - 图像、视频、音频生成
+    - 模型推理与性能优化
+      - FP16、BF16、FP8、INT8、INT4
+      - Quantization、Pruning、Distillation
+      - FlashAttention
+      - KV Cache、PagedAttention
+      - Continuous Batching
+      - Speculative Decoding
+      - vLLM、SGLang、TensorRT-LLM
+      - Tensor/Pipeline/Data/Expert Parallel
+    - 分布式训练
+      - DDP
+      - FSDP
+      - Tensor Parallel
+      - Pipeline Parallel
+      - ZeRO
+      - 混合精度训练
+      - Gradient Checkpointing
+      - 多机多卡容错与 Checkpoint
+    - 多模态与语音
+      - CLIP、Vision Encoder
+      - VLM、图文理解
+      - ASR、Whisper
+      - TTS
+      - 音频 Transformer
+      - 视频理解
+      - 机器人与 Vision-Language-Action
 - 运筹学/Operations Research
   - [线性规划](chapter-10/10-001.ipynb)
   - [混合整数线性规划](chapter-10/10-002.ipynb)
@@ -87,7 +150,52 @@
 - 推荐系统
 - 搜索排序
 - NLP
+  - 文本预处理
+    - Unicode 与文本规范化
+    - 分词与 Tokenization
+    - BPE、WordPiece、SentencePiece
+    - N-gram 与 TF-IDF
+  - 语言学基础
+    - 词性标注
+    - 命名实体识别
+    - 依存句法
+    - 信息抽取
+  - 文本表示
+    - Bag of Words
+    - Word2Vec
+    - GloVe、FastText
+    - Sentence Embedding
+  - 序列模型
+    - RNN、LSTM、GRU
+    - Seq2Seq
+    - Attention
+  - Transformer
+    - Encoder、Decoder
+    - BERT、GPT、T5
+  - NLP 任务
+    - 文本分类
+    - Token Classification、NER
+    - 问答
+    - 摘要
+    - 翻译
+    - 文本生成
+  - 语义检索
+    - BM25
+    - Dense Retrieval
+    - Reranker
+    - RAG
+  - 数据与评测
+    - 数据清洗与标注
+    - F1、BLEU、ROUGE
+    - Recall@K、MRR、NDCG
 - 计算机视觉
+  - ResNet
+  - Vision Transformer
+  - 目标检测：YOLO、Faster R-CNN
+  - 图像分割：U-Net、SAM
+  - 自监督学习：DINO
+  - 视觉语言模型：CLIP、VLM
+  - Diffusion、DiT
 - python
   - pytorch
   - numpy
@@ -95,8 +203,21 @@
 - huggingface-transformers
 - competitions
     - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
-- 性能优化
+- GPU 性能优化
   - [矢量加速原理](chapter-09/09-001.ipynb)
+  - GPU 硬件架构
+  - CUDA 编程模型
+  - GPU 内存层次
+  - Roofline 性能模型
+  - PyTorch Profiler
+  - Nsight Systems
+  - Nsight Compute
+  - Mixed Precision
+  - Kernel Fusion
+  - Triton
+  - 分布式训练与 NCCL
+  - LLM 训练优化
+  - LLM 推理优化
 - 实践
   - [cpp](./cpp/)
     
@@ -117,6 +238,7 @@
 - CS336
 	- https://cs336.stanford.edu/
 	- https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_
+- CS229/CS231n/CS224N
 - Hugging Face LLM Course
 	- https://huggingface.co/learn/llm-course/chapter1/1
 - https://www.anthropic.com/news/theo-hourmouzis-general-manager-australia-new-zealand?utm_source=chatgpt.com
