@@ -220,6 +220,12 @@
   - LLM 推理优化
 - 实践
   - [cpp](./cpp/)
+  - arc-agi-3
+    - [人是如何认识世界的](chapter-13/13-003.md)
+    - [World Models](chapter-13/13-001.ipynb)
+    - [Dreamer](chapter-13/13-002.ipynb)
+    - MuZero
+    - PlaNet
     
 ![](/static/images/2606/p001.png)
 
