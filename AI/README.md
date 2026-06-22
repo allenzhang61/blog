@@ -73,6 +73,7 @@
       - RLHF、DPO、GRPO
       - 模型测评、幻觉、安全对齐
     - RAG
+      - [Chroma 向量数据库介绍](chapter-03/03-021.md)
       - Embedding
       - 向量数据库
       - Chunking
@@ -91,6 +92,7 @@
       - Diffusion Transformer
       - 图像、视频、音频生成
     - 模型推理与性能优化
+      - [推理的流程和架构](chapter-03/03-020.md)
       - FP16、BF16、FP8、INT8、INT4
       - Quantization、Pruning、Distillation
       - FlashAttention
@@ -98,6 +100,11 @@
       - Continuous Batching
       - Speculative Decoding
       - vLLM、SGLang、TensorRT-LLM
+        - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-03/03-015.md)
+        - [vllm hello-world](chapter-03/03-016.md)
+        - [压测并调优 vllm+qwen 3.5 9B](chapter-03/03-017.md)
+        - [vllm 性能调优](chapter-03/03-018.md)
+        - [vllm 内存管理机制](chapter-03/03-019.md)
       - Tensor/Pipeline/Data/Expert Parallel
     - 分布式训练
       - DDP
