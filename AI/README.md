@@ -61,7 +61,7 @@
   - [用于分类任务的微调](chapter-03/03-010.ipynb)
   - [指令遵循微调](chapter-03/03-011.ipynb)
   - todo
-    - kv cache
+    - [kv cache](chapter-03/03-026.md)
     - masked attention
     - 从 transformer 到 GPT、BERT、ViT
     - 现代 LLM 训练与后训练
@@ -73,9 +73,11 @@
       - RLHF、DPO、GRPO
       - 模型测评、幻觉、安全对齐
     - RAG
+      - [RAG](chapter-03/03-025.md)
       - [Chroma 向量数据库介绍](chapter-03/03-021.md)
-      - Embedding
-      - 向量数据库
+      - [HNSW算法介绍](chapter-03/03-022.md)
+        - [ANN 算法介绍](chapter-03/03-023.md)
+      - [Embedding](chapter-03/03-024.md)
       - Chunking
       - 稀疏检索 BM25
       - Dense Retrieval
