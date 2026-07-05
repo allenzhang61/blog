@@ -213,6 +213,12 @@
 - huggingface-transformers
 - competitions
     - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
+- cuda
+  - [hello world](chapter-15/15-001.md)
+  - [hello world 2](chapter-15/15-003.md)
+  - [threadIdx等](chapter-15/15-002.md)
+  - [device info](chapter-15/15-004.md)
+  - [内存架构](chapter-15/15-005.md)
 - GPU 性能优化
   - [矢量加速原理](chapter-09/09-001.ipynb)
   - GPU 硬件架构
