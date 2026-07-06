@@ -206,6 +206,11 @@
   - 自监督学习：DINO
   - 视觉语言模型：CLIP、VLM
   - Diffusion、DiT
+  - pytorch 计算机视觉实战
+    - [基础](chapter-16/16-001.md)
+    - [分类交叉熵 & 二元交叉熵](chapter-16/16-002.md)
+    - [梯度下降](chapter-16/16-003.md)
+    - [张量](chapter-16/16-004.md)
 - python
   - pytorch
   - numpy
