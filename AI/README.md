@@ -211,6 +211,8 @@
     - [分类交叉熵 & 二元交叉熵](chapter-16/16-002.md)
     - [梯度下降](chapter-16/16-003.md)
     - [张量](chapter-16/16-004.md)
+    - [构建神经网络](chapter-16/16-005.md)
+    - [构建深度网络](chapter-16/16-006.md)
 - python
   - pytorch
   - numpy
