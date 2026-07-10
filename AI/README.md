@@ -226,6 +226,7 @@
   - [threadIdx等](chapter-15/15-002.md)
   - [device info](chapter-15/15-004.md)
   - [内存架构](chapter-15/15-005.md)
+  - [静态共享内存 vs 动态共享内存](chapter-15/15-006.md)
 - GPU 性能优化
   - [矢量加速原理](chapter-09/09-001.ipynb)
   - GPU 硬件架构
