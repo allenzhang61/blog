@@ -103,10 +103,14 @@
       - Speculative Decoding
       - vLLM、SGLang、TensorRT-LLM
         - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-03/03-015.md)
-        - [vllm hello-world](chapter-03/03-016.md)
+        - [vLLM 用法 Hello World](chapter-03/03-016.md)
         - [压测并调优 vllm+qwen 3.5 9B](chapter-03/03-017.md)
         - [vllm 性能调优](chapter-03/03-018.md)
         - [vllm 内存管理机制](chapter-03/03-019.md)
+        - [vllm 调用链](chapter-03/03-027.md)
+        - [vllm parallel 介绍](chapter-03/03-028.md)
+        - [vllm 类图](chapter-03/03-029.md)
+        - [vllm lora](chapter-03/03-030.md)
       - Tensor/Pipeline/Data/Expert Parallel
     - 分布式训练
       - DDP
