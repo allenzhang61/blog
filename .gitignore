@@ -36,5 +36,7 @@ AI/chapter-03/instruction-data.json
 AI/chapter-03/gpt2-medium355M-sft.pth
 AI/chapter-03/instruction-data-with-response.json
 
+AI/chapter-14/mac-server/localai/
+
 .venv/
 __pycache__/
