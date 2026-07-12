@@ -1,7 +1,12 @@
 ## 目录
 
-- 概率论
-  - [分布函数](chapter-01/01-001.md)
+- 概率论与数理统计
+  - [分布函数](chapter-01/01-001.ipynb)
+  - [chapter1 概率论的基本概念](chapter-01/01-005.md)
+  - [chapter2 随机变量及其分布](chapter-01/01-006.md)
+  - [普通期望](chapter-01/01-002.md)
+  - [条件期望](chapter-01/01-003.md)
+  - [全期望公式](chapter-01/01-004.md)
 - 代数
 - 机器学习
   - 线性回归，逻辑回归
@@ -93,25 +98,6 @@
       - Flow Matching
       - Diffusion Transformer
       - 图像、视频、音频生成
-    - 模型推理与性能优化
-      - [推理的流程和架构](chapter-03/03-020.md)
-      - FP16、BF16、FP8、INT8、INT4
-      - Quantization、Pruning、Distillation
-      - FlashAttention
-      - KV Cache、PagedAttention
-      - Continuous Batching
-      - Speculative Decoding
-      - vLLM、SGLang、TensorRT-LLM
-        - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-03/03-015.md)
-        - [vLLM 用法 Hello World](chapter-03/03-016.md)
-        - [压测并调优 vllm+qwen 3.5 9B](chapter-03/03-017.md)
-        - [vllm 性能调优](chapter-03/03-018.md)
-        - [vllm 内存管理机制](chapter-03/03-019.md)
-        - [vllm 调用链](chapter-03/03-027.md)
-        - [vllm parallel 介绍](chapter-03/03-028.md)
-        - [vllm 类图](chapter-03/03-029.md)
-        - [vllm lora](chapter-03/03-030.md)
-      - Tensor/Pipeline/Data/Expert Parallel
     - 分布式训练
       - DDP
       - FSDP
@@ -129,6 +115,25 @@
       - 音频 Transformer
       - 视频理解
       - 机器人与 Vision-Language-Action
+- 模型推理与性能优化
+  - [推理的流程和架构](chapter-14/14-001.md)
+  - FP16、BF16、FP8、INT8、INT4
+  - Quantization、Pruning、Distillation
+  - FlashAttention
+  - KV Cache、PagedAttention
+  - Continuous Batching
+  - Speculative Decoding
+  - vLLM、SGLang、TensorRT-LLM
+    - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-14/14-002.md)
+    - [vLLM 用法 Hello World](chapter-14/14-003.md)
+    - [压测并调优 vllm+qwen 3.5 9B](chapter-14/14-004.md)
+    - [vllm 性能调优](chapter-14/14-005.md)
+    - [vllm 内存管理机制](chapter-14/14-006.md)
+    - [vllm 调用链](chapter-14/14-007.md)
+    - [vllm parallel 介绍](chapter-14/14-008.md)
+    - [vllm 类图](chapter-14/14-009.md)
+    - [vllm lora](chapter-14/14-010.md)
+  - Tensor/Pipeline/Data/Expert Parallel
 - 运筹学/Operations Research
   - [线性规划](chapter-10/10-001.ipynb)
   - [混合整数线性规划](chapter-10/10-002.ipynb)
@@ -161,7 +166,7 @@
     - 网络流，Max Flow，Min Cost Flow
     - PageRank
 - 推荐系统
-  - [评测指标](chapter-14/14-001.md)
+  - [评测指标](chapter-17/17-001.md)
 - 搜索排序
 - NLP
   - 文本预处理
@@ -263,13 +268,18 @@
 
 ## 资料
 
-- 深度学习入门：基于 Python 的理论与实现
-- dive into deep learning
+- 概率论与数理统计(浙大四版)
+- 机器学习
+  - Machine-Learning 《机器学习（西瓜书）》_周志华
+- 深度学习
+  - 深度学习入门：基于 Python 的理论与实现
+  - dive into deep learning
 - https://hands1ml.apachecn.org/2/
-- Build a Large Language Model (From Scratch)
-	- https://github.com/rasbt/LLMs-from-scratch
-- 中文翻译：https://skindhu.github.io/Build-A-Large-Language-Model-CN/
-- 代码：https://github.com/rasbt/LLMs-from-scratch
+- LLM
+  - Build a Large Language Model (From Scratch)
+    - https://github.com/rasbt/LLMs-from-scratch
+  - 中文翻译：https://skindhu.github.io/Build-A-Large-Language-Model-CN/
+  - 代码：https://github.com/rasbt/LLMs-from-scratch
 - CS336
 	- https://cs336.stanford.edu/
 	- https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_
@@ -280,5 +290,6 @@
 - 强化学习
   - https://web.stanford.edu/class/psych209/Readings/SuttonBartoIPRLBook2ndEd.pdf
   - https://datawhalechina.github.io/easy-rl/#/
-- 大模型训练/推理框架：推理（vLLM、TensorRT-LLM、SGLang等）、机器学习框架（Tensorflow/PyTorch等）;Kubeflow
-- 定位和解决复杂系统性能瓶颈，运用各类性能分析工具（Perf、eBPF、Nsight等）；
+- vLLM & cuda
+  - 大模型训练/推理框架：推理（vLLM、TensorRT-LLM、SGLang等）、机器学习框架（Tensorflow/PyTorch等）;Kubeflow
+  - 定位和解决复杂系统性能瓶颈，运用各类性能分析工具（Perf、eBPF、Nsight等）；
