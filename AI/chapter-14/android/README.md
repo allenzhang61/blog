@@ -24,7 +24,7 @@ Pixel 9 侧需要：
 - Termux + `llama.cpp`：自己编译或安装 `llama-server` 后启动 HTTP API。
 - 其他 OpenAI-compatible Android LLM server：只要能通过手机本地端口暴露 `/v1/chat/completions` 即可。
 
-MLC LLM、Google AI Edge Gallery、MediaPipe LLM Inference 更偏 App / SDK。它们本身不一定暴露 HTTP API；如果要用本脚本压测，需要额外包一层 HTTP server。
+MLC LLM、Google AI Edge Gallery、MediaPipe LLM Inference 更偏 App / SDK。它们本身不一定暴露 HTTP API；如果要用通用 HTTP 脚本压测，需要额外包一层 HTTP server。当前仓库已经为 MLC LLM Android 增加了源码 patch 路线，见 `AI/chapter-14/android/mlc/`。
 
 ## 运行
 
@@ -66,6 +66,18 @@ MODEL="qwen2.5:1.5b" \
 DEVICE_PORT=8080 API_STYLE=auto AI/chapter-14/android/bench_android_llm.sh
 ```
 
+如果是 MLC LLM Android，使用源码 patch 增加 `BenchmarkActivity`，再通过 adb 直接启动 App 内 benchmark：
+
+```bash
+AI/chapter-14/android/mlc/prepare_mlc_android_from_apk.sh
+AI/chapter-14/android/mlc/push_mlc_model.sh
+
+MODEL_ID="Qwen2.5-1.5B-Instruct-q4f16_1-MLC" \
+MODEL_LIB="qwen2_q4f16_1_2e221f430380225c03990ad24c3d030e" \
+MODEL_PATH="/data/data/ai.mlc.mlcengineexample/files/Qwen2.5-1.5B-Instruct-q4f16_1-MLC" \
+AI/chapter-14/android/mlc/bench_mlc_android.sh
+```
+
 结果默认输出到：
 
 ```text
@@ -73,6 +85,8 @@ AI/chapter-14/android/results/pixel9-bench-YYYYMMDD-HHMMSS.csv
 ```
 
 CSV 列与 `AI/chapter-14/14-013.md` 中的压测表保持一致。
+
+MLC 路线的 CSV 也使用相同列；区别是 `API` 标记为 `mlc-engine`，TTFT 和 tokens/s 来自 App 内部直接调用 `MLCEngine` 的计时。
 
 ## 构建 llama.cpp Android Vulkan
 

@@ -1,0 +1,198 @@
+diff --git a/android/MLCEngineExample/app/src/main/AndroidManifest.xml b/android/MLCEngineExample/app/src/main/AndroidManifest.xml
+index eebe682..36530f3 100644
+--- a/android/MLCEngineExample/app/src/main/AndroidManifest.xml
++++ b/android/MLCEngineExample/app/src/main/AndroidManifest.xml
+@@ -36,6 +36,11 @@
+                 <category android:name="android.intent.category.LAUNCHER" />
+             </intent-filter>
+         </activity>
++        <activity
++            android:name=".BenchmarkActivity"
++            android:exported="true"
++            android:label="MLC Benchmark"
++            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+     </application>
+ 
+ </manifest>
+diff --git a/android/MLCEngineExample/app/src/main/java/ai/mlc/mlcengineexample/BenchmarkActivity.kt b/android/MLCEngineExample/app/src/main/java/ai/mlc/mlcengineexample/BenchmarkActivity.kt
+new file mode 100644
+index 0000000..4125175
+--- /dev/null
++++ b/android/MLCEngineExample/app/src/main/java/ai/mlc/mlcengineexample/BenchmarkActivity.kt
+@@ -0,0 +1,176 @@
++package ai.mlc.mlcengineexample
++
++import ai.mlc.mlcllm.MLCEngine
++import ai.mlc.mlcllm.OpenAIProtocol
++import ai.mlc.mlcllm.OpenAIProtocol.ChatCompletionMessage
++import android.app.Activity
++import android.os.Bundle
++import android.os.SystemClock
++import android.util.Log
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++import org.json.JSONObject
++import java.io.File
++import java.util.Locale
++
++class BenchmarkActivity : Activity() {
++    private val scope = CoroutineScope(Dispatchers.Default)
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        scope.launch {
++            runBenchmark()
++        }
++    }
++
++    private suspend fun runBenchmark() {
++        val modelId = intent.getStringExtra("model_id") ?: "phi-2-q4f16_1-MLC"
++        val modelPath = intent.getStringExtra("model_path")
++            ?: File(application.getExternalFilesDir(""), modelId).toString()
++        val modelLib = intent.getStringExtra("model_lib")
++            ?: "phi_msft_q4f16_1_686d8979c6ebf05d142d9081f1b87162"
++        val prompt = intent.getStringExtra("prompt")
++            ?: "请用中文简洁说明大语言模型推理中 prefill 和 decode 的区别，控制在一百字以内。"
++        val maxTokens = intent.getIntExtra("max_tokens", 128)
++        val warmupTokens = intent.getIntExtra("warmup_tokens", 4)
++        val resultPath = intent.getStringExtra("result_path")
++            ?: File(application.getExternalFilesDir(null), "mlc-bench-result.json").absolutePath
++
++        val result = JSONObject()
++        try {
++            val engine = MLCEngine()
++
++            val loadStart = SystemClock.elapsedRealtimeNanos()
++            engine.unload()
++            engine.reload(modelPath, modelLib)
++            val loadMs = elapsedMs(loadStart)
++
++            runOnce(engine, modelId, prompt, warmupTokens)
++            val measured = runOnce(engine, modelId, prompt, maxTokens)
++
++            result.put("service", "MLC LLM Android")
++            result.put("api", "mlc-engine")
++            result.put("model", modelId)
++            result.put("model_path", modelPath)
++            result.put("model_lib", modelLib)
++            result.put("load_ms", round1(loadMs))
++            result.put("ttft_ms", round1(measured.ttftMs))
++            result.put("output_tokens", measured.outputTokens)
++            result.put("wall_s", round2(measured.wallMs / 1000.0))
++            result.put("tokens_s", round1(measured.tokensPerSecond))
++            result.put("avg_request_s", round2(measured.wallMs / 1000.0))
++            result.put("prefill_tokens_per_s", measured.prefillTokensPerSecond?.let { round1(it) })
++            result.put("decode_tokens_per_s", measured.decodeTokensPerSecond?.let { round1(it) })
++            result.put("prompt_tokens", measured.promptTokens)
++            result.put("completion_tokens", measured.completionTokens)
++            result.put("total_tokens", measured.totalTokens)
++            result.put("status", "success")
++
++            engine.unload()
++        } catch (t: Throwable) {
++            Log.e("MLCBench", "benchmark failed", t)
++            result.put("service", "MLC LLM Android")
++            result.put("api", "mlc-engine")
++            result.put("model", modelId)
++            result.put("status", "failed")
++            result.put("error", t.stackTraceToString())
++        } finally {
++            val file = File(resultPath)
++            file.parentFile?.mkdirs()
++            file.writeText(result.toString(2))
++            Log.i("MLCBench", result.toString())
++            finish()
++        }
++    }
++
++    private suspend fun runOnce(
++        engine: MLCEngine,
++        modelId: String,
++        prompt: String,
++        maxTokens: Int
++    ): RunMetrics {
++        val requestStart = SystemClock.elapsedRealtimeNanos()
++        var firstTokenNs: Long? = null
++        var text = ""
++        var promptTokens: Int? = null
++        var completionTokens: Int? = null
++        var totalTokens: Int? = null
++        var prefillTokensPerSecond: Double? = null
++        var decodeTokensPerSecond: Double? = null
++
++        val channel = engine.chat.completions.create(
++            messages = listOf(
++                ChatCompletionMessage(
++                    role = OpenAIProtocol.ChatCompletionRole.user,
++                    content = prompt
++                )
++            ),
++            model = modelId,
++            max_tokens = maxTokens,
++            stream_options = OpenAIProtocol.StreamOptions(include_usage = true)
++        )
++
++        for (response in channel) {
++            val usage = response.usage
++            if (usage != null) {
++                promptTokens = usage.prompt_tokens
++                completionTokens = usage.completion_tokens
++                totalTokens = usage.total_tokens
++                prefillTokensPerSecond = usage.extra?.prefill_tokens_per_s?.toDouble()
++                decodeTokensPerSecond = usage.extra?.decode_tokens_per_s?.toDouble()
++                continue
++            }
++
++            val delta = response.choices.firstOrNull()?.delta?.content?.asText().orEmpty()
++            if (delta.isNotEmpty() && firstTokenNs == null) {
++                firstTokenNs = SystemClock.elapsedRealtimeNanos()
++            }
++            text += delta
++        }
++
++        val endNs = SystemClock.elapsedRealtimeNanos()
++        val wallMs = (endNs - requestStart) / 1_000_000.0
++        val ttftMs = ((firstTokenNs ?: endNs) - requestStart) / 1_000_000.0
++        val outputTokens = completionTokens ?: maxTokens
++        val tokensPerSecond = if (wallMs > 0) outputTokens / (wallMs / 1000.0) else 0.0
++
++        return RunMetrics(
++            ttftMs = ttftMs,
++            wallMs = wallMs,
++            tokensPerSecond = tokensPerSecond,
++            outputTokens = outputTokens,
++            promptTokens = promptTokens,
++            completionTokens = completionTokens,
++            totalTokens = totalTokens,
++            prefillTokensPerSecond = prefillTokensPerSecond,
++            decodeTokensPerSecond = decodeTokensPerSecond,
++            text = text
++        )
++    }
++
++    private fun elapsedMs(startNs: Long): Double {
++        return (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
++    }
++
++    private fun round1(value: Double): Double {
++        return String.format(Locale.US, "%.1f", value).toDouble()
++    }
++
++    private fun round2(value: Double): Double {
++        return String.format(Locale.US, "%.2f", value).toDouble()
++    }
++
++    data class RunMetrics(
++        val ttftMs: Double,
++        val wallMs: Double,
++        val tokensPerSecond: Double,
++        val outputTokens: Int,
++        val promptTokens: Int?,
++        val completionTokens: Int?,
++        val totalTokens: Int?,
++        val prefillTokensPerSecond: Double?,
++        val decodeTokensPerSecond: Double?,
++        val text: String
++    )
++}
