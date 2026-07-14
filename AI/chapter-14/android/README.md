@@ -36,7 +36,7 @@ API_STYLE=openai \
 DEVICE_PORT=8080 \
 MODEL="qwen2.5-1.5b-instruct-q4_k_m.gguf" \
 ANDROID_PACKAGE="io.github.arkanefans.servllama" \
-  AI/chapter-14/android/bench_android_llm.sh
+  AI/chapter-14/android/android_llm.sh bench-http
 ```
 
 如果是通过 adb 直接启动的二进制进程，可以用 `ANDROID_PROCESS_NAME` 采集进程 RSS：
@@ -47,7 +47,7 @@ API_STYLE=openai \
 DEVICE_PORT=8080 \
 MODEL="Qwen3-0.6B-Q4_K_M.gguf" \
 ANDROID_PROCESS_NAME="llama-server" \
-  AI/chapter-14/android/bench_android_llm.sh
+  AI/chapter-14/android/android_llm.sh bench-http
 ```
 
 如果手机端是 Ollama-compatible API：
@@ -57,25 +57,28 @@ SERVICE="Android Ollama-compatible" \
 API_STYLE=ollama \
 DEVICE_PORT=11434 \
 MODEL="qwen2.5:1.5b" \
-  AI/chapter-14/android/bench_android_llm.sh
+  AI/chapter-14/android/android_llm.sh bench-http
 ```
 
 如果不确定 API 类型，可以用：
 
 ```bash
-DEVICE_PORT=8080 API_STYLE=auto AI/chapter-14/android/bench_android_llm.sh
+DEVICE_PORT=8080 API_STYLE=auto AI/chapter-14/android/android_llm.sh bench-http
 ```
 
 如果是 MLC LLM Android，使用源码 patch 增加 `BenchmarkActivity`，再通过 adb 直接启动 App 内 benchmark：
 
 ```bash
-AI/chapter-14/android/mlc/prepare_mlc_android_from_apk.sh
-AI/chapter-14/android/mlc/push_mlc_model.sh
+AI/chapter-14/android/android_llm.sh mlc all
+```
 
+如果只重新压测：
+
+```bash
 MODEL_ID="Qwen2.5-1.5B-Instruct-q4f16_1-MLC" \
 MODEL_LIB="qwen2_q4f16_1_2e221f430380225c03990ad24c3d030e" \
 MODEL_PATH="/data/data/ai.mlc.mlcengineexample/files/Qwen2.5-1.5B-Instruct-q4f16_1-MLC" \
-AI/chapter-14/android/mlc/bench_mlc_android.sh
+AI/chapter-14/android/android_llm.sh mlc bench
 ```
 
 结果默认输出到：
@@ -88,12 +91,29 @@ CSV 列与 `AI/chapter-14/14-013.md` 中的压测表保持一致。
 
 MLC 路线的 CSV 也使用相同列；区别是 `API` 标记为 `mlc-engine`，TTFT 和 tokens/s 来自 App 内部直接调用 `MLCEngine` 的计时。
 
+如果是 Google AI Edge Gallery / MediaPipe LLM Inference 路线，使用官方 `mediapipe-samples`，再额外插入 `BenchmarkActivity`：
+
+```bash
+AI/chapter-14/android/android_llm.sh mediapipe all
+```
+
+如果只重新压测：
+
+```bash
+MP_MODEL_NAME="Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task" \
+MP_MODEL_URL="https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task" \
+MP_MODEL_PATH="/data/local/tmp/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task" \
+AI/chapter-14/android/android_llm.sh mediapipe bench
+```
+
+MediaPipe 路线的 CSV 也使用相同列；区别是 `API` 标记为 `mediapipe-llm-inference`，TTFT 和 tokens/s 来自 App 内部直接调用 `LlmInferenceSession` 的计时。
+
 ## 构建 llama.cpp Android Vulkan
 
 如果要验证 Pixel 9 GPU 路线，可以用下面的脚本交叉编译带 Vulkan backend 的 `llama.cpp`：
 
 ```bash
-AI/chapter-14/android/build_llama_vulkan.sh
+AI/chapter-14/android/android_llm.sh build-llama-vulkan
 ```
 
 脚本会：
