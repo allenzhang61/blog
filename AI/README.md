@@ -12,6 +12,7 @@
 - 代数
 - 机器学习
   - 线性回归，逻辑回归
+    - [线性回归](chapter-05/05-002.md)
   - 决策树，随机森林
   - GBDT，XGBoost，LightGBM
     - [xgboost](chapter-05/05-001.ipynb)
@@ -45,6 +46,10 @@
     - [卷积神经网络](chapter-04/04-020.ipynb)
     - AlexNet：大家就把特征提取以及分类两者合到一块儿去了，就是训练一个神经网络。这个神经网络既可以做特征提取，也可以做分类，它可以实现端到端训练
   - RNN（在 Transformer 出现之前，循环神经网络（RNN）是最流行的用于语言翻译的编码器-解码器架构）
+    - [RNN介绍](chapter-04/04-021.md)
+    - [RNN正弦波预测](chapter-04/04-022.ipynb)
+    - [RNN 算法理解：从序列记忆到注意力机制](chapter-04/04-023.md)
+    - [Bahdanau 注意力机制](chapter-04/04-024.md)
   - BERT
     - [BERT](chapter-04/04-002.ipynb)
   - LNN 液态神经网络
@@ -59,6 +64,7 @@
     - [简化计算过程](chapter-03/03-012.ipynb)
     - [逐步计算注意力权重](chapter-03/03-013.ipynb)
     - [实现一个简洁的自注意力机制 Python 类](chapter-03/03-014.ipynb)
+    - [QKV 通俗理解](chapter-03/03-027.md)
   - 实现一个用于文本生成的GPT模型
     - [实现 dummy 框架](chapter-03/03-007.ipynb)
     - [快捷连接示例](chapter-03/03-009.ipynb)
@@ -117,6 +123,10 @@
       - 音频 Transformer
       - 视频理解
       - 机器人与 Vision-Language-Action
+- build your own llm
+  - train
+    - python version
+    - cpp version
 - 模型推理与性能优化
   - [开源推理服务器总结](chapter-14/14-011.md)
   - [mac studio 上可运行选项性能对比](chapter-14/14-012.md)
