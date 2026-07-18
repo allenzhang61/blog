@@ -4,6 +4,8 @@
   - [分布函数](chapter-01/01-001.ipynb)
   - [chapter1 概率论的基本概念](chapter-01/01-005.md)
   - [chapter2 随机变量及其分布](chapter-01/01-006.md)
+  - [chapter3 多维随机变量及其分布](chapter-01/01-007.md)
+  - [chapter4 随机变量的数学特征](chapter-01/01-008.md)
   - [普通期望](chapter-01/01-002.md)
   - [条件期望](chapter-01/01-003.md)
   - [全期望公式](chapter-01/01-004.md)
@@ -137,6 +139,8 @@
     - [vllm 类图](chapter-14/14-009.md)
     - [vllm lora](chapter-14/14-010.md)
   - Tensor/Pipeline/Data/Expert Parallel
+  - llama.cpp
+    - 
 - 运筹学/Operations Research
   - [线性规划](chapter-10/10-001.ipynb)
   - [混合整数线性规划](chapter-10/10-002.ipynb)
