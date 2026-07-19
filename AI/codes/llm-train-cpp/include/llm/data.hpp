@@ -37,10 +37,11 @@ public:
     int64_t context_length;
     int64_t stride;
     bool shuffle;
+    Device device{};
     size_t cursor{0};
     std::vector<size_t> starts;
 
-    DataLoader(std::vector<int64_t> ids, int64_t batch, int64_t context, int64_t stride_, bool shuffle_);
+    DataLoader(std::vector<int64_t> ids, int64_t batch, int64_t context, int64_t stride_, bool shuffle_, Device device_ = {});
     void reset();
     bool next(Tensor& input, Tensor& target);
 };

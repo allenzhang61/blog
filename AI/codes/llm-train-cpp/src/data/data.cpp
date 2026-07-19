@@ -196,8 +196,8 @@ size_t GPT2BPETokenizer::VectorHash::operator()(const std::vector<unsigned char>
     return h;
 }
 
-DataLoader::DataLoader(std::vector<int64_t> ids, int64_t batch, int64_t context, int64_t stride_, bool shuffle_)
-    : tokens(std::move(ids)), batch_size(batch), context_length(context), stride(stride_), shuffle(shuffle_) {
+DataLoader::DataLoader(std::vector<int64_t> ids, int64_t batch, int64_t context, int64_t stride_, bool shuffle_, Device device_)
+    : tokens(std::move(ids)), batch_size(batch), context_length(context), stride(stride_), shuffle(shuffle_), device(device_) {
     for (size_t i = 0; i + static_cast<size_t>(context_length) < tokens.size(); i += static_cast<size_t>(stride)) starts.push_back(i);
     if (shuffle) std::shuffle(starts.begin(), starts.end(), std::mt19937(123));
 }
@@ -218,8 +218,8 @@ bool DataLoader::next(Tensor& input, Tensor& target) {
             y[b * context_length + t] = tokens[start + t + 1];
         }
     }
-    input = Tensor::from_ints(x, {actual, context_length});
-    target = Tensor::from_ints(y, {actual, context_length});
+    input = Tensor::from_ints(x, {actual, context_length}, device);
+    target = Tensor::from_ints(y, {actual, context_length}, device);
     return true;
 }
 

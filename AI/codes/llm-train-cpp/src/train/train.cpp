@@ -81,7 +81,7 @@ std::vector<int64_t> Trainer::generate_greedy(GPTModel& model, std::vector<int64
     for (int64_t i = 0; i < max_new_tokens; ++i) {
         int64_t start = std::max<int64_t>(0, static_cast<int64_t>(ids.size()) - context);
         std::vector<int64_t> window(ids.begin() + start, ids.end());
-        Tensor x = Tensor::from_ints(window, {1, static_cast<int64_t>(window.size())});
+        Tensor x = Tensor::from_ints(window, {1, static_cast<int64_t>(window.size())}, model.cfg.device);
         Tensor logits = model.forward(x);
         int64_t V = logits.shape()[2];
         int64_t last = logits.shape()[1] - 1;

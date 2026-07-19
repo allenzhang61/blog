@@ -18,7 +18,7 @@ public:
     Tensor bias;
     bool use_bias{true};
 
-    Linear(int64_t in_features, int64_t out_features, bool bias_enabled = true);
+    Linear(int64_t in_features, int64_t out_features, bool bias_enabled = true, Device device = {});
     Tensor forward(const Tensor& x);
     std::vector<Tensor*> parameters() override;
 };
@@ -27,7 +27,7 @@ class Embedding : public Module {
 public:
     Tensor weight;
 
-    Embedding(int64_t num_embeddings, int64_t embedding_dim);
+    Embedding(int64_t num_embeddings, int64_t embedding_dim, Device device = {});
     Tensor forward(const Tensor& ids);
     std::vector<Tensor*> parameters() override;
 };
@@ -38,7 +38,7 @@ public:
     Tensor shift;
     double eps{1e-5};
 
-    explicit LayerNorm(int64_t emb_dim);
+    explicit LayerNorm(int64_t emb_dim, Device device = {});
     Tensor forward(const Tensor& x);
     std::vector<Tensor*> parameters() override;
 };
@@ -56,6 +56,7 @@ struct GPTConfig {
     int64_t n_layers{12};
     double drop_rate{0.1};
     bool qkv_bias{false};
+    Device device{};
 };
 
 class MultiHeadAttention : public Module {
@@ -69,7 +70,7 @@ public:
     Linear W_value;
     Linear out_proj;
 
-    MultiHeadAttention(int64_t d_in, int64_t d_out_, int64_t context, int64_t heads, bool qkv_bias = false);
+    MultiHeadAttention(int64_t d_in, int64_t d_out_, int64_t context, int64_t heads, bool qkv_bias = false, Device device = {});
     Tensor forward(const Tensor& x);
     std::vector<Tensor*> parameters() override;
 };

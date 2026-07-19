@@ -1,10 +1,11 @@
 #include "llm/ops.hpp"
+#include "llm/metal_ops.hpp"
 
 namespace llm {
 namespace ops {
 
 Tensor softmax(const Tensor& a, int64_t dim) {
-    ensure_cpu(a);
+    if (a.device().type == DeviceType::Metal) return metal::softmax(a, dim);
     int64_t rank = static_cast<int64_t>(a.shape().size());
     dim = canonical_dim(dim, rank);
     if (dim != rank - 1) throw std::runtime_error("softmax currently supports last dim only");
@@ -41,7 +42,8 @@ Tensor log_softmax(const Tensor& a, int64_t dim) {
 }
 
 Tensor cross_entropy(const Tensor& logits, const Tensor& targets) {
-    ensure_cpu(logits); ensure_cpu(targets);
+    if (logits.device().type != targets.device().type) throw std::runtime_error("cross_entropy expects logits and targets on the same device");
+    if (logits.device().type == DeviceType::Metal) return metal::cross_entropy(logits, targets);
     if (logits.shape().size() != 3) throw std::runtime_error("cross_entropy expects logits [B,T,V]");
     int64_t B = logits.shape()[0], T = logits.shape()[1], V = logits.shape()[2];
     if (targets.numel() != B * T) throw std::runtime_error("cross_entropy target shape mismatch");

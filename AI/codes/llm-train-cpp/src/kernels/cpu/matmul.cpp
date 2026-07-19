@@ -1,9 +1,16 @@
 #include "llm/ops.hpp"
+#include "llm/metal_ops.hpp"
 
 namespace llm {
 namespace ops {
 
 Tensor matmul(const Tensor& a, const Tensor& b) {
+    if (a.device().type == DeviceType::Metal || b.device().type == DeviceType::Metal) {
+        if (a.device().type != DeviceType::Metal || b.device().type != DeviceType::Metal) {
+            throw std::runtime_error("matmul expects tensors on the same device");
+        }
+        return metal::matmul(a, b);
+    }
     ensure_cpu(a); ensure_cpu(b);
     if (a.shape().size() != 2 || b.shape().size() != 2 || a.shape()[1] != b.shape()[0]) {
         throw std::runtime_error("matmul expects [m,k] x [k,n]");
@@ -38,7 +45,8 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
 }
 
 Tensor batch_matmul(const Tensor& a, const Tensor& b) {
-    ensure_cpu(a); ensure_cpu(b);
+    if (a.device().type != b.device().type) throw std::runtime_error("batch_matmul expects tensors on the same device");
+    if (a.device().type == DeviceType::Metal) return metal::batch_matmul(a, b);
     if (a.shape().size() != 4 || b.shape().size() != 4) throw std::runtime_error("batch_matmul expects 4D tensors");
     int64_t B = a.shape()[0], H = a.shape()[1], M = a.shape()[2], K = a.shape()[3];
     if (b.shape()[0] != B || b.shape()[1] != H || b.shape()[2] != K) throw std::runtime_error("batch_matmul shape mismatch");

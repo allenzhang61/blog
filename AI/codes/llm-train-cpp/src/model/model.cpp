@@ -8,9 +8,9 @@ void Module::zero_grad() {
     for (auto* p : parameters()) p->zero_grad();
 }
 
-Linear::Linear(int64_t in_features, int64_t out_features, bool bias_enabled)
-    : weight(Tensor::randn({in_features, out_features}, 0.02, {}, true)),
-      bias(Tensor::zeros({out_features}, {}, true)),
+Linear::Linear(int64_t in_features, int64_t out_features, bool bias_enabled, Device device)
+    : weight(Tensor::randn({in_features, out_features}, 0.02, device, true)),
+      bias(Tensor::zeros({out_features}, device, true)),
       use_bias(bias_enabled) {}
 
 Tensor Linear::forward(const Tensor& x) {
@@ -31,24 +31,24 @@ std::vector<Tensor*> Linear::parameters() {
     return {&weight};
 }
 
-Embedding::Embedding(int64_t num_embeddings, int64_t embedding_dim)
-    : weight(Tensor::randn({num_embeddings, embedding_dim}, 0.02, {}, true)) {}
+Embedding::Embedding(int64_t num_embeddings, int64_t embedding_dim, Device device)
+    : weight(Tensor::randn({num_embeddings, embedding_dim}, 0.02, device, true)) {}
 
 Tensor Embedding::forward(const Tensor& ids) { return ops::embedding(ids, weight); }
 std::vector<Tensor*> Embedding::parameters() { return {&weight}; }
 
-LayerNorm::LayerNorm(int64_t emb_dim)
-    : scale(Tensor::ones({emb_dim}, {}, true)), shift(Tensor::zeros({emb_dim}, {}, true)) {}
+LayerNorm::LayerNorm(int64_t emb_dim, Device device)
+    : scale(Tensor::ones({emb_dim}, device, true)), shift(Tensor::zeros({emb_dim}, device, true)) {}
 
 Tensor LayerNorm::forward(const Tensor& x) { return ops::layernorm(x, scale, shift, eps); }
 std::vector<Tensor*> LayerNorm::parameters() { return {&scale, &shift}; }
 
 Tensor GELU::forward(const Tensor& x) { return ops::gelu(x); }
 
-MultiHeadAttention::MultiHeadAttention(int64_t d_in, int64_t d_out_, int64_t context, int64_t heads, bool qkv_bias)
+MultiHeadAttention::MultiHeadAttention(int64_t d_in, int64_t d_out_, int64_t context, int64_t heads, bool qkv_bias, Device device)
     : d_out(d_out_), num_heads(heads), head_dim(d_out_ / heads), context_length(context),
-      W_query(d_in, d_out_, qkv_bias), W_key(d_in, d_out_, qkv_bias),
-      W_value(d_in, d_out_, qkv_bias), out_proj(d_out_, d_out_, true) {
+      W_query(d_in, d_out_, qkv_bias, device), W_key(d_in, d_out_, qkv_bias, device),
+      W_value(d_in, d_out_, qkv_bias, device), out_proj(d_out_, d_out_, true, device) {
     if (d_out % num_heads != 0) throw std::runtime_error("d_out must be divisible by num_heads");
 }
 
@@ -79,7 +79,7 @@ std::vector<Tensor*> MultiHeadAttention::parameters() {
     return p;
 }
 
-FeedForward::FeedForward(const GPTConfig& cfg) : fc1(cfg.emb_dim, 4 * cfg.emb_dim), fc2(4 * cfg.emb_dim, cfg.emb_dim) {}
+FeedForward::FeedForward(const GPTConfig& cfg) : fc1(cfg.emb_dim, 4 * cfg.emb_dim, true, cfg.device), fc2(4 * cfg.emb_dim, cfg.emb_dim, true, cfg.device) {}
 Tensor FeedForward::forward(const Tensor& x) { return fc2.forward(gelu.forward(fc1.forward(x))); }
 std::vector<Tensor*> FeedForward::parameters() {
     auto p = fc1.parameters();
@@ -89,8 +89,8 @@ std::vector<Tensor*> FeedForward::parameters() {
 }
 
 TransformerBlock::TransformerBlock(const GPTConfig& cfg)
-    : att(cfg.emb_dim, cfg.emb_dim, cfg.context_length, cfg.n_heads, cfg.qkv_bias),
-      ff(cfg), norm1(cfg.emb_dim), norm2(cfg.emb_dim) {}
+    : att(cfg.emb_dim, cfg.emb_dim, cfg.context_length, cfg.n_heads, cfg.qkv_bias, cfg.device),
+      ff(cfg), norm1(cfg.emb_dim, cfg.device), norm2(cfg.emb_dim, cfg.device) {}
 
 Tensor TransformerBlock::forward(const Tensor& x) {
     Tensor y = att.forward(norm1.forward(x));
@@ -107,8 +107,8 @@ std::vector<Tensor*> TransformerBlock::parameters() {
 }
 
 GPTModel::GPTModel(GPTConfig cfg_)
-    : cfg(cfg_), tok_emb(cfg.vocab_size, cfg.emb_dim), pos_emb(cfg.context_length, cfg.emb_dim),
-      final_norm(cfg.emb_dim), out_head(cfg.emb_dim, cfg.vocab_size, false) {
+    : cfg(cfg_), tok_emb(cfg.vocab_size, cfg.emb_dim, cfg.device), pos_emb(cfg.context_length, cfg.emb_dim, cfg.device),
+      final_norm(cfg.emb_dim, cfg.device), out_head(cfg.emb_dim, cfg.vocab_size, false, cfg.device) {
     for (int64_t i = 0; i < cfg.n_layers; ++i) blocks.emplace_back(cfg);
 }
 
@@ -116,7 +116,7 @@ Tensor GPTModel::forward(const Tensor& ids) {
     int64_t B = ids.shape()[0], T = ids.shape()[1];
     std::vector<int64_t> pos(T);
     for (int64_t i = 0; i < T; ++i) pos[i] = i;
-    Tensor pos_ids = Tensor::from_ints(pos, {T});
+    Tensor pos_ids = Tensor::from_ints(pos, {T}, cfg.device);
     Tensor x = ops::add(tok_emb.forward(ids), pos_emb.forward(pos_ids));
     for (auto& block : blocks) x = block.forward(x);
     x = final_norm.forward(x);

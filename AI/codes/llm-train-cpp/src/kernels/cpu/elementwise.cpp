@@ -1,9 +1,16 @@
 #include "llm/ops.hpp"
+#include "llm/metal_ops.hpp"
 
 namespace llm {
 namespace ops {
 
 Tensor add(const Tensor& a, const Tensor& b) {
+    if (a.device().type == DeviceType::Metal || b.device().type == DeviceType::Metal) {
+        if (a.device().type != DeviceType::Metal || b.device().type != DeviceType::Metal) {
+            throw std::runtime_error("add expects tensors on the same device");
+        }
+        return metal::add(a, b);
+    }
     ensure_cpu(a); ensure_cpu(b);
     bool same_shape = a.shape() == b.shape();
     bool broadcast_batch = a.shape().size() == 3 && b.shape().size() == 2 &&
@@ -47,6 +54,12 @@ Tensor sub(const Tensor& a, const Tensor& b) {
 }
 
 Tensor mul(const Tensor& a, const Tensor& b) {
+    if (a.device().type == DeviceType::Metal || b.device().type == DeviceType::Metal) {
+        if (a.device().type != DeviceType::Metal || b.device().type != DeviceType::Metal) {
+            throw std::runtime_error("mul expects tensors on the same device");
+        }
+        return metal::mul(a, b);
+    }
     ensure_cpu(a); ensure_cpu(b);
     if (a.shape() != b.shape()) throw std::runtime_error("mul shape mismatch");
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
@@ -77,6 +90,7 @@ Tensor div(const Tensor& a, const Tensor& b) {
 }
 
 Tensor mul_scalar(const Tensor& a, double scalar) {
+    if (a.device().type == DeviceType::Metal) return metal::mul_scalar(a, scalar);
     ensure_cpu(a);
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad());
     for (int64_t i = 0; i < out.numel(); ++i) out.data()[i] = a.data()[i] * scalar;
@@ -148,7 +162,6 @@ Tensor reshape(const Tensor& a, const std::vector<int64_t>& new_shape) {
 }
 
 Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
-    ensure_cpu(a);
     auto shape = a.shape();
     int64_t rank = static_cast<int64_t>(shape.size());
     dim0 = canonical_dim(dim0, rank);

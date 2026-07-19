@@ -14,21 +14,24 @@ void test_tensor_basics() {
 
 void test_backend_placeholders() {
     check(BackendRegistry::get(Device::parse("cpu")).name() == "CPUBackend", "cpu backend");
+    check(select_device("").type == DeviceType::CPU, "default select cpu");
+    check(select_device("metal").type == DeviceType::Metal, "select metal");
     bool cuda_failed = false;
     try {
         BackendRegistry::get(Device::parse("cuda"));
     } catch (const std::runtime_error& err) {
-        cuda_failed = std::string(err.what()).find("CUDA backend is not implemented") != std::string::npos;
+        cuda_failed = std::string(err.what()).find("CUDA backend is unavailable") != std::string::npos ||
+                      std::string(err.what()).find("CUDA backend compiled") != std::string::npos;
     }
-    check(cuda_failed, "cuda placeholder");
+    if (!cuda_backend_available()) check(cuda_failed, "cuda unavailable path");
 
     bool metal_failed = false;
     try {
         BackendRegistry::get(Device::parse("metal"));
     } catch (const std::runtime_error& err) {
-        metal_failed = std::string(err.what()).find("Metal backend is not implemented") != std::string::npos;
+        metal_failed = std::string(err.what()).find("Metal backend is unavailable") != std::string::npos;
     }
-    check(metal_failed, "metal placeholder");
+    if (!metal_backend_available()) check(metal_failed, "metal unavailable path");
 }
 
 void test_ops_and_autograd() {

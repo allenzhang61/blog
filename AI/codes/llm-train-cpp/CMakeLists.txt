@@ -1,18 +1,19 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 project(llm_train_cpp LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(llm_train_cpp STATIC
+option(LLM_CPP_ENABLE_METAL "Build the Metal backend on Apple platforms" OFF)
+option(LLM_CPP_ENABLE_CUDA "Build the CUDA backend when CUDA Toolkit is available" OFF)
+
+set(LLM_CPP_SOURCES
     src/core/core.cpp
     src/tensor/tensor.cpp
     src/ops/ops.cpp
     src/backend/BackendRegistry.cpp
     src/backend/CPUBackend.cpp
-    src/backend/CUDABackend.cpp
-    src/backend/MetalBackend.cpp
     src/kernels/cpu/elementwise.cpp
     src/kernels/cpu/matmul.cpp
     src/kernels/cpu/softmax.cpp
@@ -23,7 +24,41 @@ add_library(llm_train_cpp STATIC
     src/data/data.cpp
     src/train/train.cpp
 )
+
+set(LLM_CPP_ENABLE_METAL_COMPILED 0)
+if(LLM_CPP_ENABLE_METAL AND APPLE)
+    enable_language(OBJCXX)
+    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(METAL_FRAMEWORK Metal REQUIRED)
+    list(APPEND LLM_CPP_SOURCES src/backend/MetalBackend.mm)
+    set(LLM_CPP_ENABLE_METAL_COMPILED 1)
+else()
+    list(APPEND LLM_CPP_SOURCES src/backend/MetalBackend.cpp)
+endif()
+
+set(LLM_CPP_ENABLE_CUDA_COMPILED 0)
+if(LLM_CPP_ENABLE_CUDA)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        enable_language(CUDA)
+        list(APPEND LLM_CPP_SOURCES src/backend/CUDAKernels.cu)
+        set(LLM_CPP_ENABLE_CUDA_COMPILED 1)
+    endif()
+endif()
+list(APPEND LLM_CPP_SOURCES src/backend/CUDABackend.cpp)
+
+add_library(llm_train_cpp STATIC
+    ${LLM_CPP_SOURCES}
+)
 target_include_directories(llm_train_cpp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(llm_train_cpp PUBLIC
+    LLM_CPP_ENABLE_METAL_COMPILED=${LLM_CPP_ENABLE_METAL_COMPILED}
+    LLM_CPP_ENABLE_CUDA_COMPILED=${LLM_CPP_ENABLE_CUDA_COMPILED}
+)
+if(LLM_CPP_ENABLE_METAL_COMPILED)
+    target_link_libraries(llm_train_cpp PUBLIC ${FOUNDATION_FRAMEWORK} ${METAL_FRAMEWORK})
+endif()
 
 add_executable(llm_cpp_tests tests/test_main.cpp)
 target_link_libraries(llm_cpp_tests PRIVATE llm_train_cpp)
@@ -39,3 +74,12 @@ target_compile_definitions(generate_text PRIVATE LLM_CPP_SOURCE_DIR="${CMAKE_CUR
 
 enable_testing()
 add_test(NAME llm_cpp_tests COMMAND llm_cpp_tests)
+
+if(LLM_CPP_ENABLE_METAL_COMPILED)
+    add_executable(llm_cpp_metal_smoke tests/test_metal.cpp)
+    target_link_libraries(llm_cpp_metal_smoke PRIVATE llm_train_cpp)
+    add_test(NAME llm_cpp_metal_smoke COMMAND llm_cpp_metal_smoke)
+
+    add_executable(metal_benchmark examples/metal_benchmark.cpp)
+    target_link_libraries(metal_benchmark PRIVATE llm_train_cpp)
+endif()

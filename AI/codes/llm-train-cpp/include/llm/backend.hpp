@@ -32,6 +32,10 @@ public:
     static Backend& get(Device device);
 };
 
+Device select_device(const std::string& backend);
+Device select_device_from_arg_or_env(const std::string& arg = "", const char* env_name = "LLM_CPP_BACKEND");
+bool cuda_backend_available();
+bool metal_backend_available();
 std::string cuda_backend_status();
 std::string metal_backend_status();
 

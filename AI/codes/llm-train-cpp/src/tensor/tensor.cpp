@@ -98,7 +98,7 @@ void Tensor::backward() {
 
 void ensure_cpu(const Tensor& t) {
     if (t.device().type != DeviceType::CPU) {
-        throw std::runtime_error(to_string(t.device().type) + " backend is not implemented yet; use cpu");
+        throw std::runtime_error(to_string(t.device().type) + " backend kernel is unavailable for this operation");
     }
 }
 
