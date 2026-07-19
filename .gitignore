@@ -42,7 +42,13 @@ AI/chapter-14/android/downloads/
 AI/chapter-14/android/results/
 AI/chapter-14/android/dist/
 AI/chapter-14/android/src/
-data/
+data/.local_user_id
 
 .venv/
 __pycache__/
+
+
+.claude/
+.codex/
+.trae/
+openspec/
