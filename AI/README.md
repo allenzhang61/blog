@@ -125,7 +125,7 @@
       - 机器人与 Vision-Language-Action
 - build your own llm
   - train
-    - python version
+    - [python version](chapter-18/18-001.md)
     - cpp version
 - 模型推理与性能优化
   - [开源推理服务器总结](chapter-14/14-011.md)
