@@ -11,13 +11,16 @@ Tensor add(const Tensor& a, const Tensor& b) {
         }
         return metal::add(a, b);
     }
-    ensure_cpu(a); ensure_cpu(b);
+    ensure_cpu(a);
+    ensure_cpu(b);
     bool same_shape = a.shape() == b.shape();
     bool broadcast_batch = a.shape().size() == 3 && b.shape().size() == 2 &&
                            a.shape()[1] == b.shape()[0] && a.shape()[2] == b.shape()[1];
     bool broadcast_last = !a.shape().empty() && b.shape().size() == 1 && a.shape().back() == b.shape()[0];
     std::vector<int64_t> out_shape = a.shape();
-    if (!same_shape && !broadcast_batch && !broadcast_last) throw std::runtime_error("add shape mismatch");
+    if (!same_shape && !broadcast_batch && !broadcast_last) {
+        throw std::runtime_error("add shape mismatch");
+    }
     Tensor out(out_shape, DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
     for (int64_t i = 0; i < out.numel(); ++i) {
         double bv = (broadcast_batch || broadcast_last) ? b.data()[i % b.numel()] : b.data()[i];
@@ -27,13 +30,19 @@ Tensor add(const Tensor& a, const Tensor& b) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out, broadcast_batch, broadcast_last]() mutable {
             if (a.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) a.grad()[i] += out.grad()[i];
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    a.grad()[i] += out.grad()[i];
+                }
             }
             if (b.requires_grad()) {
                 if (broadcast_batch || broadcast_last) {
-                    for (int64_t i = 0; i < out.numel(); ++i) b.grad()[i % b.numel()] += out.grad()[i];
+                    for (int64_t i = 0; i < out.numel(); ++i) {
+                        b.grad()[i % b.numel()] += out.grad()[i];
+                    }
                 } else {
-                    for (int64_t i = 0; i < out.numel(); ++i) b.grad()[i] += out.grad()[i];
+                    for (int64_t i = 0; i < out.numel(); ++i) {
+                        b.grad()[i] += out.grad()[i];
+                    }
                 }
             }
         };
@@ -43,11 +52,15 @@ Tensor add(const Tensor& a, const Tensor& b) {
 
 Tensor sub(const Tensor& a, const Tensor& b) {
     Tensor neg_b = Tensor::from_vector(b.data(), b.shape(), b.device(), b.requires_grad());
-    for (auto& v : neg_b.data()) v = -v;
+    for (auto& v : neg_b.data()) {
+        v = -v;
+    }
     if (b.requires_grad()) {
         neg_b.node->parents = {b};
         neg_b.node->backward_fn = [b, neg_b]() mutable {
-            for (int64_t i = 0; i < neg_b.numel(); ++i) b.grad()[i] -= neg_b.grad()[i];
+            for (int64_t i = 0; i < neg_b.numel(); ++i) {
+                b.grad()[i] -= neg_b.grad()[i];
+            }
         };
     }
     return add(a, neg_b);
@@ -60,44 +73,76 @@ Tensor mul(const Tensor& a, const Tensor& b) {
         }
         return metal::mul(a, b);
     }
-    ensure_cpu(a); ensure_cpu(b);
-    if (a.shape() != b.shape()) throw std::runtime_error("mul shape mismatch");
+    ensure_cpu(a);
+    ensure_cpu(b);
+    if (a.shape() != b.shape()) {
+        throw std::runtime_error("mul shape mismatch");
+    }
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
-    for (int64_t i = 0; i < out.numel(); ++i) out.data()[i] = a.data()[i] * b.data()[i];
+    for (int64_t i = 0; i < out.numel(); ++i) {
+        out.data()[i] = a.data()[i] * b.data()[i];
+    }
     if (out.requires_grad()) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out]() mutable {
-            if (a.requires_grad()) for (int64_t i = 0; i < out.numel(); ++i) a.grad()[i] += b.data()[i] * out.grad()[i];
-            if (b.requires_grad()) for (int64_t i = 0; i < out.numel(); ++i) b.grad()[i] += a.data()[i] * out.grad()[i];
+            if (a.requires_grad()) {
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    a.grad()[i] += b.data()[i] * out.grad()[i];
+                }
+            }
+            if (b.requires_grad()) {
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    b.grad()[i] += a.data()[i] * out.grad()[i];
+                }
+            }
         };
     }
     return out;
 }
 
 Tensor div(const Tensor& a, const Tensor& b) {
-    ensure_cpu(a); ensure_cpu(b);
-    if (a.shape() != b.shape()) throw std::runtime_error("div shape mismatch");
+    ensure_cpu(a);
+    ensure_cpu(b);
+    if (a.shape() != b.shape()) {
+        throw std::runtime_error("div shape mismatch");
+    }
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
-    for (int64_t i = 0; i < out.numel(); ++i) out.data()[i] = a.data()[i] / b.data()[i];
+    for (int64_t i = 0; i < out.numel(); ++i) {
+        out.data()[i] = a.data()[i] / b.data()[i];
+    }
     if (out.requires_grad()) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out]() mutable {
-            if (a.requires_grad()) for (int64_t i = 0; i < out.numel(); ++i) a.grad()[i] += out.grad()[i] / b.data()[i];
-            if (b.requires_grad()) for (int64_t i = 0; i < out.numel(); ++i) b.grad()[i] -= out.grad()[i] * a.data()[i] / (b.data()[i] * b.data()[i]);
+            if (a.requires_grad()) {
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    a.grad()[i] += out.grad()[i] / b.data()[i];
+                }
+            }
+            if (b.requires_grad()) {
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    b.grad()[i] -= out.grad()[i] * a.data()[i] / (b.data()[i] * b.data()[i]);
+                }
+            }
         };
     }
     return out;
 }
 
 Tensor mul_scalar(const Tensor& a, double scalar) {
-    if (a.device().type == DeviceType::Metal) return metal::mul_scalar(a, scalar);
+    if (a.device().type == DeviceType::Metal) {
+        return metal::mul_scalar(a, scalar);
+    }
     ensure_cpu(a);
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad());
-    for (int64_t i = 0; i < out.numel(); ++i) out.data()[i] = a.data()[i] * scalar;
+    for (int64_t i = 0; i < out.numel(); ++i) {
+        out.data()[i] = a.data()[i] * scalar;
+    }
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out, scalar]() mutable {
-            for (int64_t i = 0; i < out.numel(); ++i) a.grad()[i] += out.grad()[i] * scalar;
+            for (int64_t i = 0; i < out.numel(); ++i) {
+                a.grad()[i] += out.grad()[i] * scalar;
+            }
         };
     }
     return out;
@@ -106,7 +151,9 @@ Tensor mul_scalar(const Tensor& a, double scalar) {
 Tensor pow(const Tensor& a, double exponent) {
     ensure_cpu(a);
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad());
-    for (int64_t i = 0; i < out.numel(); ++i) out.data()[i] = std::pow(a.data()[i], exponent);
+    for (int64_t i = 0; i < out.numel(); ++i) {
+        out.data()[i] = std::pow(a.data()[i], exponent);
+    }
     if (out.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out, exponent]() mutable {
@@ -125,7 +172,9 @@ Tensor sum(const Tensor& a) {
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out]() mutable {
-            for (int64_t i = 0; i < a.numel(); ++i) a.grad()[i] += out.grad()[0];
+            for (int64_t i = 0; i < a.numel(); ++i) {
+                a.grad()[i] += out.grad()[0];
+            }
         };
     }
     return out;
@@ -136,7 +185,9 @@ Tensor mean(const Tensor& a) {
     out.data()[0] /= static_cast<double>(a.numel());
     if (a.requires_grad()) {
         out.node->backward_fn = [a, out]() mutable {
-            for (int64_t i = 0; i < a.numel(); ++i) a.grad()[i] += out.grad()[0] / static_cast<double>(a.numel());
+            for (int64_t i = 0; i < a.numel(); ++i) {
+                a.grad()[i] += out.grad()[0] / static_cast<double>(a.numel());
+            }
         };
     }
     return out;
@@ -150,12 +201,16 @@ Tensor max(const Tensor& a) {
 }
 
 Tensor reshape(const Tensor& a, const std::vector<int64_t>& new_shape) {
-    if (product(new_shape) != a.numel()) throw std::runtime_error("reshape numel mismatch");
+    if (product(new_shape) != a.numel()) {
+        throw std::runtime_error("reshape numel mismatch");
+    }
     Tensor out(new_shape, a.data(), a.dtype(), a.device(), a.requires_grad());
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out]() mutable {
-            for (int64_t i = 0; i < out.numel(); ++i) a.grad()[i] += out.grad()[i];
+            for (int64_t i = 0; i < out.numel(); ++i) {
+                a.grad()[i] += out.grad()[i];
+            }
         };
     }
     return out;
@@ -180,7 +235,9 @@ Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
         }
         std::swap(idx[dim0], idx[dim1]);
         int64_t in_flat = 0;
-        for (int64_t d = 0; d < rank; ++d) in_flat += idx[d] * in_strides[d];
+        for (int64_t d = 0; d < rank; ++d) {
+            in_flat += idx[d] * in_strides[d];
+        }
         out.data()[flat] = a.data()[in_flat];
     }
     if (a.requires_grad()) {
@@ -188,7 +245,9 @@ Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
         out.node->backward_fn = [a, out, dim0, dim1]() mutable {
             Tensor gout(out.shape(), out.grad(), DType::Float32, out.device(), false);
             Tensor back = transpose(gout, dim0, dim1);
-            for (int64_t i = 0; i < a.numel(); ++i) a.grad()[i] += back.data()[i];
+            for (int64_t i = 0; i < a.numel(); ++i) {
+                a.grad()[i] += back.data()[i];
+            }
         };
     }
     return out;

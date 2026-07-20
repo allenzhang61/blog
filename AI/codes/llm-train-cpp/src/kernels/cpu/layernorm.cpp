@@ -8,7 +8,9 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
     if (x.device().type != scale.device().type || x.device().type != shift.device().type) {
         throw std::runtime_error("layernorm expects tensors on the same device");
     }
-    if (x.device().type == DeviceType::Metal) return metal::layernorm(x, scale, shift, eps);
+    if (x.device().type == DeviceType::Metal) {
+        return metal::layernorm(x, scale, shift, eps);
+    }
     int64_t C = x.shape().back();
     int64_t rows = x.numel() / C;
     Tensor out(x.shape(), DType::Float32, x.device(), x.requires_grad() || scale.requires_grad() || shift.requires_grad());
@@ -16,7 +18,9 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
     std::vector<double> invs(rows, 0.0);
     for (int64_t r = 0; r < rows; ++r) {
         double mean = 0.0;
-        for (int64_t c = 0; c < C; ++c) mean += x.data()[r * C + c];
+        for (int64_t c = 0; c < C; ++c) {
+            mean += x.data()[r * C + c];
+        }
         mean /= C;
         double var = 0.0;
         for (int64_t c = 0; c < C; ++c) {
@@ -36,10 +40,14 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
         out.node->parents = {x, scale, shift};
         out.node->backward_fn = [x, scale, shift, out, C, rows, xhat, invs]() mutable {
             if (scale.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) scale.grad()[i % C] += out.grad()[i] * xhat[i];
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    scale.grad()[i % C] += out.grad()[i] * xhat[i];
+                }
             }
             if (shift.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) shift.grad()[i % C] += out.grad()[i];
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    shift.grad()[i % C] += out.grad()[i];
+                }
             }
             if (x.requires_grad()) {
                 for (int64_t r = 0; r < rows; ++r) {

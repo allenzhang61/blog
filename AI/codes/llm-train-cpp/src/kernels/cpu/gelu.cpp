@@ -5,7 +5,9 @@ namespace llm {
 namespace ops {
 
 Tensor gelu(const Tensor& x) {
-    if (x.device().type == DeviceType::Metal) return metal::gelu(x);
+    if (x.device().type == DeviceType::Metal) {
+        return metal::gelu(x);
+    }
     ensure_cpu(x);
     Tensor out(x.shape(), DType::Float32, x.device(), x.requires_grad());
     constexpr double k = 0.7978845608028654;

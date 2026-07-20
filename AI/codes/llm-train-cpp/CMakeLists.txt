@@ -12,17 +12,30 @@ set(LLM_CPP_SOURCES
     src/core/core.cpp
     src/tensor/tensor.cpp
     src/ops/ops.cpp
+    src/backend/Backend.cpp
     src/backend/BackendRegistry.cpp
     src/backend/CPUBackend.cpp
+    src/backend/UnimplementedBackend.cpp
+    src/backend/device_select.cpp
     src/kernels/cpu/elementwise.cpp
     src/kernels/cpu/matmul.cpp
     src/kernels/cpu/softmax.cpp
     src/kernels/cpu/layernorm.cpp
     src/kernels/cpu/gelu.cpp
     src/kernels/cpu/embedding.cpp
-    src/model/model.cpp
-    src/data/data.cpp
-    src/train/train.cpp
+    src/model/Module.cpp
+    src/model/Linear.cpp
+    src/model/Embedding.cpp
+    src/model/LayerNorm.cpp
+    src/model/GELU.cpp
+    src/model/MultiHeadAttention.cpp
+    src/model/FeedForward.cpp
+    src/model/TransformerBlock.cpp
+    src/model/GPTModel.cpp
+    src/data/GPT2BPETokenizer.cpp
+    src/data/DataLoader.cpp
+    src/train/AdamW.cpp
+    src/train/Trainer.cpp
 )
 
 set(LLM_CPP_ENABLE_METAL_COMPILED 0)
@@ -31,6 +44,7 @@ if(LLM_CPP_ENABLE_METAL AND APPLE)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(METAL_FRAMEWORK Metal REQUIRED)
     list(APPEND LLM_CPP_SOURCES src/backend/MetalBackend.mm)
+    list(APPEND LLM_CPP_SOURCES src/kernels/metal/MetalKernels.mm)
     set(LLM_CPP_ENABLE_METAL_COMPILED 1)
 else()
     list(APPEND LLM_CPP_SOURCES src/backend/MetalBackend.cpp)
@@ -57,6 +71,9 @@ target_compile_definitions(llm_train_cpp PUBLIC
     LLM_CPP_ENABLE_CUDA_COMPILED=${LLM_CPP_ENABLE_CUDA_COMPILED}
 )
 if(LLM_CPP_ENABLE_METAL_COMPILED)
+    target_compile_definitions(llm_train_cpp PRIVATE
+        LLM_CPP_METAL_KERNELS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/metal/metal_kernels.metal"
+    )
     target_link_libraries(llm_train_cpp PUBLIC ${FOUNDATION_FRAMEWORK} ${METAL_FRAMEWORK})
 endif()
 

@@ -69,7 +69,9 @@ kernel void matmul_kernel(device const float* a [[buffer(0)]],
                           uint2 gid [[thread_position_in_grid]]) {
     uint row = gid.y;
     uint col = gid.x;
-    if (row >= params.m || col >= params.n) return;
+    if (row >= params.m || col >= params.n) {
+        return;
+    }
     float acc = 0.0;
     for (uint p = 0; p < params.k; ++p) {
         acc += a[row * params.k + p] * b[p * params.n + col];
@@ -83,7 +85,9 @@ kernel void batch_matmul_kernel(device const float* a [[buffer(0)]],
                                 constant BatchMatmulParams& params [[buffer(3)]],
                                 uint id [[thread_position_in_grid]]) {
     uint total = params.batches * params.heads * params.m * params.n;
-    if (id >= total) return;
+    if (id >= total) {
+        return;
+    }
     uint col = id % params.n;
     uint row = (id / params.n) % params.m;
     uint head = (id / (params.n * params.m)) % params.heads;
@@ -101,13 +105,21 @@ kernel void softmax_kernel(device const float* x [[buffer(0)]],
                            device float* out [[buffer(1)]],
                            constant SoftmaxParams& params [[buffer(2)]],
                            uint row [[thread_position_in_grid]]) {
-    if (row >= params.rows) return;
+    if (row >= params.rows) {
+        return;
+    }
     uint base = row * params.width;
     float mx = -INFINITY;
-    for (uint c = 0; c < params.width; ++c) mx = max(mx, x[base + c]);
+    for (uint c = 0; c < params.width; ++c) {
+        mx = max(mx, x[base + c]);
+    }
     float denom = 0.0;
-    for (uint c = 0; c < params.width; ++c) denom += exp(x[base + c] - mx);
-    for (uint c = 0; c < params.width; ++c) out[base + c] = exp(x[base + c] - mx) / denom;
+    for (uint c = 0; c < params.width; ++c) {
+        denom += exp(x[base + c] - mx);
+    }
+    for (uint c = 0; c < params.width; ++c) {
+        out[base + c] = exp(x[base + c] - mx) / denom;
+    }
 }
 
 kernel void layernorm_kernel(device const float* x [[buffer(0)]],
@@ -116,10 +128,14 @@ kernel void layernorm_kernel(device const float* x [[buffer(0)]],
                              device float* out [[buffer(3)]],
                              constant LayerNormParams& params [[buffer(4)]],
                              uint row [[thread_position_in_grid]]) {
-    if (row >= params.rows) return;
+    if (row >= params.rows) {
+        return;
+    }
     uint base = row * params.width;
     float mean = 0.0;
-    for (uint c = 0; c < params.width; ++c) mean += x[base + c];
+    for (uint c = 0; c < params.width; ++c) {
+        mean += x[base + c];
+    }
     mean /= float(params.width);
     float var = 0.0;
     for (uint c = 0; c < params.width; ++c) {
@@ -139,7 +155,9 @@ kernel void embedding_kernel(device const float* ids [[buffer(0)]],
                              constant EmbeddingParams& params [[buffer(3)]],
                              uint id [[thread_position_in_grid]]) {
     uint total = params.count * params.dim;
-    if (id >= total) return;
+    if (id >= total) {
+        return;
+    }
     uint token_index = id / params.dim;
     uint d = id % params.dim;
     uint token = uint(ids[token_index]);
@@ -151,12 +169,18 @@ kernel void cross_entropy_row_loss_kernel(device const float* logits [[buffer(0)
                                           device float* row_losses [[buffer(2)]],
                                           constant CrossEntropyParams& params [[buffer(3)]],
                                           uint row [[thread_position_in_grid]]) {
-    if (row >= params.rows) return;
+    if (row >= params.rows) {
+        return;
+    }
     uint base = row * params.vocab;
     float mx = -INFINITY;
-    for (uint v = 0; v < params.vocab; ++v) mx = max(mx, logits[base + v]);
+    for (uint v = 0; v < params.vocab; ++v) {
+        mx = max(mx, logits[base + v]);
+    }
     float denom = 0.0;
-    for (uint v = 0; v < params.vocab; ++v) denom += exp(logits[base + v] - mx);
+    for (uint v = 0; v < params.vocab; ++v) {
+        denom += exp(logits[base + v] - mx);
+    }
     uint target = uint(targets[row]);
     float p = exp(logits[base + target] - mx) / denom;
     row_losses[row] = -log(max(p, 1.0e-12f));

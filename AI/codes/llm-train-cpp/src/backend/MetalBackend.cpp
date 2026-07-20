@@ -1,4 +1,4 @@
-#include "llm/backend.hpp"
+#include "llm/backend/Backend.hpp"
 #include "llm/metal_ops.hpp"
 
 namespace llm {
@@ -15,18 +15,52 @@ std::string metal_backend_status() {
 
 namespace llm::metal {
 
-bool available() { return false; }
-std::string status() { return metal_backend_status(); }
+bool available() {
+    return false;
+}
 
-Tensor add(const Tensor&, const Tensor&) { throw std::runtime_error(status()); }
-Tensor mul(const Tensor&, const Tensor&) { throw std::runtime_error(status()); }
-Tensor mul_scalar(const Tensor&, double) { throw std::runtime_error(status()); }
-Tensor matmul(const Tensor&, const Tensor&) { throw std::runtime_error(status()); }
-Tensor batch_matmul(const Tensor&, const Tensor&) { throw std::runtime_error(status()); }
-Tensor softmax(const Tensor&, int64_t) { throw std::runtime_error(status()); }
-Tensor cross_entropy(const Tensor&, const Tensor&) { throw std::runtime_error(status()); }
-Tensor embedding(const Tensor&, const Tensor&) { throw std::runtime_error(status()); }
-Tensor layernorm(const Tensor&, const Tensor&, const Tensor&, double) { throw std::runtime_error(status()); }
-Tensor gelu(const Tensor&) { throw std::runtime_error(status()); }
+std::string status() {
+    return metal_backend_status();
+}
+
+Tensor add(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor mul(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor mul_scalar(const Tensor&, double) {
+    throw std::runtime_error(status());
+}
+
+Tensor matmul(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor batch_matmul(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor softmax(const Tensor&, int64_t) {
+    throw std::runtime_error(status());
+}
+
+Tensor cross_entropy(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor embedding(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor layernorm(const Tensor&, const Tensor&, const Tensor&, double) {
+    throw std::runtime_error(status());
+}
+
+Tensor gelu(const Tensor&) {
+    throw std::runtime_error(status());
+}
 
 } // namespace llm::metal

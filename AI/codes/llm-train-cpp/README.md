@@ -17,16 +17,22 @@
 
 ```text
 include/llm/      # public headers；llm.hpp 只是聚合入口
+include/llm/backend/ # Backend、BackendRegistry、CPUBackend 等按类拆分的头文件
+include/llm/data/    # GPT2BPETokenizer、DataLoader
+include/llm/model/   # Module、Linear、Embedding、GPTModel 等模型类
+include/llm/train/   # AdamW、Trainer
 src/core/         # 基础类型、Device、检查函数
 src/tensor/       # Tensor 与动态图 autograd
 src/ops/          # 统一算子入口，向下调用 backend / kernels
-src/backend/      # BackendRegistry、CPUBackend、CUDABackend、MetalBackend
+src/backend/      # BackendRegistry、CPUBackend、CUDABackend、MetalBackend 等后端入口
 src/kernels/cpu/  # CPU 算子实现：elementwise、matmul、softmax、layernorm、gelu、embedding
-src/kernels/metal/# Metal shader 源
-src/model/        # GPT 模型模块
-src/data/         # GPT-2 BPE tokenizer 与 DataLoader
-src/train/        # AdamW 与训练 / 生成流程
+src/kernels/metal/# Metal shader 源与 kernel dispatch
+src/model/        # GPT 模型模块，按 class 拆分实现
+src/data/         # GPT-2 BPE tokenizer 与 DataLoader，按 class 拆分实现
+src/train/        # AdamW 与训练 / 生成流程，按 class 拆分实现
 ```
+
+约定：聚合头文件如 `llm/model.hpp`、`llm/data.hpp`、`llm/train.hpp`、`llm/backend.hpp` 只负责集中 include；具体 class 尽量放在同名头文件和源文件中。同一类模块放到同一子目录下，方便学习时按模块定位。
 
 ## 构建
 
