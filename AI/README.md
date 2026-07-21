@@ -131,6 +131,7 @@
   - [开源推理服务器总结](chapter-14/14-011.md)
   - [mac studio 上可运行选项性能对比](chapter-14/14-012.md)
   - [pixel 9 上可运行选项性能对比](chapter-14/14-013.md)
+  - [CUDA 机器上可运行选项性能对比](chapter-14/14-014.md)
   - [推理的流程和架构](chapter-14/14-001.md)
   - FP16、BF16、FP8、INT8、INT4
   - Quantization、Pruning、Distillation
