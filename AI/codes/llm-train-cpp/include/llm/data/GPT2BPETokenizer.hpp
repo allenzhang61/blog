@@ -8,11 +8,14 @@ namespace llm {
 // 使用已有 GPT-2 BPE rank 文件做 encode/decode，保证 token id 与 GPT-2 体系一致。
 class GPT2BPETokenizer {
 public:
+    // 默认构造：不加载任何 rank，需后续调用 load_ranks。
+    GPT2BPETokenizer() = default;
+
+    // 构造时从指定路径加载 BPE rank 数据，加载失败抛出异常。
+    explicit GPT2BPETokenizer(const std::string& ranks_path);
+
     // 加载 BPE merge/rank 数据。
     bool load_ranks(const std::string& path);
-
-    // 加载测试样本映射，便于验证 tokenizer 行为。
-    bool load_samples(const std::string& path);
 
     // 将文本编码为 token id 序列。
     std::vector<int64_t> encode(const std::string& text) const;
@@ -21,9 +24,6 @@ public:
     std::string decode(const std::vector<int64_t>& ids) const;
 
 private:
-    // 解析 rank 文件中的转义字符串。
-    static std::string unescape(const std::string& s);
-
     // 将一个十六进制字符转换为数值。
     static int hex_value(char ch);
 
@@ -49,9 +49,6 @@ private:
     struct VectorHash {
         size_t operator()(const std::vector<unsigned char>& v) const;
     };
-
-    // 可选样本缓存：文本 -> token ids。
-    std::unordered_map<std::string, std::vector<int64_t>> samples_;
 
     // BPE token 字节序列 -> rank/id。
     std::unordered_map<std::vector<unsigned char>, int64_t, VectorHash> ranks_;

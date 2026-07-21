@@ -146,13 +146,13 @@ metal_benchmark <matrix_size> <iterations>
 
 ## GPT-2 BPE 资源
 
-`tools/export_gpt2_bpe_samples.py` 会用 Python `tiktoken` 生成 C++ tokenizer 对照样例：
+`tools/export_gpt2_bpe_ranks.py` 会用 Python `tiktoken` 生成 C++ tokenizer 所需的 GPT-2 BPE rank 表：
 
 ```bash
-python AI/codes/llm-train-cpp/tools/export_gpt2_bpe_samples.py
+python AI/codes/llm-train-cpp/tools/export_gpt2_bpe_ranks.py
 ```
 
-当前 C++ tokenizer 优先读取这些 GPT-2 BPE 样例，确保关键样例与 `tiktoken.get_encoding("gpt2")` 对齐；未命中的文本使用 byte fallback，后续可以在同一接口下扩展完整 merge 规则。
+C++ tokenizer 读取该 rank 表执行 BPE 合并，与 `tiktoken.get_encoding("gpt2")` 对齐；未命中的文本使用 byte fallback。
 
 ## TODO
 

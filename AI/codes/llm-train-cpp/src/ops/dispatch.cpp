@@ -7,8 +7,6 @@ namespace llm {
 namespace ops {
 
 // ops 层只负责按设备把算子分发到具体后端（cpu:: / metal::），本身不做计算。
-// 没有 Metal kernel 的算子（div、pow、sum、mean、max、reshape、transpose、log_softmax）
-// 统一落到 CPU 参考实现。
 
 Tensor add(const Tensor& a, const Tensor& b) {
     if (a.device().type == DeviceType::Metal || b.device().type == DeviceType::Metal) {
@@ -21,6 +19,12 @@ Tensor add(const Tensor& a, const Tensor& b) {
 }
 
 Tensor sub(const Tensor& a, const Tensor& b) {
+    if (a.device().type == DeviceType::Metal || b.device().type == DeviceType::Metal) {
+        if (a.device().type != DeviceType::Metal || b.device().type != DeviceType::Metal) {
+            throw std::runtime_error("sub expects tensors on the same device");
+        }
+        return metal::sub(a, b);
+    }
     return cpu::sub(a, b);
 }
 
@@ -35,6 +39,12 @@ Tensor mul(const Tensor& a, const Tensor& b) {
 }
 
 Tensor div(const Tensor& a, const Tensor& b) {
+    if (a.device().type == DeviceType::Metal || b.device().type == DeviceType::Metal) {
+        if (a.device().type != DeviceType::Metal || b.device().type != DeviceType::Metal) {
+            throw std::runtime_error("div expects tensors on the same device");
+        }
+        return metal::div(a, b);
+    }
     return cpu::div(a, b);
 }
 
@@ -46,26 +56,44 @@ Tensor mul_scalar(const Tensor& a, double scalar) {
 }
 
 Tensor pow(const Tensor& a, double exponent) {
+    if (a.device().type == DeviceType::Metal) {
+        return metal::pow(a, exponent);
+    }
     return cpu::pow(a, exponent);
 }
 
 Tensor sum(const Tensor& a) {
+    if (a.device().type == DeviceType::Metal) {
+        return metal::sum(a);
+    }
     return cpu::sum(a);
 }
 
 Tensor mean(const Tensor& a) {
+    if (a.device().type == DeviceType::Metal) {
+        return metal::mean(a);
+    }
     return cpu::mean(a);
 }
 
 Tensor max(const Tensor& a) {
+    if (a.device().type == DeviceType::Metal) {
+        return metal::max(a);
+    }
     return cpu::max(a);
 }
 
 Tensor reshape(const Tensor& a, const std::vector<int64_t>& new_shape) {
+    if (a.device().type == DeviceType::Metal) {
+        return metal::reshape(a, new_shape);
+    }
     return cpu::reshape(a, new_shape);
 }
 
 Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
+    if (a.device().type == DeviceType::Metal) {
+        return metal::transpose(a, dim0, dim1);
+    }
     return cpu::transpose(a, dim0, dim1);
 }
 
@@ -97,6 +125,9 @@ Tensor softmax(const Tensor& a, int64_t dim) {
 }
 
 Tensor log_softmax(const Tensor& a, int64_t dim) {
+    if (a.device().type == DeviceType::Metal) {
+        return metal::log_softmax(a, dim);
+    }
     return cpu::log_softmax(a, dim);
 }
 

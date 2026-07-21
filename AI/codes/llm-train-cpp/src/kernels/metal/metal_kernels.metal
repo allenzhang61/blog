@@ -55,6 +55,13 @@ kernel void mul_kernel(device const float* a [[buffer(0)]],
     out[id] = a[id] * b[id];
 }
 
+kernel void div_kernel(device const float* a [[buffer(0)]],
+                       device const float* b [[buffer(1)]],
+                       device float* out [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = a[id] / b[id];
+}
+
 kernel void mul_scalar_kernel(device const float* a [[buffer(0)]],
                               device float* out [[buffer(1)]],
                               constant ScalarParams& params [[buffer(2)]],
@@ -192,4 +199,67 @@ kernel void gelu_kernel(device const float* x [[buffer(0)]],
     float v = x[id];
     float u = 0.7978845608f * (v + 0.044715f * v * v * v);
     out[id] = 0.5f * v * (1.0f + tanh(u));
+}
+
+kernel void neg_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = -a[id];
+}
+
+kernel void pow_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       constant ScalarParams& params [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = pow(a[id], params.scalar);
+}
+
+kernel void copy_kernel(device const float* a [[buffer(0)]],
+                        device float* out [[buffer(1)]],
+                        uint id [[thread_position_in_grid]]) {
+    out[id] = a[id];
+}
+
+kernel void log_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = log(max(a[id], 1.0e-12f));
+}
+
+// 用 host 端预计算的 index 表做任意维度重排（供 transpose 使用）。
+kernel void gather_kernel(device const float* a [[buffer(0)]],
+                          device const uint* index [[buffer(1)]],
+                          device float* out [[buffer(2)]],
+                          uint id [[thread_position_in_grid]]) {
+    out[id] = a[index[id]];
+}
+
+// 单线程全量规约求和，count 通过 b_size buffer 传入。
+kernel void sum_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       constant uint& count [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    if (id != 0) {
+        return;
+    }
+    float acc = 0.0;
+    for (uint i = 0; i < count; ++i) {
+        acc += a[i];
+    }
+    out[0] = acc;
+}
+
+// 单线程全量规约求最大值。
+kernel void max_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       constant uint& count [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    if (id != 0) {
+        return;
+    }
+    float mx = -INFINITY;
+    for (uint i = 0; i < count; ++i) {
+        mx = max(mx, a[i]);
+    }
+    out[0] = mx;
 }

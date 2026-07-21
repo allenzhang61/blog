@@ -27,11 +27,43 @@ Tensor add(const Tensor&, const Tensor&) {
     throw std::runtime_error(status());
 }
 
+Tensor sub(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
 Tensor mul(const Tensor&, const Tensor&) {
     throw std::runtime_error(status());
 }
 
+Tensor div(const Tensor&, const Tensor&) {
+    throw std::runtime_error(status());
+}
+
 Tensor mul_scalar(const Tensor&, double) {
+    throw std::runtime_error(status());
+}
+
+Tensor pow(const Tensor&, double) {
+    throw std::runtime_error(status());
+}
+
+Tensor sum(const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor mean(const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor max(const Tensor&) {
+    throw std::runtime_error(status());
+}
+
+Tensor reshape(const Tensor&, const std::vector<int64_t>&) {
+    throw std::runtime_error(status());
+}
+
+Tensor transpose(const Tensor&, int64_t, int64_t) {
     throw std::runtime_error(status());
 }
 
@@ -44,6 +76,10 @@ Tensor batch_matmul(const Tensor&, const Tensor&) {
 }
 
 Tensor softmax(const Tensor&, int64_t) {
+    throw std::runtime_error(status());
+}
+
+Tensor log_softmax(const Tensor&, int64_t) {
     throw std::runtime_error(status());
 }
 

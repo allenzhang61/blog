@@ -10,9 +10,7 @@ int main(int argc, char** argv) {
         Device device = select_device_from_arg_or_env(backend_arg);
         BackendRegistry::get(device);
 
-        GPT2BPETokenizer tokenizer;
-        tokenizer.load_ranks(std::string(LLM_CPP_SOURCE_DIR) + "/data/gpt2_bpe_ranks.tsv");
-        tokenizer.load_samples(std::string(LLM_CPP_SOURCE_DIR) + "/data/gpt2_bpe_samples.tsv");
+        GPT2BPETokenizer tokenizer(std::string(LLM_CPP_SOURCE_DIR) + "/data/gpt2_bpe_ranks.tsv");
         std::vector<int64_t> ids = tokenizer.encode("Every effort moves you forward. Every step teaches.");
 
         GPTConfig cfg;

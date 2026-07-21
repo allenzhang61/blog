@@ -66,6 +66,13 @@ kernel void mul_kernel(device const float* a [[buffer(0)]],
     out[id] = a[id] * b[id];
 }
 
+kernel void div_kernel(device const float* a [[buffer(0)]],
+                       device const float* b [[buffer(1)]],
+                       device float* out [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = a[id] / b[id];
+}
+
 kernel void mul_scalar_kernel(device const float* a [[buffer(0)]],
                               device float* out [[buffer(1)]],
                               constant ScalarParams& params [[buffer(2)]],
@@ -204,6 +211,66 @@ kernel void gelu_kernel(device const float* x [[buffer(0)]],
     float u = 0.7978845608f * (v + 0.044715f * v * v * v);
     out[id] = 0.5f * v * (1.0f + tanh(u));
 }
+
+kernel void neg_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = -a[id];
+}
+
+kernel void pow_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       constant ScalarParams& params [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = pow(a[id], params.scalar);
+}
+
+kernel void copy_kernel(device const float* a [[buffer(0)]],
+                        device float* out [[buffer(1)]],
+                        uint id [[thread_position_in_grid]]) {
+    out[id] = a[id];
+}
+
+kernel void log_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       uint id [[thread_position_in_grid]]) {
+    out[id] = log(max(a[id], 1.0e-12f));
+}
+
+kernel void gather_kernel(device const float* a [[buffer(0)]],
+                          device const uint* index [[buffer(1)]],
+                          device float* out [[buffer(2)]],
+                          uint id [[thread_position_in_grid]]) {
+    out[id] = a[index[id]];
+}
+
+kernel void sum_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       constant uint& count [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    if (id != 0) {
+        return;
+    }
+    float acc = 0.0;
+    for (uint i = 0; i < count; ++i) {
+        acc += a[i];
+    }
+    out[0] = acc;
+}
+
+kernel void max_kernel(device const float* a [[buffer(0)]],
+                       device float* out [[buffer(1)]],
+                       constant uint& count [[buffer(2)]],
+                       uint id [[thread_position_in_grid]]) {
+    if (id != 0) {
+        return;
+    }
+    float mx = -INFINITY;
+    for (uint i = 0; i < count; ++i) {
+        mx = max(mx, a[i]);
+    }
+    out[0] = mx;
+}
 )metal";
 
 struct ScalarParams {
@@ -299,6 +366,9 @@ public:
             [encoder setBuffer:out_buffer offset:0 atIndex:2];
             [encoder setBuffer:b_size_buffer offset:0 atIndex:3];
         } else if (std::string(kernel_name) == "mul_kernel") {
+            [encoder setBuffer:b_buffer offset:0 atIndex:1];
+            [encoder setBuffer:out_buffer offset:0 atIndex:2];
+        } else if (std::string(kernel_name) == "div_kernel") {
             [encoder setBuffer:b_buffer offset:0 atIndex:1];
             [encoder setBuffer:out_buffer offset:0 atIndex:2];
         } else {
@@ -535,6 +605,58 @@ private:
         return read(out_buffer, output_count);
     }
 
+public:
+    // 单线程全量规约（sum_kernel / max_kernel），输出 1 个标量。
+    float reduce(const char* kernel_name, const std::vector<float>& a) {
+        if (!available()) {
+            throw std::runtime_error(status_);
+        }
+        id<MTLComputePipelineState> pipeline_state = get_pipeline(kernel_name);
+        id<MTLBuffer> a_buffer = buffer(a);
+        id<MTLBuffer> out_buffer = [device_ newBufferWithLength:sizeof(float)
+                                                        options:MTLResourceStorageModeShared];
+        uint32_t count = static_cast<uint32_t>(a.size());
+        id<MTLBuffer> count_buffer = [device_ newBufferWithBytes:&count length:sizeof(uint32_t)
+                                                         options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> command = [queue_ commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:pipeline_state];
+        [encoder setBuffer:a_buffer offset:0 atIndex:0];
+        [encoder setBuffer:out_buffer offset:0 atIndex:1];
+        [encoder setBuffer:count_buffer offset:0 atIndex:2];
+        dispatch1d(encoder, pipeline_state, 1);
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        return read(out_buffer, 1)[0];
+    }
+
+    // 按 host 端预计算的 index 表做数据重排（gather_kernel），供 transpose 使用。
+    std::vector<float> gather(const std::vector<float>& a, const std::vector<uint32_t>& index) {
+        if (!available()) {
+            throw std::runtime_error(status_);
+        }
+        id<MTLComputePipelineState> pipeline_state = get_pipeline("gather_kernel");
+        id<MTLBuffer> a_buffer = buffer(a);
+        id<MTLBuffer> index_buffer = [device_ newBufferWithBytes:index.data()
+                                                          length:sizeof(uint32_t) * index.size()
+                                                         options:MTLResourceStorageModeShared];
+        id<MTLBuffer> out_buffer = [device_ newBufferWithLength:sizeof(float) * index.size()
+                                                        options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> command = [queue_ commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:pipeline_state];
+        [encoder setBuffer:a_buffer offset:0 atIndex:0];
+        [encoder setBuffer:index_buffer offset:0 atIndex:1];
+        [encoder setBuffer:out_buffer offset:0 atIndex:2];
+        dispatch1d(encoder, pipeline_state, static_cast<NSUInteger>(index.size()));
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        return read(out_buffer, static_cast<int64_t>(index.size()));
+    }
+
+private:
     void dispatch1d(id<MTLComputeCommandEncoder> encoder,
                     id<MTLComputePipelineState> pipeline,
                     NSUInteger count) {
@@ -653,6 +775,31 @@ Tensor mul_scalar(const Tensor& a, double scalar) {
         out.node->backward_fn = [a, out, scalar]() mutable {
             for (int64_t i = 0; i < out.numel(); ++i) {
                 a.grad()[i] += out.grad()[i] * scalar;
+            }
+        };
+    }
+    return out;
+}
+
+Tensor div(const Tensor& a, const Tensor& b) {
+    if (a.shape() != b.shape()) {
+        throw std::runtime_error("Metal div expects same shape");
+    }
+    auto out_data = MetalRuntime::instance().run1d("div_kernel", to_float(a.data()), to_float(b.data()), nullptr, 0,
+                                                   0, a.numel());
+    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
+    if (out.requires_grad()) {
+        out.node->parents = {a, b};
+        out.node->backward_fn = [a, b, out]() mutable {
+            if (a.requires_grad()) {
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    a.grad()[i] += out.grad()[i] / b.data()[i];
+                }
+            }
+            if (b.requires_grad()) {
+                for (int64_t i = 0; i < out.numel(); ++i) {
+                    b.grad()[i] -= out.grad()[i] * a.data()[i] / (b.data()[i] * b.data()[i]);
+                }
             }
         };
     }
@@ -924,6 +1071,140 @@ Tensor gelu(const Tensor& x) {
             }
         };
     }
+    return out;
+}
+
+Tensor sub(const Tensor& a, const Tensor& b) {
+    auto neg_data = MetalRuntime::instance().run1d("neg_kernel", to_float(b.data()), {}, nullptr, 0, 0, b.numel());
+    Tensor neg_b(b.shape(), to_double(neg_data), DType::Float32, b.device(), b.requires_grad());
+    if (b.requires_grad()) {
+        neg_b.node->parents = {b};
+        neg_b.node->backward_fn = [b, neg_b]() mutable {
+            for (int64_t i = 0; i < neg_b.numel(); ++i) {
+                b.grad()[i] -= neg_b.grad()[i];
+            }
+        };
+    }
+    return add(a, neg_b);
+}
+
+Tensor pow(const Tensor& a, double exponent) {
+    ScalarParams params{static_cast<float>(exponent)};
+    auto out_data = MetalRuntime::instance().run1d("pow_kernel", to_float(a.data()), {}, &params, sizeof(params),
+                                                   0, a.numel());
+    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    if (out.requires_grad()) {
+        out.node->parents = {a};
+        out.node->backward_fn = [a, out, exponent]() mutable {
+            for (int64_t i = 0; i < out.numel(); ++i) {
+                a.grad()[i] += exponent * std::pow(a.data()[i], exponent - 1.0) * out.grad()[i];
+            }
+        };
+    }
+    return out;
+}
+
+Tensor sum(const Tensor& a) {
+    float value = MetalRuntime::instance().reduce("sum_kernel", to_float(a.data()));
+    Tensor out({}, DType::Float32, a.device(), a.requires_grad());
+    out.data()[0] = value;
+    if (a.requires_grad()) {
+        out.node->parents = {a};
+        out.node->backward_fn = [a, out]() mutable {
+            for (int64_t i = 0; i < a.numel(); ++i) {
+                a.grad()[i] += out.grad()[0];
+            }
+        };
+    }
+    return out;
+}
+
+Tensor mean(const Tensor& a) {
+    Tensor out = sum(a);
+    out.data()[0] /= static_cast<double>(a.numel());
+    if (a.requires_grad()) {
+        out.node->backward_fn = [a, out]() mutable {
+            for (int64_t i = 0; i < a.numel(); ++i) {
+                a.grad()[i] += out.grad()[0] / static_cast<double>(a.numel());
+            }
+        };
+    }
+    return out;
+}
+
+Tensor max(const Tensor& a) {
+    float value = MetalRuntime::instance().reduce("max_kernel", to_float(a.data()));
+    Tensor out({}, DType::Float32, a.device(), false);
+    out.data()[0] = value;
+    return out;
+}
+
+Tensor reshape(const Tensor& a, const std::vector<int64_t>& new_shape) {
+    if (product(new_shape) != a.numel()) {
+        throw std::runtime_error("Metal reshape numel mismatch");
+    }
+    auto out_data = MetalRuntime::instance().run1d("copy_kernel", to_float(a.data()), {}, nullptr, 0, 0, a.numel());
+    Tensor out(new_shape, to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    if (a.requires_grad()) {
+        out.node->parents = {a};
+        out.node->backward_fn = [a, out]() mutable {
+            for (int64_t i = 0; i < out.numel(); ++i) {
+                a.grad()[i] += out.grad()[i];
+            }
+        };
+    }
+    return out;
+}
+
+Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
+    auto shape = a.shape();
+    int64_t rank = static_cast<int64_t>(shape.size());
+    dim0 = canonical_dim(dim0, rank);
+    dim1 = canonical_dim(dim1, rank);
+    std::vector<int64_t> out_shape = shape;
+    std::swap(out_shape[dim0], out_shape[dim1]);
+    auto in_strides = strides_for(shape);
+    auto out_strides = strides_for(out_shape);
+    // host 端预计算「输出扁平位置 -> 输入扁平位置」映射，交给 gather_kernel 在 GPU 上重排。
+    std::vector<uint32_t> index(static_cast<size_t>(a.numel()));
+    for (int64_t flat = 0; flat < a.numel(); ++flat) {
+        int64_t rem = flat;
+        std::vector<int64_t> idx(rank);
+        for (int64_t d = 0; d < rank; ++d) {
+            idx[d] = rem / out_strides[d];
+            rem %= out_strides[d];
+        }
+        std::swap(idx[dim0], idx[dim1]);
+        int64_t in_flat = 0;
+        for (int64_t d = 0; d < rank; ++d) {
+            in_flat += idx[d] * in_strides[d];
+        }
+        index[flat] = static_cast<uint32_t>(in_flat);
+    }
+    auto out_data = MetalRuntime::instance().gather(to_float(a.data()), index);
+    Tensor out(out_shape, to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    if (a.requires_grad()) {
+        out.node->parents = {a};
+        out.node->backward_fn = [a, out, index]() mutable {
+            for (int64_t flat = 0; flat < out.numel(); ++flat) {
+                a.grad()[index[flat]] += out.grad()[flat];
+            }
+        };
+    }
+    return out;
+}
+
+Tensor log_softmax(const Tensor& a, int64_t dim) {
+    int64_t rank = static_cast<int64_t>(a.shape().size());
+    int64_t cdim = canonical_dim(dim, rank);
+    if (cdim != rank - 1) {
+        throw std::runtime_error("Metal log_softmax currently supports last dim only");
+    }
+    uint32_t width = static_cast<uint32_t>(a.shape().back());
+    uint32_t rows = static_cast<uint32_t>(a.numel() / width);
+    auto probs = MetalRuntime::instance().softmax(to_float(a.data()), rows, width);
+    auto out_data = MetalRuntime::instance().run1d("log_kernel", probs, {}, nullptr, 0, 0, a.numel());
+    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad());
     return out;
 }
 

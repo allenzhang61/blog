@@ -2,6 +2,12 @@
 
 namespace llm {
 
+GPT2BPETokenizer::GPT2BPETokenizer(const std::string& ranks_path) {
+    if (!load_ranks(ranks_path)) {
+        throw std::runtime_error("failed to load GPT-2 BPE ranks: " + ranks_path);
+    }
+}
+
 bool GPT2BPETokenizer::load_ranks(const std::string& path) {
     std::ifstream in(path);
     if (!in) {
@@ -23,37 +29,7 @@ bool GPT2BPETokenizer::load_ranks(const std::string& path) {
     return !ranks_.empty();
 }
 
-bool GPT2BPETokenizer::load_samples(const std::string& path) {
-    std::ifstream in(path);
-    if (!in) {
-        return false;
-    }
-    samples_.clear();
-    std::string line;
-    while (std::getline(in, line)) {
-        auto tab = line.find('\t');
-        if (tab == std::string::npos) {
-            continue;
-        }
-        std::string text = unescape(line.substr(0, tab));
-        std::vector<int64_t> ids;
-        std::stringstream ss(line.substr(tab + 1));
-        std::string item;
-        while (std::getline(ss, item, ',')) {
-            if (!item.empty()) {
-                ids.push_back(std::stoll(item));
-            }
-        }
-        samples_[text] = ids;
-    }
-    return true;
-}
-
 std::vector<int64_t> GPT2BPETokenizer::encode(const std::string& text) const {
-    auto it = samples_.find(text);
-    if (it != samples_.end()) {
-        return it->second;
-    }
     if (!ranks_.empty()) {
         std::vector<int64_t> ids;
         for (const auto& piece : split_gpt2_like(text)) {
@@ -71,11 +47,6 @@ std::vector<int64_t> GPT2BPETokenizer::encode(const std::string& text) const {
 }
 
 std::string GPT2BPETokenizer::decode(const std::vector<int64_t>& ids) const {
-    for (const auto& kv : samples_) {
-        if (kv.second == ids) {
-            return kv.first;
-        }
-    }
     if (!token_by_rank_.empty()) {
         std::string text;
         for (auto id : ids) {
@@ -95,29 +66,6 @@ std::string GPT2BPETokenizer::decode(const std::vector<int64_t>& ids) const {
         }
     }
     return text;
-}
-
-std::string GPT2BPETokenizer::unescape(const std::string& s) {
-    std::string out;
-    for (size_t i = 0; i < s.size(); ++i) {
-        if (s[i] == '\\' && i + 1 < s.size()) {
-            if (s[i + 1] == 'n') {
-                out.push_back('\n');
-                ++i;
-            } else if (s[i + 1] == 't') {
-                out.push_back('\t');
-                ++i;
-            } else if (s[i + 1] == '\\') {
-                out.push_back('\\');
-                ++i;
-            } else {
-                out.push_back(s[i]);
-            }
-        } else {
-            out.push_back(s[i]);
-        }
-    }
-    return out;
 }
 
 int GPT2BPETokenizer::hex_value(char ch) {

@@ -105,8 +105,6 @@ void test_tokenizer() {
     GPT2BPETokenizer tokenizer;
     bool ranks_loaded = tokenizer.load_ranks(std::string(LLM_CPP_SOURCE_DIR) + "/data/gpt2_bpe_ranks.tsv");
     check(ranks_loaded, "load GPT-2 BPE ranks");
-    bool loaded = tokenizer.load_samples(std::string(LLM_CPP_SOURCE_DIR) + "/data/gpt2_bpe_samples.tsv");
-    check(loaded, "load GPT-2 BPE samples");
     auto ids = tokenizer.encode("Hello, world!");
     check(!ids.empty(), "tokenizer ids");
     check(ids.size() == 4, "gpt2 sample length");

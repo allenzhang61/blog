@@ -15,7 +15,8 @@ set(LLM_CPP_SOURCES
     src/ops/dispatch.cpp
     src/backend/Backend.cpp
     src/backend/BackendRegistry.cpp
-    src/backend/CPUBackend.cpp
+    src/backend/cpu/CPUBackend.cpp
+    src/backend/metal/MetalDeviceBackend.cpp
     src/backend/UnimplementedBackend.cpp
     src/backend/device_select.cpp
     src/kernels/cpu/elementwise.cpp
@@ -44,11 +45,11 @@ if(LLM_CPP_ENABLE_METAL AND APPLE)
     enable_language(OBJCXX)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(METAL_FRAMEWORK Metal REQUIRED)
-    list(APPEND LLM_CPP_SOURCES src/backend/MetalBackend.mm)
+    list(APPEND LLM_CPP_SOURCES src/backend/metal/MetalBackend.mm)
     list(APPEND LLM_CPP_SOURCES src/kernels/metal/MetalKernels.mm)
     set(LLM_CPP_ENABLE_METAL_COMPILED 1)
 else()
-    list(APPEND LLM_CPP_SOURCES src/backend/MetalBackend.cpp)
+    list(APPEND LLM_CPP_SOURCES src/backend/metal/MetalBackend.cpp)
 endif()
 
 set(LLM_CPP_ENABLE_CUDA_COMPILED 0)
@@ -57,11 +58,11 @@ if(LLM_CPP_ENABLE_CUDA)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
-        list(APPEND LLM_CPP_SOURCES src/backend/CUDAKernels.cu)
+        list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDAKernels.cu)
         set(LLM_CPP_ENABLE_CUDA_COMPILED 1)
     endif()
 endif()
-list(APPEND LLM_CPP_SOURCES src/backend/CUDABackend.cpp)
+list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDABackend.cpp)
 
 add_library(llm_train_cpp STATIC
     ${LLM_CPP_SOURCES}
