@@ -73,8 +73,23 @@ target_compile_definitions(llm_train_cpp PUBLIC
     LLM_CPP_ENABLE_CUDA_COMPILED=${LLM_CPP_ENABLE_CUDA_COMPILED}
 )
 if(LLM_CPP_ENABLE_METAL_COMPILED)
+    # 构建期把 .metal 源码编译成 .metallib（业界主流做法），运行期直接加载二进制。
+    set(LLM_CPP_METAL_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/metal/metal_kernels.metal)
+    set(LLM_CPP_METAL_AIR ${CMAKE_CURRENT_BINARY_DIR}/metal_kernels.air)
+    set(LLM_CPP_METALLIB ${CMAKE_CURRENT_BINARY_DIR}/metal_kernels.metallib)
+    add_custom_command(
+        OUTPUT ${LLM_CPP_METALLIB}
+        COMMAND xcrun -sdk macosx metal -c ${LLM_CPP_METAL_SOURCE} -o ${LLM_CPP_METAL_AIR}
+        COMMAND xcrun -sdk macosx metallib ${LLM_CPP_METAL_AIR} -o ${LLM_CPP_METALLIB}
+        DEPENDS ${LLM_CPP_METAL_SOURCE}
+        COMMENT "Compiling Metal kernels to metallib"
+        VERBATIM
+    )
+    add_custom_target(llm_cpp_metallib DEPENDS ${LLM_CPP_METALLIB})
+    add_dependencies(llm_train_cpp llm_cpp_metallib)
+
     target_compile_definitions(llm_train_cpp PRIVATE
-        LLM_CPP_METAL_KERNELS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/metal/metal_kernels.metal"
+        LLM_CPP_METALLIB_PATH="${LLM_CPP_METALLIB}"
     )
     target_link_libraries(llm_train_cpp PUBLIC ${FOUNDATION_FRAMEWORK} ${METAL_FRAMEWORK})
 endif()
