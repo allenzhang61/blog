@@ -1,16 +1,9 @@
-#include "llm/ops.hpp"
-#include "llm/metal_ops.hpp"
+#include "llm/cpu_ops.hpp"
 
 namespace llm {
-namespace ops {
+namespace cpu {
 
 Tensor embedding(const Tensor& ids, const Tensor& weight) {
-    if (ids.device().type != weight.device().type) {
-        throw std::runtime_error("embedding expects ids and weight on the same device");
-    }
-    if (ids.device().type == DeviceType::Metal) {
-        return metal::embedding(ids, weight);
-    }
     if (weight.shape().size() != 2) {
         throw std::runtime_error("embedding weight must be 2D");
     }
@@ -38,5 +31,5 @@ Tensor embedding(const Tensor& ids, const Tensor& weight) {
     return out;
 }
 
-} // namespace ops
+} // namespace cpu
 } // namespace llm

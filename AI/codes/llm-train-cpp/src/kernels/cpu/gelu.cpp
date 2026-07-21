@@ -1,13 +1,9 @@
-#include "llm/ops.hpp"
-#include "llm/metal_ops.hpp"
+#include "llm/cpu_ops.hpp"
 
 namespace llm {
-namespace ops {
+namespace cpu {
 
 Tensor gelu(const Tensor& x) {
-    if (x.device().type == DeviceType::Metal) {
-        return metal::gelu(x);
-    }
     ensure_cpu(x);
     Tensor out(x.shape(), DType::Float32, x.device(), x.requires_grad());
     constexpr double k = 0.7978845608028654;
@@ -32,5 +28,5 @@ Tensor gelu(const Tensor& x) {
     return out;
 }
 
-} // namespace ops
+} // namespace cpu
 } // namespace llm

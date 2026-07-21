@@ -1,13 +1,9 @@
-#include "llm/ops.hpp"
-#include "llm/metal_ops.hpp"
+#include "llm/cpu_ops.hpp"
 
 namespace llm {
-namespace ops {
+namespace cpu {
 
 Tensor softmax(const Tensor& a, int64_t dim) {
-    if (a.device().type == DeviceType::Metal) {
-        return metal::softmax(a, dim);
-    }
     int64_t rank = static_cast<int64_t>(a.shape().size());
     dim = canonical_dim(dim, rank);
     if (dim != rank - 1) {
@@ -56,12 +52,6 @@ Tensor log_softmax(const Tensor& a, int64_t dim) {
 }
 
 Tensor cross_entropy(const Tensor& logits, const Tensor& targets) {
-    if (logits.device().type != targets.device().type) {
-        throw std::runtime_error("cross_entropy expects logits and targets on the same device");
-    }
-    if (logits.device().type == DeviceType::Metal) {
-        return metal::cross_entropy(logits, targets);
-    }
     if (logits.shape().size() != 3) {
         throw std::runtime_error("cross_entropy expects logits [B,T,V]");
     }
@@ -107,5 +97,5 @@ Tensor cross_entropy(const Tensor& logits, const Tensor& targets) {
     return out;
 }
 
-} // namespace ops
+} // namespace cpu
 } // namespace llm

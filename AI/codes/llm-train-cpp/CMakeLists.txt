@@ -12,6 +12,7 @@ set(LLM_CPP_SOURCES
     src/core/core.cpp
     src/tensor/tensor.cpp
     src/ops/ops.cpp
+    src/ops/dispatch.cpp
     src/backend/Backend.cpp
     src/backend/BackendRegistry.cpp
     src/backend/CPUBackend.cpp

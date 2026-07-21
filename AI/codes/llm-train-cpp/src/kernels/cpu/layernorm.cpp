@@ -1,16 +1,9 @@
-#include "llm/ops.hpp"
-#include "llm/metal_ops.hpp"
+#include "llm/cpu_ops.hpp"
 
 namespace llm {
-namespace ops {
+namespace cpu {
 
 Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, double eps) {
-    if (x.device().type != scale.device().type || x.device().type != shift.device().type) {
-        throw std::runtime_error("layernorm expects tensors on the same device");
-    }
-    if (x.device().type == DeviceType::Metal) {
-        return metal::layernorm(x, scale, shift, eps);
-    }
     int64_t C = x.shape().back();
     int64_t rows = x.numel() / C;
     Tensor out(x.shape(), DType::Float32, x.device(), x.requires_grad() || scale.requires_grad() || shift.requires_grad());
@@ -72,5 +65,5 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
     return out;
 }
 
-} // namespace ops
+} // namespace cpu
 } // namespace llm

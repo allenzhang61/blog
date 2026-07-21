@@ -1,16 +1,9 @@
-#include "llm/ops.hpp"
-#include "llm/metal_ops.hpp"
+#include "llm/cpu_ops.hpp"
 
 namespace llm {
-namespace ops {
+namespace cpu {
 
 Tensor matmul(const Tensor& a, const Tensor& b) {
-    if (a.device().type == DeviceType::Metal || b.device().type == DeviceType::Metal) {
-        if (a.device().type != DeviceType::Metal || b.device().type != DeviceType::Metal) {
-            throw std::runtime_error("matmul expects tensors on the same device");
-        }
-        return metal::matmul(a, b);
-    }
     ensure_cpu(a);
     ensure_cpu(b);
     if (a.shape().size() != 2 || b.shape().size() != 2 || a.shape()[1] != b.shape()[0]) {
@@ -54,12 +47,8 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
 }
 
 Tensor batch_matmul(const Tensor& a, const Tensor& b) {
-    if (a.device().type != b.device().type) {
-        throw std::runtime_error("batch_matmul expects tensors on the same device");
-    }
-    if (a.device().type == DeviceType::Metal) {
-        return metal::batch_matmul(a, b);
-    }
+    ensure_cpu(a);
+    ensure_cpu(b);
     if (a.shape().size() != 4 || b.shape().size() != 4) {
         throw std::runtime_error("batch_matmul expects 4D tensors");
     }
@@ -124,5 +113,5 @@ Tensor batch_matmul(const Tensor& a, const Tensor& b) {
     return out;
 }
 
-} // namespace ops
+} // namespace cpu
 } // namespace llm
