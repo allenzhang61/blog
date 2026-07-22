@@ -1,21 +1,17 @@
 #include "llm/backend/Backend.hpp"
+#include "llm/cuda_ops.hpp"
+
+// 这个文件是「已启用 CUDA 编译」时使用的实现（对应 Metal 的 MetalBackend.mm）。
+// cuda_backend_* 直接委派给 src/kernels/cuda/cuda_kernels.cu 里的 llm::cuda:: 运行时。
 
 namespace llm {
 
 bool cuda_backend_available() {
-#if LLM_CPP_ENABLE_CUDA_COMPILED
-    return true;
-#else
-    return false;
-#endif
+    return cuda::available();
 }
 
 std::string cuda_backend_status() {
-#if LLM_CPP_ENABLE_CUDA_COMPILED
-    return "CUDA backend compiled; minimal CUDA runtime path is available";
-#else
-    return "CUDA backend is unavailable: project was not compiled with LLM_CPP_ENABLE_CUDA=ON or CUDA Toolkit was not found";
-#endif
+    return cuda::status();
 }
 
 } // namespace llm

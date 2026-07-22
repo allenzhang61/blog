@@ -17,6 +17,7 @@ set(LLM_CPP_SOURCES
     src/backend/BackendRegistry.cpp
     src/backend/cpu/CPUBackend.cpp
     src/backend/metal/MetalDeviceBackend.cpp
+    src/backend/cuda/CUDADeviceBackend.cpp
     src/backend/UnimplementedBackend.cpp
     src/backend/device_select.cpp
     src/kernels/cpu/elementwise.cpp
@@ -58,11 +59,16 @@ if(LLM_CPP_ENABLE_CUDA)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
-        list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDAKernels.cu)
+        # CUDA 开启：真实 kernel + 委派实现（对应 Metal 的 MetalKernels.mm + MetalBackend.mm）。
+        list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_kernels.cu)
+        list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDABackend.cpp)
         set(LLM_CPP_ENABLE_CUDA_COMPILED 1)
     endif()
 endif()
-list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDABackend.cpp)
+if(NOT LLM_CPP_ENABLE_CUDA_COMPILED)
+    # CUDA 关闭：抛错 stub（对应 Metal 的 MetalBackend.cpp）。
+    list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDAStub.cpp)
+endif()
 
 add_library(llm_train_cpp STATIC
     ${LLM_CPP_SOURCES}

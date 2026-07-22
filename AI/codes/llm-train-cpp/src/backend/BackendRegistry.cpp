@@ -1,13 +1,13 @@
 #include "llm/backend/BackendRegistry.hpp"
 #include "llm/backend/CPUBackend.hpp"
+#include "llm/backend/CUDABackend.hpp"
 #include "llm/backend/MetalBackend.hpp"
-#include "llm/backend/UnimplementedBackend.hpp"
 
 namespace llm {
 
 Backend& BackendRegistry::get(Device device) {
     static CPUBackend cpu;
-    static UnimplementedBackend cuda(DeviceType::CUDA);
+    static CUDABackend cuda;
     static MetalBackend metal;
     if (device.type == DeviceType::CPU) {
         return cpu;
