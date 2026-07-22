@@ -1,5 +1,5 @@
 #include "llm/backend/Backend.hpp"
-#include "llm/metal_ops.hpp"
+#include "../../kernels/metal/metal_ops.hpp"
 
 namespace llm {
 

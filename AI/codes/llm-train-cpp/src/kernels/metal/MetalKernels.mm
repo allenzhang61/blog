@@ -1,4 +1,4 @@
-#include "llm/metal_ops.hpp"
+#include "metal_ops.hpp"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

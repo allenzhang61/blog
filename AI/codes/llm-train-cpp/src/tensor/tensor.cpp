@@ -138,12 +138,6 @@ void Tensor::backward() {
     }
 }
 
-void ensure_cpu(const Tensor& t) {
-    if (t.device().type != DeviceType::CPU) {
-        throw std::runtime_error(to_string(t.device().type) + " backend kernel is unavailable for this operation");
-    }
-}
-
 std::vector<int64_t> strides_for(const std::vector<int64_t>& shape) {
     std::vector<int64_t> strides(shape.size(), 1);
     for (int i = static_cast<int>(shape.size()) - 2; i >= 0; --i) {

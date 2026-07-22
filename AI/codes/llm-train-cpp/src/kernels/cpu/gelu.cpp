@@ -1,10 +1,9 @@
-#include "llm/cpu_ops.hpp"
+#include "cpu_ops.hpp"
 
 namespace llm {
 namespace cpu {
 
 Tensor gelu(const Tensor& x) {
-    ensure_cpu(x);
     Tensor out(x.shape(), DType::Float32, x.device(), x.requires_grad());
     constexpr double k = 0.7978845608028654;
     for (int64_t i = 0; i < x.numel(); ++i) {

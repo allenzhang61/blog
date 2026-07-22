@@ -1,11 +1,9 @@
-#include "llm/cpu_ops.hpp"
+#include "cpu_ops.hpp"
 
 namespace llm {
 namespace cpu {
 
 Tensor matmul(const Tensor& a, const Tensor& b) {
-    ensure_cpu(a);
-    ensure_cpu(b);
     if (a.shape().size() != 2 || b.shape().size() != 2 || a.shape()[1] != b.shape()[0]) {
         throw std::runtime_error("matmul expects [m,k] x [k,n]");
     }
@@ -47,8 +45,6 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
 }
 
 Tensor batch_matmul(const Tensor& a, const Tensor& b) {
-    ensure_cpu(a);
-    ensure_cpu(b);
     if (a.shape().size() != 4 || b.shape().size() != 4) {
         throw std::runtime_error("batch_matmul expects 4D tensors");
     }

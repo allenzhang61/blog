@@ -1,4 +1,4 @@
-#include "llm/cpu_ops.hpp"
+#include "cpu_ops.hpp"
 
 namespace llm {
 namespace cpu {

@@ -11,7 +11,6 @@ option(LLM_CPP_ENABLE_CUDA "Build the CUDA backend when CUDA Toolkit is availabl
 set(LLM_CPP_SOURCES
     src/core/core.cpp
     src/tensor/tensor.cpp
-    src/ops/ops.cpp
     src/ops/dispatch.cpp
     src/backend/Backend.cpp
     src/backend/BackendRegistry.cpp
@@ -61,6 +60,7 @@ if(LLM_CPP_ENABLE_CUDA)
         enable_language(CUDA)
         # CUDA 开启：真实 kernel + 委派实现（对应 Metal 的 MetalKernels.mm + MetalBackend.mm）。
         list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_kernels.cu)
+        list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_runtime.cu)
         list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDABackend.cpp)
         set(LLM_CPP_ENABLE_CUDA_COMPILED 1)
     endif()

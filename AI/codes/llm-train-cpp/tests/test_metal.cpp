@@ -1,5 +1,4 @@
 #include "llm/llm.hpp"
-#include "llm/metal_ops.hpp"
 
 #include <iostream>
 
@@ -25,7 +24,7 @@ void copy_params(GPTModel& dst, GPTModel& src) {
 }
 
 void test_metal_availability() {
-    if (!metal::available()) throw std::runtime_error(metal::status());
+    if (!metal_backend_available()) throw std::runtime_error(metal_backend_status());
     check(BackendRegistry::get(Device::parse("metal")).name() == "metalBackend", "metal registry");
 }
 

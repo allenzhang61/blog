@@ -104,9 +104,6 @@ struct TensorNode {
     std::function<void()> backward_fn;
 };
 
-// 确保张量位于 CPU；CPU kernels 入口会用它保护实现假设。
-void ensure_cpu(const Tensor& t);
-
 // 根据 shape 计算连续内存布局下的 strides。
 std::vector<int64_t> strides_for(const std::vector<int64_t>& shape);
 

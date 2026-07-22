@@ -1,11 +1,9 @@
-#include "llm/cpu_ops.hpp"
+#include "cpu_ops.hpp"
 
 namespace llm {
 namespace cpu {
 
 Tensor add(const Tensor& a, const Tensor& b) {
-    ensure_cpu(a);
-    ensure_cpu(b);
     bool same_shape = a.shape() == b.shape();
     bool broadcast_batch = a.shape().size() == 3 && b.shape().size() == 2 &&
                            a.shape()[1] == b.shape()[0] && a.shape()[2] == b.shape()[1];
@@ -60,8 +58,6 @@ Tensor sub(const Tensor& a, const Tensor& b) {
 }
 
 Tensor mul(const Tensor& a, const Tensor& b) {
-    ensure_cpu(a);
-    ensure_cpu(b);
     if (a.shape() != b.shape()) {
         throw std::runtime_error("mul shape mismatch");
     }
@@ -88,8 +84,6 @@ Tensor mul(const Tensor& a, const Tensor& b) {
 }
 
 Tensor div(const Tensor& a, const Tensor& b) {
-    ensure_cpu(a);
-    ensure_cpu(b);
     if (a.shape() != b.shape()) {
         throw std::runtime_error("div shape mismatch");
     }
@@ -116,7 +110,6 @@ Tensor div(const Tensor& a, const Tensor& b) {
 }
 
 Tensor mul_scalar(const Tensor& a, double scalar) {
-    ensure_cpu(a);
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad());
     for (int64_t i = 0; i < out.numel(); ++i) {
         out.data()[i] = a.data()[i] * scalar;
@@ -133,7 +126,6 @@ Tensor mul_scalar(const Tensor& a, double scalar) {
 }
 
 Tensor pow(const Tensor& a, double exponent) {
-    ensure_cpu(a);
     Tensor out(a.shape(), DType::Float32, a.device(), a.requires_grad());
     for (int64_t i = 0; i < out.numel(); ++i) {
         out.data()[i] = std::pow(a.data()[i], exponent);
@@ -150,7 +142,6 @@ Tensor pow(const Tensor& a, double exponent) {
 }
 
 Tensor sum(const Tensor& a) {
-    ensure_cpu(a);
     Tensor out({}, DType::Float32, a.device(), a.requires_grad());
     out.data()[0] = std::accumulate(a.data().begin(), a.data().end(), 0.0);
     if (a.requires_grad()) {
@@ -178,7 +169,6 @@ Tensor mean(const Tensor& a) {
 }
 
 Tensor max(const Tensor& a) {
-    ensure_cpu(a);
     Tensor out({}, DType::Float32, a.device(), false);
     out.data()[0] = *std::max_element(a.data().begin(), a.data().end());
     return out;

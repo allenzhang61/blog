@@ -62,16 +62,3 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
 Tensor gelu(const Tensor& x);
 
 } // namespace llm::ops
-
-namespace llm {
-
-// 语法糖：a + b 调用 ops::add。
-Tensor operator+(const Tensor& a, const Tensor& b);
-
-// 语法糖：a - b 调用 ops::sub。
-Tensor operator-(const Tensor& a, const Tensor& b);
-
-// 语法糖：a * b 调用 ops::mul。
-Tensor operator*(const Tensor& a, const Tensor& b);
-
-} // namespace llm

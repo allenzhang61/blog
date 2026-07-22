@@ -1,5 +1,5 @@
 #include "llm/backend/Backend.hpp"
-#include "llm/metal_ops.hpp"
+#include "../../kernels/metal/metal_ops.hpp"
 
 // 这个文件是「未启用 Metal 编译」时使用的 stub。
 // CMake 在 LLM_CPP_ENABLE_METAL=ON 且平台为 Apple 时，会改用：
