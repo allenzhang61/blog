@@ -1,5 +1,9 @@
 #include "llm/train/AdamW.hpp"
 
+#if LLM_CPP_ENABLE_CUDA_COMPILED
+#include "../kernels/cuda/cuda_runtime.hpp"
+#endif
+
 namespace llm {
 
 AdamW::AdamW(std::vector<Tensor*> params, double lr, double weight_decay, double beta1, double beta2, double eps)
@@ -14,6 +18,22 @@ AdamW::AdamW(std::vector<Tensor*> params, double lr, double weight_decay, double
     for (const auto* p : params_) {
         m_.push_back(std::vector<double>(static_cast<size_t>(p->numel()), 0.0));
         v_.push_back(std::vector<double>(static_cast<size_t>(p->numel()), 0.0));
+#if LLM_CPP_ENABLE_CUDA_COMPILED
+        if (p->device().type == DeviceType::CUDA && cuda::detail::CudaRuntime::instance().available()) {
+            auto m = cuda::detail::CudaRuntime::instance().create_tensor_storage();
+            auto v = cuda::detail::CudaRuntime::instance().create_tensor_storage();
+            cuda::detail::CudaRuntime::instance().fill_data_buffer(*m, static_cast<size_t>(p->numel()), 0.0f);
+            cuda::detail::CudaRuntime::instance().fill_data_buffer(*v, static_cast<size_t>(p->numel()), 0.0f);
+            cuda_m_.push_back(std::move(m));
+            cuda_v_.push_back(std::move(v));
+        } else {
+            cuda_m_.push_back(nullptr);
+            cuda_v_.push_back(nullptr);
+        }
+#else
+        cuda_m_.push_back(nullptr);
+        cuda_v_.push_back(nullptr);
+#endif
     }
 }
 
@@ -29,6 +49,28 @@ void AdamW::step() {
     double bias_correction2 = 1.0 - std::pow(beta2_, static_cast<double>(step_));
     for (size_t pi = 0; pi < params_.size(); ++pi) {
         auto* p = params_[pi];
+#if LLM_CPP_ENABLE_CUDA_COMPILED
+        if (p->device().type == DeviceType::CUDA && p->node->cuda_storage && cuda_m_[pi] && cuda_v_[pi]) {
+            if (p->node->host_data_dirty || !p->node->cuda_storage->data) {
+                p->node->cuda_storage->copy_data_from_host(*p->node->cuda_storage, p->node->data);
+                p->node->host_data_dirty = false;
+                p->node->device_data_dirty = false;
+            }
+            if (p->node->host_grad_dirty || !p->node->cuda_storage->grad) {
+                p->node->cuda_storage->copy_grad_from_host(*p->node->cuda_storage, p->node->grad);
+                p->node->host_grad_dirty = false;
+                p->node->device_grad_dirty = true;
+            }
+            cuda::detail::CudaRuntime::instance().adamw_update(
+                *p->node->cuda_storage, *p->node->cuda_storage, *cuda_m_[pi], *cuda_v_[pi],
+                static_cast<size_t>(p->numel()), static_cast<float>(lr_), static_cast<float>(weight_decay_),
+                static_cast<float>(beta1_), static_cast<float>(beta2_), static_cast<float>(eps_),
+                static_cast<float>(bias_correction1), static_cast<float>(bias_correction2));
+            p->node->host_data_dirty = false;
+            p->node->device_data_dirty = true;
+            continue;
+        }
+#endif
         if (p->grad().empty()) {
             continue;
         }

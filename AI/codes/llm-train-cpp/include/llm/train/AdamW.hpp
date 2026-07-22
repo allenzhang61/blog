@@ -28,6 +28,12 @@ private:
     // Adam 二阶矩估计。
     std::vector<std::vector<double>> v_;
 
+    // CUDA 参数的一阶矩 device buffer；CPU 参数保持为空。
+    std::vector<std::shared_ptr<TensorCudaStorage>> cuda_m_;
+
+    // CUDA 参数的二阶矩 device buffer；CPU 参数保持为空。
+    std::vector<std::shared_ptr<TensorCudaStorage>> cuda_v_;
+
     // 学习率。
     double lr_;
 

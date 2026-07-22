@@ -6,6 +6,26 @@ namespace llm {
 
 struct TensorNode;
 
+// CUDA Tensor 的内部 device storage。公共 Tensor API 通过 shared_ptr 持有它；
+// 具体的分配、拷贝和释放逻辑由 CUDA runtime 注入。
+struct TensorCudaStorage {
+    void* data{nullptr};
+    void* grad{nullptr};
+    size_t data_count{0};
+    size_t grad_count{0};
+    void (*release)(TensorCudaStorage& storage){nullptr};
+    void (*copy_data_from_host)(TensorCudaStorage& storage, const std::vector<double>& host){nullptr};
+    void (*copy_data_to_host)(TensorCudaStorage& storage, std::vector<double>& host){nullptr};
+    void (*copy_grad_from_host)(TensorCudaStorage& storage, const std::vector<double>& host){nullptr};
+    void (*copy_grad_to_host)(TensorCudaStorage& storage, std::vector<double>& host){nullptr};
+    void (*fill_grad)(TensorCudaStorage& storage, size_t count, float value){nullptr};
+
+    TensorCudaStorage() = default;
+    TensorCudaStorage(const TensorCudaStorage&) = delete;
+    TensorCudaStorage& operator=(const TensorCudaStorage&) = delete;
+    ~TensorCudaStorage();
+};
+
 // 轻量级张量对象。
 // Tensor 只保存 shared_ptr<TensorNode>，实际数据、梯度和反向传播信息都在 TensorNode 中。
 class Tensor {
@@ -63,8 +83,20 @@ public:
     // 返回只读的数据缓冲区。
     const std::vector<double>& data() const;
 
+    // 显式返回可修改的数据缓冲区，并标记 host data 需要同步到 CUDA device。
+    std::vector<double>& mutable_data();
+
     // 返回梯度缓冲区；如果梯度尚未分配，实现层会补齐。
     std::vector<double>& grad() const;
+
+    // 显式返回可修改的梯度缓冲区，并标记 host grad 需要同步到 CUDA device。
+    std::vector<double>& mutable_grad() const;
+
+    // 显式标记 host data 已被修改。
+    void mark_data_host_dirty() const;
+
+    // 显式标记 host grad 已被修改。
+    void mark_grad_host_dirty() const;
 
     // 当张量只有一个元素时，取出这个标量值。
     double item() const;
@@ -93,6 +125,21 @@ struct TensorNode {
 
     // 反向传播累积得到的梯度。
     std::vector<double> grad;
+
+    // CUDA 专用 device storage。CPU/Metal 路径保持为空，具体定义在实现层。
+    std::shared_ptr<TensorCudaStorage> cuda_storage;
+
+    // host data 有新写入，下一次 CUDA kernel 消费前需要同步到 device。
+    bool host_data_dirty{false};
+
+    // device data 有新写入，下一次 host 读取前需要同步到 host mirror。
+    bool device_data_dirty{false};
+
+    // host grad 有新写入，下一次 CUDA kernel 消费前需要同步到 device。
+    bool host_grad_dirty{false};
+
+    // device grad 有新写入，下一次 host 读取前需要同步到 host mirror。
+    bool device_grad_dirty{false};
 
     // 是否参与 autograd。
     bool requires_grad{false};

@@ -227,5 +227,40 @@ Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
     return out;
 }
 
+Tensor causal_mask(const Tensor& scores, int64_t sequence_length, double mask_value) {
+    if (scores.shape().size() != 4 || scores.shape()[2] != sequence_length || scores.shape()[3] != sequence_length) {
+        throw std::runtime_error("causal_mask expects scores [B,H,T,T]");
+    }
+    Tensor out(scores.shape(), scores.data(), scores.dtype(), scores.device(), scores.requires_grad());
+    int64_t B = scores.shape()[0];
+    int64_t H = scores.shape()[1];
+    int64_t T = sequence_length;
+    for (int64_t b = 0; b < B; ++b) {
+        for (int64_t h = 0; h < H; ++h) {
+            for (int64_t i = 0; i < T; ++i) {
+                for (int64_t j = i + 1; j < T; ++j) {
+                    out.data()[((b * H + h) * T + i) * T + j] = mask_value;
+                }
+            }
+        }
+    }
+    if (scores.requires_grad()) {
+        out.node->parents = {scores};
+        out.node->backward_fn = [scores, out, B, H, T]() mutable {
+            for (int64_t b = 0; b < B; ++b) {
+                for (int64_t h = 0; h < H; ++h) {
+                    for (int64_t i = 0; i < T; ++i) {
+                        for (int64_t j = 0; j <= i; ++j) {
+                            int64_t idx = ((b * H + h) * T + i) * T + j;
+                            scores.grad()[idx] += out.grad()[idx];
+                        }
+                    }
+                }
+            }
+        };
+    }
+    return out;
+}
+
 } // namespace cpu
 } // namespace llm

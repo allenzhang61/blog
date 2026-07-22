@@ -43,6 +43,9 @@ Tensor matmul(const Tensor& a, const Tensor& b);
 // CPU 版本的批量矩阵乘法。
 Tensor batch_matmul(const Tensor& a, const Tensor& b);
 
+// CPU 版本的 causal mask。
+Tensor causal_mask(const Tensor& scores, int64_t sequence_length, double mask_value = -1e9);
+
 // CPU 版本的 softmax。
 Tensor softmax(const Tensor& a, int64_t dim = -1);
 

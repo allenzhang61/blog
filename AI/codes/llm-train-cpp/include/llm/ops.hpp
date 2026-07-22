@@ -43,6 +43,9 @@ Tensor matmul(const Tensor& a, const Tensor& b);
 // 批量矩阵乘法，用于多头注意力中的每个 batch/head。
 Tensor batch_matmul(const Tensor& a, const Tensor& b);
 
+// 对注意力分数施加 causal mask，把每个 [T,T] 矩阵的上三角未来位置写成 mask_value。
+Tensor causal_mask(const Tensor& scores, int64_t sequence_length, double mask_value = -1e9);
+
 // 在指定维度上做 softmax，常用于注意力权重。
 Tensor softmax(const Tensor& a, int64_t dim = -1);
 

@@ -23,6 +23,48 @@ std::vector<double> to_double(const std::vector<float>& values) {
     return std::vector<double>(values.begin(), values.end());
 }
 
+llm::TensorCudaStorage& ensure_cuda_storage(const llm::Tensor& t) {
+    if (!t.node->cuda_storage) {
+        t.node->cuda_storage = llm::cuda::detail::CudaRuntime::instance().create_tensor_storage();
+    }
+    return *t.node->cuda_storage;
+}
+
+void ensure_cuda_data(const llm::Tensor& t) {
+    llm::TensorCudaStorage& storage = ensure_cuda_storage(t);
+    if (t.node->host_data_dirty || storage.data == nullptr || storage.data_count < static_cast<size_t>(t.numel())) {
+        llm::cuda::detail::CudaRuntime::instance().copy_data_from_host(storage, t.node->data);
+        t.node->host_data_dirty = false;
+        t.node->device_data_dirty = false;
+    }
+}
+
+void ensure_cuda_grad(const llm::Tensor& t) {
+    llm::TensorCudaStorage& storage = ensure_cuda_storage(t);
+    if (t.node->grad.empty()) {
+        t.node->grad.assign(static_cast<size_t>(t.numel()), 0.0);
+        t.node->host_grad_dirty = true;
+    }
+    if (t.node->host_grad_dirty || storage.grad == nullptr || storage.grad_count < static_cast<size_t>(t.numel())) {
+        llm::cuda::detail::CudaRuntime::instance().copy_grad_from_host(storage, t.node->grad);
+        t.node->host_grad_dirty = false;
+        t.node->device_grad_dirty = true;
+    }
+}
+
+void mark_cuda_grad_dirty(const llm::Tensor& t) {
+    t.node->host_grad_dirty = false;
+    t.node->device_grad_dirty = true;
+}
+
+llm::Tensor make_cuda_output(const std::vector<int64_t>& shape, llm::Device device, bool requires_grad) {
+    llm::Tensor out(shape, llm::DType::Float32, device, requires_grad);
+    out.node->cuda_storage = llm::cuda::detail::CudaRuntime::instance().create_tensor_storage();
+    out.node->host_data_dirty = false;
+    out.node->device_data_dirty = true;
+    return out;
+}
+
 } // namespace
 
 namespace llm::cuda {
@@ -45,27 +87,30 @@ Tensor add(const Tensor& a, const Tensor& b) {
     if (!same_shape && !broadcast_batch && !broadcast_last) {
         throw std::runtime_error("CUDA add shape mismatch");
     }
-    auto out_data = CudaRuntime::instance().elementwise2("add", to_float(a.data()), to_float(b.data()),
-                                                         static_cast<unsigned int>(b.numel()));
-    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
+    ensure_cuda_data(a);
+    ensure_cuda_data(b);
+    Tensor out = make_cuda_output(a.shape(), a.device(), a.requires_grad() || b.requires_grad());
+    CudaRuntime::instance().elementwise2_buffer("add", *out.node->cuda_storage, *a.node->cuda_storage,
+                                                *b.node->cuda_storage, static_cast<unsigned int>(b.numel()),
+                                                static_cast<size_t>(a.numel()));
     if (out.requires_grad()) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out, broadcast_batch, broadcast_last]() mutable {
+            ensure_cuda_grad(out);
             if (a.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) {
-                    a.grad()[i] += out.grad()[i];
-                }
+                ensure_cuda_grad(a);
+                CudaRuntime::instance().add_grad(*a.node->cuda_storage, *out.node->cuda_storage, 0,
+                                                  static_cast<size_t>(out.numel()));
+                mark_cuda_grad_dirty(a);
             }
             if (b.requires_grad()) {
-                if (broadcast_batch || broadcast_last) {
-                    for (int64_t i = 0; i < out.numel(); ++i) {
-                        b.grad()[i % b.numel()] += out.grad()[i];
-                    }
-                } else {
-                    for (int64_t i = 0; i < out.numel(); ++i) {
-                        b.grad()[i] += out.grad()[i];
-                    }
-                }
+                ensure_cuda_grad(b);
+                CudaRuntime::instance().add_grad(*b.node->cuda_storage, *out.node->cuda_storage,
+                                                  (broadcast_batch || broadcast_last)
+                                                      ? static_cast<unsigned int>(b.numel())
+                                                      : 0,
+                                                  static_cast<size_t>(out.numel()));
+                mark_cuda_grad_dirty(b);
             }
         };
     }
@@ -76,20 +121,35 @@ Tensor mul(const Tensor& a, const Tensor& b) {
     if (a.shape() != b.shape()) {
         throw std::runtime_error("CUDA mul expects same shape");
     }
-    auto out_data = CudaRuntime::instance().elementwise2("mul", to_float(a.data()), to_float(b.data()), 0);
-    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
+    ensure_cuda_data(a);
+    ensure_cuda_data(b);
+    Tensor out = make_cuda_output(a.shape(), a.device(), a.requires_grad() || b.requires_grad());
+    CudaRuntime::instance().elementwise2_buffer("mul", *out.node->cuda_storage, *a.node->cuda_storage,
+                                                *b.node->cuda_storage, 0, static_cast<size_t>(a.numel()));
     if (out.requires_grad()) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_data(a);
+            ensure_cuda_data(b);
+            llm::TensorCudaStorage* a_grad = nullptr;
+            llm::TensorCudaStorage* b_grad = nullptr;
             if (a.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) {
-                    a.grad()[i] += b.data()[i] * out.grad()[i];
-                }
+                ensure_cuda_grad(a);
+                a_grad = a.node->cuda_storage.get();
             }
             if (b.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) {
-                    b.grad()[i] += a.data()[i] * out.grad()[i];
-                }
+                ensure_cuda_grad(b);
+                b_grad = b.node->cuda_storage.get();
+            }
+            CudaRuntime::instance().elementwise_grad("mul", a_grad, b_grad, *a.node->cuda_storage,
+                                                     *b.node->cuda_storage, *out.node->cuda_storage,
+                                                     static_cast<size_t>(out.numel()));
+            if (a_grad) {
+                mark_cuda_grad_dirty(a);
+            }
+            if (b_grad) {
+                mark_cuda_grad_dirty(b);
             }
         };
     }
@@ -97,14 +157,19 @@ Tensor mul(const Tensor& a, const Tensor& b) {
 }
 
 Tensor mul_scalar(const Tensor& a, double scalar) {
-    auto out_data = CudaRuntime::instance().mul_scalar(to_float(a.data()), static_cast<float>(scalar));
-    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output(a.shape(), a.device(), a.requires_grad());
+    CudaRuntime::instance().mul_scalar_buffer(*out.node->cuda_storage, *a.node->cuda_storage,
+                                              static_cast<float>(scalar), static_cast<size_t>(a.numel()));
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out, scalar]() mutable {
-            for (int64_t i = 0; i < out.numel(); ++i) {
-                a.grad()[i] += out.grad()[i] * scalar;
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_grad(a);
+            CudaRuntime::instance().mul_scalar_grad(*a.node->cuda_storage, *out.node->cuda_storage,
+                                                    static_cast<float>(scalar),
+                                                    static_cast<size_t>(out.numel()));
+            mark_cuda_grad_dirty(a);
         };
     }
     return out;
@@ -114,20 +179,35 @@ Tensor div(const Tensor& a, const Tensor& b) {
     if (a.shape() != b.shape()) {
         throw std::runtime_error("CUDA div expects same shape");
     }
-    auto out_data = CudaRuntime::instance().elementwise2("div", to_float(a.data()), to_float(b.data()), 0);
-    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
+    ensure_cuda_data(a);
+    ensure_cuda_data(b);
+    Tensor out = make_cuda_output(a.shape(), a.device(), a.requires_grad() || b.requires_grad());
+    CudaRuntime::instance().elementwise2_buffer("div", *out.node->cuda_storage, *a.node->cuda_storage,
+                                                *b.node->cuda_storage, 0, static_cast<size_t>(a.numel()));
     if (out.requires_grad()) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_data(a);
+            ensure_cuda_data(b);
+            llm::TensorCudaStorage* a_grad = nullptr;
+            llm::TensorCudaStorage* b_grad = nullptr;
             if (a.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) {
-                    a.grad()[i] += out.grad()[i] / b.data()[i];
-                }
+                ensure_cuda_grad(a);
+                a_grad = a.node->cuda_storage.get();
             }
             if (b.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) {
-                    b.grad()[i] -= out.grad()[i] * a.data()[i] / (b.data()[i] * b.data()[i]);
-                }
+                ensure_cuda_grad(b);
+                b_grad = b.node->cuda_storage.get();
+            }
+            CudaRuntime::instance().elementwise_grad("div", a_grad, b_grad, *a.node->cuda_storage,
+                                                     *b.node->cuda_storage, *out.node->cuda_storage,
+                                                     static_cast<size_t>(out.numel()));
+            if (a_grad) {
+                mark_cuda_grad_dirty(a);
+            }
+            if (b_grad) {
+                mark_cuda_grad_dirty(b);
             }
         };
     }
@@ -149,29 +229,38 @@ Tensor sub(const Tensor& a, const Tensor& b) {
 }
 
 Tensor pow(const Tensor& a, double exponent) {
-    auto out_data = CudaRuntime::instance().unary("pow", to_float(a.data()), static_cast<float>(exponent));
-    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output(a.shape(), a.device(), a.requires_grad());
+    CudaRuntime::instance().unary_buffer("pow", *out.node->cuda_storage, *a.node->cuda_storage,
+                                         static_cast<float>(exponent), static_cast<size_t>(a.numel()));
     if (out.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out, exponent]() mutable {
-            for (int64_t i = 0; i < out.numel(); ++i) {
-                a.grad()[i] += exponent * std::pow(a.data()[i], exponent - 1.0) * out.grad()[i];
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_data(a);
+            ensure_cuda_grad(a);
+            CudaRuntime::instance().pow_grad(*a.node->cuda_storage, *a.node->cuda_storage,
+                                             *out.node->cuda_storage, static_cast<float>(exponent),
+                                             static_cast<size_t>(out.numel()));
+            mark_cuda_grad_dirty(a);
         };
     }
     return out;
 }
 
 Tensor sum(const Tensor& a) {
-    float value = CudaRuntime::instance().reduce("sum", to_float(a.data()));
-    Tensor out({}, DType::Float32, a.device(), a.requires_grad());
-    out.data()[0] = value;
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output({}, a.device(), a.requires_grad());
+    CudaRuntime::instance().reduce_buffer("sum", *out.node->cuda_storage, *a.node->cuda_storage,
+                                          static_cast<size_t>(a.numel()));
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out]() mutable {
-            for (int64_t i = 0; i < a.numel(); ++i) {
-                a.grad()[i] += out.grad()[0];
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_grad(a);
+            CudaRuntime::instance().reduce_grad(*a.node->cuda_storage, *out.node->cuda_storage,
+                                                static_cast<size_t>(a.numel()), 1.0f);
+            mark_cuda_grad_dirty(a);
         };
     }
     return out;
@@ -179,21 +268,26 @@ Tensor sum(const Tensor& a) {
 
 Tensor mean(const Tensor& a) {
     Tensor out = sum(a);
-    out.data()[0] /= static_cast<double>(a.numel());
+    CudaRuntime::instance().scale_data_buffer(*out.node->cuda_storage, 1, 1.0f / static_cast<float>(a.numel()));
+    out.node->device_data_dirty = true;
     if (a.requires_grad()) {
         out.node->backward_fn = [a, out]() mutable {
-            for (int64_t i = 0; i < a.numel(); ++i) {
-                a.grad()[i] += out.grad()[0] / static_cast<double>(a.numel());
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_grad(a);
+            CudaRuntime::instance().reduce_grad(*a.node->cuda_storage, *out.node->cuda_storage,
+                                                static_cast<size_t>(a.numel()),
+                                                1.0f / static_cast<float>(a.numel()));
+            mark_cuda_grad_dirty(a);
         };
     }
     return out;
 }
 
 Tensor max(const Tensor& a) {
-    float value = CudaRuntime::instance().reduce("max", to_float(a.data()));
-    Tensor out({}, DType::Float32, a.device(), false);
-    out.data()[0] = value;
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output({}, a.device(), false);
+    CudaRuntime::instance().reduce_buffer("max", *out.node->cuda_storage, *a.node->cuda_storage,
+                                          static_cast<size_t>(a.numel()));
     return out;
 }
 
@@ -201,14 +295,18 @@ Tensor reshape(const Tensor& a, const std::vector<int64_t>& new_shape) {
     if (product(new_shape) != a.numel()) {
         throw std::runtime_error("CUDA reshape numel mismatch");
     }
-    auto out_data = CudaRuntime::instance().unary("copy", to_float(a.data()));
-    Tensor out(new_shape, to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output(new_shape, a.device(), a.requires_grad());
+    CudaRuntime::instance().unary_buffer("copy", *out.node->cuda_storage, *a.node->cuda_storage, 0.0f,
+                                         static_cast<size_t>(a.numel()));
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out]() mutable {
-            for (int64_t i = 0; i < out.numel(); ++i) {
-                a.grad()[i] += out.grad()[i];
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_grad(a);
+            CudaRuntime::instance().add_grad(*a.node->cuda_storage, *out.node->cuda_storage, 0,
+                                              static_cast<size_t>(out.numel()));
+            mark_cuda_grad_dirty(a);
         };
     }
     return out;
@@ -239,14 +337,16 @@ Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
         }
         index[flat] = static_cast<unsigned int>(in_flat);
     }
-    auto out_data = CudaRuntime::instance().gather(to_float(a.data()), index);
-    Tensor out(out_shape, to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output(out_shape, a.device(), a.requires_grad());
+    CudaRuntime::instance().gather_buffer(*out.node->cuda_storage, *a.node->cuda_storage, index);
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out, index]() mutable {
-            for (int64_t flat = 0; flat < out.numel(); ++flat) {
-                a.grad()[index[flat]] += out.grad()[flat];
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_grad(a);
+            CudaRuntime::instance().scatter_add_grad(*a.node->cuda_storage, *out.node->cuda_storage, index);
+            mark_cuda_grad_dirty(a);
         };
     }
     return out;
@@ -259,29 +359,35 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
     unsigned int m = static_cast<unsigned int>(a.shape()[0]);
     unsigned int k = static_cast<unsigned int>(a.shape()[1]);
     unsigned int n = static_cast<unsigned int>(b.shape()[1]);
-    auto out_data = CudaRuntime::instance().matmul(to_float(a.data()), to_float(b.data()), m, k, n);
-    Tensor out({static_cast<int64_t>(m), static_cast<int64_t>(n)}, to_double(out_data), DType::Float32,
-               a.device(), a.requires_grad() || b.requires_grad());
+    ensure_cuda_data(a);
+    ensure_cuda_data(b);
+    Tensor out = make_cuda_output({static_cast<int64_t>(m), static_cast<int64_t>(n)}, a.device(),
+                                  a.requires_grad() || b.requires_grad());
+    CudaRuntime::instance().matmul_buffer(*out.node->cuda_storage, *a.node->cuda_storage, *b.node->cuda_storage,
+                                          m, k, n);
     if (out.requires_grad()) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out, m, k, n]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_data(a);
+            ensure_cuda_data(b);
+            llm::TensorCudaStorage* a_grad = nullptr;
+            llm::TensorCudaStorage* b_grad = nullptr;
             if (a.requires_grad()) {
-                for (int64_t i = 0; i < static_cast<int64_t>(m); ++i) {
-                    for (int64_t p = 0; p < static_cast<int64_t>(k); ++p) {
-                        for (int64_t j = 0; j < static_cast<int64_t>(n); ++j) {
-                            a.grad()[i * k + p] += out.grad()[i * n + j] * b.data()[p * n + j];
-                        }
-                    }
-                }
+                ensure_cuda_grad(a);
+                a_grad = a.node->cuda_storage.get();
             }
             if (b.requires_grad()) {
-                for (int64_t p = 0; p < static_cast<int64_t>(k); ++p) {
-                    for (int64_t j = 0; j < static_cast<int64_t>(n); ++j) {
-                        for (int64_t i = 0; i < static_cast<int64_t>(m); ++i) {
-                            b.grad()[p * n + j] += a.data()[i * k + p] * out.grad()[i * n + j];
-                        }
-                    }
-                }
+                ensure_cuda_grad(b);
+                b_grad = b.node->cuda_storage.get();
+            }
+            CudaRuntime::instance().matmul_grad(a_grad, b_grad, *a.node->cuda_storage, *b.node->cuda_storage,
+                                                *out.node->cuda_storage, m, k, n);
+            if (a_grad) {
+                mark_cuda_grad_dirty(a);
+            }
+            if (b_grad) {
+                mark_cuda_grad_dirty(b);
             }
         };
     }
@@ -300,35 +406,59 @@ Tensor batch_matmul(const Tensor& a, const Tensor& b) {
         throw std::runtime_error("CUDA batch_matmul shape mismatch");
     }
     unsigned int N = static_cast<unsigned int>(b.shape()[3]);
-    auto out_data = CudaRuntime::instance().batch_matmul(to_float(a.data()), to_float(b.data()), B, H, M, K, N);
-    Tensor out({B, H, M, N}, to_double(out_data), DType::Float32, a.device(), a.requires_grad() || b.requires_grad());
+    ensure_cuda_data(a);
+    ensure_cuda_data(b);
+    Tensor out = make_cuda_output({B, H, M, N}, a.device(), a.requires_grad() || b.requires_grad());
+    CudaRuntime::instance().batch_matmul_buffer(*out.node->cuda_storage, *a.node->cuda_storage,
+                                                *b.node->cuda_storage, B, H, M, K, N);
     if (out.requires_grad()) {
         out.node->parents = {a, b};
         out.node->backward_fn = [a, b, out, B, H, M, K, N]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_data(a);
+            ensure_cuda_data(b);
+            llm::TensorCudaStorage* a_grad = nullptr;
+            llm::TensorCudaStorage* b_grad = nullptr;
             if (a.requires_grad()) {
-                for (int64_t bb = 0; bb < B; ++bb)
-                    for (int64_t hh = 0; hh < H; ++hh)
-                        for (int64_t i = 0; i < M; ++i)
-                            for (int64_t p = 0; p < K; ++p)
-                                for (int64_t j = 0; j < N; ++j) {
-                                    int64_t ai = ((bb * H + hh) * M + i) * K + p;
-                                    int64_t bi = ((bb * H + hh) * K + p) * N + j;
-                                    int64_t oi = ((bb * H + hh) * M + i) * N + j;
-                                    a.grad()[ai] += out.grad()[oi] * b.data()[bi];
-                                }
+                ensure_cuda_grad(a);
+                a_grad = a.node->cuda_storage.get();
             }
             if (b.requires_grad()) {
-                for (int64_t bb = 0; bb < B; ++bb)
-                    for (int64_t hh = 0; hh < H; ++hh)
-                        for (int64_t p = 0; p < K; ++p)
-                            for (int64_t j = 0; j < N; ++j)
-                                for (int64_t i = 0; i < M; ++i) {
-                                    int64_t ai = ((bb * H + hh) * M + i) * K + p;
-                                    int64_t bi = ((bb * H + hh) * K + p) * N + j;
-                                    int64_t oi = ((bb * H + hh) * M + i) * N + j;
-                                    b.grad()[bi] += a.data()[ai] * out.grad()[oi];
-                                }
+                ensure_cuda_grad(b);
+                b_grad = b.node->cuda_storage.get();
             }
+            CudaRuntime::instance().batch_matmul_grad(a_grad, b_grad, *a.node->cuda_storage,
+                                                      *b.node->cuda_storage, *out.node->cuda_storage,
+                                                      B, H, M, K, N);
+            if (a_grad) {
+                mark_cuda_grad_dirty(a);
+            }
+            if (b_grad) {
+                mark_cuda_grad_dirty(b);
+            }
+        };
+    }
+    return out;
+}
+
+Tensor causal_mask(const Tensor& scores, int64_t sequence_length, double mask_value) {
+    if (scores.shape().size() != 4 || scores.shape()[2] != sequence_length || scores.shape()[3] != sequence_length) {
+        throw std::runtime_error("CUDA causal_mask expects scores [B,H,T,T]");
+    }
+    unsigned int B = static_cast<unsigned int>(scores.shape()[0]);
+    unsigned int H = static_cast<unsigned int>(scores.shape()[1]);
+    unsigned int T = static_cast<unsigned int>(sequence_length);
+    ensure_cuda_data(scores);
+    Tensor out = make_cuda_output(scores.shape(), scores.device(), scores.requires_grad());
+    CudaRuntime::instance().causal_mask_buffer(*out.node->cuda_storage, *scores.node->cuda_storage,
+                                               B, H, T, static_cast<float>(mask_value));
+    if (scores.requires_grad()) {
+        out.node->parents = {scores};
+        out.node->backward_fn = [scores, out, B, H, T]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_grad(scores);
+            CudaRuntime::instance().causal_mask_grad(*scores.node->cuda_storage, *out.node->cuda_storage, B, H, T);
+            mark_cuda_grad_dirty(scores);
         };
     }
     return out;
@@ -342,20 +472,17 @@ Tensor softmax(const Tensor& a, int64_t dim) {
     }
     unsigned int width = static_cast<unsigned int>(a.shape().back());
     unsigned int rows = static_cast<unsigned int>(a.numel() / width);
-    auto out_data = CudaRuntime::instance().softmax(to_float(a.data()), rows, width);
-    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output(a.shape(), a.device(), a.requires_grad());
+    CudaRuntime::instance().softmax_buffer(*out.node->cuda_storage, *a.node->cuda_storage, rows, width);
     if (a.requires_grad()) {
         out.node->parents = {a};
         out.node->backward_fn = [a, out, rows, width]() mutable {
-            for (int64_t r = 0; r < rows; ++r) {
-                double dot = 0.0;
-                for (int64_t c = 0; c < width; ++c) {
-                    dot += out.grad()[r * width + c] * out.data()[r * width + c];
-                }
-                for (int64_t c = 0; c < width; ++c) {
-                    a.grad()[r * width + c] += out.data()[r * width + c] * (out.grad()[r * width + c] - dot);
-                }
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_grad(a);
+            CudaRuntime::instance().softmax_grad(*a.node->cuda_storage, *out.node->cuda_storage,
+                                                 *out.node->cuda_storage, rows, width);
+            mark_cuda_grad_dirty(a);
         };
     }
     return out;
@@ -369,9 +496,9 @@ Tensor log_softmax(const Tensor& a, int64_t dim) {
     }
     unsigned int width = static_cast<unsigned int>(a.shape().back());
     unsigned int rows = static_cast<unsigned int>(a.numel() / width);
-    auto probs = CudaRuntime::instance().softmax(to_float(a.data()), rows, width);
-    auto out_data = CudaRuntime::instance().unary("log", probs);
-    Tensor out(a.shape(), to_double(out_data), DType::Float32, a.device(), a.requires_grad());
+    ensure_cuda_data(a);
+    Tensor out = make_cuda_output(a.shape(), a.device(), a.requires_grad());
+    CudaRuntime::instance().log_softmax_buffer(*out.node->cuda_storage, *a.node->cuda_storage, rows, width);
     return out;
 }
 
@@ -384,43 +511,25 @@ Tensor cross_entropy(const Tensor& logits, const Tensor& targets) {
         throw std::runtime_error("CUDA cross_entropy target shape mismatch");
     }
 
-    auto row_losses = CudaRuntime::instance().cross_entropy_row_losses(to_float(logits.data()), to_float(targets.data()),
-                                                                       static_cast<unsigned int>(B * T), static_cast<unsigned int>(V));
-    double loss = 0.0;
-    for (auto value : row_losses) {
-        loss += value;
-    }
-    Tensor out({}, DType::Float32, logits.device(), logits.requires_grad());
-    out.data()[0] = loss / static_cast<double>(B * T);
-
-    std::vector<double> probs(logits.numel(), 0.0);
-    for (int64_t row = 0; row < B * T; ++row) {
-        double mx = -1e100;
-        for (int64_t v = 0; v < V; ++v) {
-            mx = std::max(mx, logits.data()[row * V + v]);
-        }
-        double denom = 0.0;
-        for (int64_t v = 0; v < V; ++v) {
-            probs[row * V + v] = std::exp(logits.data()[row * V + v] - mx);
-            denom += probs[row * V + v];
-        }
-        for (int64_t v = 0; v < V; ++v) {
-            probs[row * V + v] /= denom;
-        }
-    }
+    ensure_cuda_data(logits);
+    ensure_cuda_data(targets);
+    Tensor out = make_cuda_output({}, logits.device(), logits.requires_grad());
+    CudaRuntime::instance().cross_entropy_loss_buffer(*out.node->cuda_storage, *logits.node->cuda_storage,
+                                                      *targets.node->cuda_storage,
+                                                      static_cast<unsigned int>(B * T),
+                                                      static_cast<unsigned int>(V));
     if (logits.requires_grad()) {
         out.node->parents = {logits};
-        out.node->backward_fn = [logits, targets, out, probs, B, T, V]() mutable {
-            for (int64_t row = 0; row < B * T; ++row) {
-                int64_t target = static_cast<int64_t>(targets.data()[row]);
-                for (int64_t v = 0; v < V; ++v) {
-                    double g = probs[row * V + v];
-                    if (v == target) {
-                        g -= 1.0;
-                    }
-                    logits.grad()[row * V + v] += out.grad()[0] * g / static_cast<double>(B * T);
-                }
-            }
+        out.node->backward_fn = [logits, targets, out, B, T, V]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_data(logits);
+            ensure_cuda_data(targets);
+            ensure_cuda_grad(logits);
+            CudaRuntime::instance().cross_entropy_grad(*logits.node->cuda_storage, *logits.node->cuda_storage,
+                                                       *targets.node->cuda_storage, *out.node->cuda_storage,
+                                                       static_cast<unsigned int>(B * T),
+                                                       static_cast<unsigned int>(V));
+            mark_cuda_grad_dirty(logits);
         };
     }
     return out;
@@ -434,17 +543,20 @@ Tensor embedding(const Tensor& ids, const Tensor& weight) {
     unsigned int dim = static_cast<unsigned int>(weight.shape()[1]);
     auto out_shape = ids.shape();
     out_shape.push_back(dim);
-    auto out_data = CudaRuntime::instance().embedding(to_float(ids.data()), to_float(weight.data()), count, dim);
-    Tensor out(out_shape, to_double(out_data), DType::Float32, weight.device(), weight.requires_grad());
+    ensure_cuda_data(ids);
+    ensure_cuda_data(weight);
+    Tensor out = make_cuda_output(out_shape, weight.device(), weight.requires_grad());
+    CudaRuntime::instance().embedding_buffer(*out.node->cuda_storage, *ids.node->cuda_storage,
+                                             *weight.node->cuda_storage, count, dim);
     if (weight.requires_grad()) {
         out.node->parents = {weight};
-        out.node->backward_fn = [ids, weight, out, dim]() mutable {
-            for (int64_t i = 0; i < ids.numel(); ++i) {
-                int64_t id = static_cast<int64_t>(ids.data()[i]);
-                for (int64_t d = 0; d < dim; ++d) {
-                    weight.grad()[id * dim + d] += out.grad()[i * dim + d];
-                }
-            }
+        out.node->backward_fn = [ids, weight, out, count, dim]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_data(ids);
+            ensure_cuda_grad(weight);
+            CudaRuntime::instance().embedding_grad(*weight.node->cuda_storage, *ids.node->cuda_storage,
+                                                   *out.node->cuda_storage, count, dim);
+            mark_cuda_grad_dirty(weight);
         };
     }
     return out;
@@ -453,61 +565,47 @@ Tensor embedding(const Tensor& ids, const Tensor& weight) {
 Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, double eps) {
     unsigned int C = static_cast<unsigned int>(x.shape().back());
     unsigned int rows = static_cast<unsigned int>(x.numel() / C);
-    auto out_data = CudaRuntime::instance().layernorm(to_float(x.data()), to_float(scale.data()), to_float(shift.data()),
-                                                      rows, C, static_cast<float>(eps));
-    Tensor out(x.shape(), to_double(out_data), DType::Float32, x.device(),
-               x.requires_grad() || scale.requires_grad() || shift.requires_grad());
-
-    std::vector<double> xhat(x.numel(), 0.0);
-    std::vector<double> invs(rows, 0.0);
-    for (int64_t r = 0; r < rows; ++r) {
-        double mean = 0.0;
-        for (int64_t c = 0; c < C; ++c) {
-            mean += x.data()[r * C + c];
-        }
-        mean /= C;
-        double var = 0.0;
-        for (int64_t c = 0; c < C; ++c) {
-            double z = x.data()[r * C + c] - mean;
-            var += z * z;
-        }
-        var /= C;
-        invs[r] = 1.0 / std::sqrt(var + eps);
-        for (int64_t c = 0; c < C; ++c) {
-            xhat[r * C + c] = (x.data()[r * C + c] - mean) * invs[r];
-        }
-    }
+    ensure_cuda_data(x);
+    ensure_cuda_data(scale);
+    ensure_cuda_data(shift);
+    Tensor out = make_cuda_output(x.shape(), x.device(),
+                                  x.requires_grad() || scale.requires_grad() || shift.requires_grad());
+    CudaRuntime::instance().layernorm_buffer(*out.node->cuda_storage, *x.node->cuda_storage,
+                                             *scale.node->cuda_storage, *shift.node->cuda_storage,
+                                             rows, C, static_cast<float>(eps));
 
     if (out.requires_grad()) {
         out.node->parents = {x, scale, shift};
-        out.node->backward_fn = [x, scale, shift, out, C, rows, xhat, invs]() mutable {
+        out.node->backward_fn = [x, scale, shift, out, C, rows, eps]() mutable {
+            ensure_cuda_grad(out);
+            ensure_cuda_data(x);
+            ensure_cuda_data(scale);
+            llm::TensorCudaStorage* x_grad = nullptr;
+            llm::TensorCudaStorage* scale_grad = nullptr;
+            llm::TensorCudaStorage* shift_grad = nullptr;
             if (scale.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) {
-                    scale.grad()[i % C] += out.grad()[i] * xhat[i];
-                }
+                ensure_cuda_grad(scale);
+                scale_grad = scale.node->cuda_storage.get();
             }
             if (shift.requires_grad()) {
-                for (int64_t i = 0; i < out.numel(); ++i) {
-                    shift.grad()[i % C] += out.grad()[i];
-                }
+                ensure_cuda_grad(shift);
+                shift_grad = shift.node->cuda_storage.get();
             }
             if (x.requires_grad()) {
-                for (int64_t r = 0; r < rows; ++r) {
-                    double sum_dxhat = 0.0;
-                    double sum_dxhat_xhat = 0.0;
-                    for (int64_t c = 0; c < C; ++c) {
-                        int64_t idx = r * C + c;
-                        double dxhat = out.grad()[idx] * scale.data()[c];
-                        sum_dxhat += dxhat;
-                        sum_dxhat_xhat += dxhat * xhat[idx];
-                    }
-                    for (int64_t c = 0; c < C; ++c) {
-                        int64_t idx = r * C + c;
-                        double dxhat = out.grad()[idx] * scale.data()[c];
-                        x.grad()[idx] += (static_cast<double>(C) * dxhat - sum_dxhat - xhat[idx] * sum_dxhat_xhat) *
-                                         invs[r] / static_cast<double>(C);
-                    }
-                }
+                ensure_cuda_grad(x);
+                x_grad = x.node->cuda_storage.get();
+            }
+            CudaRuntime::instance().layernorm_grad(x_grad, scale_grad, shift_grad, *x.node->cuda_storage,
+                                                   *scale.node->cuda_storage, *out.node->cuda_storage,
+                                                   rows, C, static_cast<float>(eps));
+            if (x_grad) {
+                mark_cuda_grad_dirty(x);
+            }
+            if (scale_grad) {
+                mark_cuda_grad_dirty(scale);
+            }
+            if (shift_grad) {
+                mark_cuda_grad_dirty(shift);
             }
         };
     }
@@ -515,20 +613,19 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
 }
 
 Tensor gelu(const Tensor& x) {
-    auto out_data = CudaRuntime::instance().unary("gelu", to_float(x.data()));
-    Tensor out(x.shape(), to_double(out_data), DType::Float32, x.device(), x.requires_grad());
+    ensure_cuda_data(x);
+    Tensor out = make_cuda_output(x.shape(), x.device(), x.requires_grad());
+    CudaRuntime::instance().unary_buffer("gelu", *out.node->cuda_storage, *x.node->cuda_storage, 0.0f,
+                                         static_cast<size_t>(x.numel()));
     if (x.requires_grad()) {
         out.node->parents = {x};
         out.node->backward_fn = [x, out]() mutable {
-            constexpr double k = 0.7978845608028654;
-            for (int64_t i = 0; i < x.numel(); ++i) {
-                double v = x.data()[i];
-                double u = k * (v + 0.044715 * v * v * v);
-                double th = std::tanh(u);
-                double du = k * (1.0 + 3.0 * 0.044715 * v * v);
-                double g = 0.5 * (1.0 + th) + 0.5 * v * (1.0 - th * th) * du;
-                x.grad()[i] += out.grad()[i] * g;
-            }
+            ensure_cuda_grad(out);
+            ensure_cuda_data(x);
+            ensure_cuda_grad(x);
+            CudaRuntime::instance().gelu_grad(*x.node->cuda_storage, *x.node->cuda_storage,
+                                              *out.node->cuda_storage, static_cast<size_t>(x.numel()));
+            mark_cuda_grad_dirty(x);
         };
     }
     return out;

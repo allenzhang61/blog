@@ -23,11 +23,7 @@ Tensor MultiHeadAttention::forward(const Tensor& x) {
     Tensor scores = ops::batch_matmul(q, kt);
     double scale = 1.0 / std::sqrt(static_cast<double>(head_dim));
     scores = ops::mul_scalar(scores, scale);
-    for (int64_t b = 0; b < B; ++b)
-        for (int64_t h = 0; h < num_heads; ++h)
-            for (int64_t i = 0; i < T; ++i)
-                for (int64_t j = i + 1; j < T; ++j)
-                    scores.data()[((b * num_heads + h) * T + i) * T + j] = -1e9;
+    scores = ops::causal_mask(scores, T);
     Tensor weights = ops::softmax(scores, -1);
     Tensor ctx = ops::batch_matmul(weights, v);
     ctx = ops::reshape(ops::transpose(ctx, 1, 2), {B, T, d_out});

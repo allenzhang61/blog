@@ -148,6 +148,17 @@ Tensor batch_matmul(const Tensor& a, const Tensor& b) {
     return dispatch_binary("batch_matmul", a, b, metal::batch_matmul, cuda::batch_matmul, cpu::batch_matmul);
 }
 
+// 分发 causal mask 算子。
+Tensor causal_mask(const Tensor& scores, int64_t sequence_length, double mask_value) {
+    if (scores.device().type == DeviceType::Metal) {
+        return cpu::causal_mask(scores, sequence_length, mask_value);
+    }
+    if (scores.device().type == DeviceType::CUDA) {
+        return cuda::causal_mask(scores, sequence_length, mask_value);
+    }
+    return cpu::causal_mask(scores, sequence_length, mask_value);
+}
+
 // 分发 softmax 算子。
 Tensor softmax(const Tensor& a, int64_t dim) {
     if (a.device().type == DeviceType::Metal) {

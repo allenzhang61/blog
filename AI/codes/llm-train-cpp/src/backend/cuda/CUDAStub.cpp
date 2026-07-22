@@ -123,6 +123,12 @@ Tensor batch_matmul(const Tensor&, const Tensor&) {
     throw std::runtime_error(status());
 }
 
+Tensor causal_mask(const Tensor&, int64_t, double) {
+    // CUDA 开启时对应：
+    // src/kernels/cuda/cuda_kernels.cu::llm::cuda::causal_mask() -> causal_mask_kernel()
+    throw std::runtime_error(status());
+}
+
 Tensor softmax(const Tensor&, int64_t) {
     // CUDA 开启时对应：
     // src/kernels/cuda/cuda_kernels.cu::llm::cuda::softmax() -> softmax_kernel()

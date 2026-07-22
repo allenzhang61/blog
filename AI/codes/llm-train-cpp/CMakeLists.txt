@@ -60,6 +60,7 @@ if(LLM_CPP_ENABLE_CUDA)
         enable_language(CUDA)
         # CUDA 开启：真实 kernel + 委派实现（对应 Metal 的 MetalKernels.mm + MetalBackend.mm）。
         list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_kernels.cu)
+        list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_device_kernels.cu)
         list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_runtime.cu)
         list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDABackend.cpp)
         set(LLM_CPP_ENABLE_CUDA_COMPILED 1)
@@ -78,6 +79,14 @@ target_compile_definitions(llm_train_cpp PUBLIC
     LLM_CPP_ENABLE_METAL_COMPILED=${LLM_CPP_ENABLE_METAL_COMPILED}
     LLM_CPP_ENABLE_CUDA_COMPILED=${LLM_CPP_ENABLE_CUDA_COMPILED}
 )
+target_compile_options(llm_train_cpp PUBLIC
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
+)
+if(LLM_CPP_ENABLE_CUDA_COMPILED)
+    target_compile_options(llm_train_cpp PRIVATE
+        $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:-Xcompiler=/utf-8>
+    )
+endif()
 if(LLM_CPP_ENABLE_METAL_COMPILED)
     # 构建期把 .metal 源码编译成 .metallib（业界主流做法），运行期直接加载二进制。
     set(LLM_CPP_METAL_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/metal/metal_kernels.metal)
@@ -122,4 +131,10 @@ if(LLM_CPP_ENABLE_METAL_COMPILED)
 
     add_executable(metal_benchmark examples/metal_benchmark.cpp)
     target_link_libraries(metal_benchmark PRIVATE llm_train_cpp)
+endif()
+
+if(LLM_CPP_ENABLE_CUDA_COMPILED)
+    add_executable(llm_cpp_cuda_smoke tests/test_cuda.cpp)
+    target_link_libraries(llm_cpp_cuda_smoke PRIVATE llm_train_cpp)
+    add_test(NAME llm_cpp_cuda_smoke COMMAND llm_cpp_cuda_smoke)
 endif()

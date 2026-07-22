@@ -2,6 +2,38 @@
 
 namespace llm {
 
+TensorCudaStorage::~TensorCudaStorage() {
+    if (release != nullptr) {
+        release(*this);
+    }
+}
+
+namespace {
+
+void sync_data_to_host(TensorNode& node) {
+    if (node.device.type != DeviceType::CUDA || !node.device_data_dirty || !node.cuda_storage) {
+        return;
+    }
+    if (node.cuda_storage->copy_data_to_host == nullptr) {
+        throw std::runtime_error("CUDA tensor data sync to host is unavailable");
+    }
+    node.cuda_storage->copy_data_to_host(*node.cuda_storage, node.data);
+    node.device_data_dirty = false;
+}
+
+void sync_grad_to_host(TensorNode& node) {
+    if (node.device.type != DeviceType::CUDA || !node.device_grad_dirty || !node.cuda_storage) {
+        return;
+    }
+    if (node.cuda_storage->copy_grad_to_host == nullptr) {
+        throw std::runtime_error("CUDA tensor grad sync to host is unavailable");
+    }
+    node.cuda_storage->copy_grad_to_host(*node.cuda_storage, node.grad);
+    node.device_grad_dirty = false;
+}
+
+} // namespace
+
 Tensor::Tensor() : node(std::make_shared<TensorNode>()) {
 }
 
@@ -14,6 +46,10 @@ Tensor::Tensor(std::vector<int64_t> shape, DType dtype, Device device, bool requ
     node->data.assign(product(node->shape), 0.0);
     if (requires_grad) {
         node->grad.assign(node->data.size(), 0.0);
+    }
+    if (node->device.type == DeviceType::CUDA) {
+        node->host_data_dirty = true;
+        node->host_grad_dirty = requires_grad;
     }
 }
 
@@ -30,6 +66,10 @@ Tensor::Tensor(std::vector<int64_t> shape, std::vector<double> data, DType dtype
     }
     if (requires_grad) {
         node->grad.assign(node->data.size(), 0.0);
+    }
+    if (node->device.type == DeviceType::CUDA) {
+        node->host_data_dirty = true;
+        node->host_grad_dirty = requires_grad;
     }
 }
 
@@ -84,29 +124,67 @@ int64_t Tensor::numel() const {
 }
 
 std::vector<double>& Tensor::data() {
-    return node->data;
+    return mutable_data();
 }
 
 const std::vector<double>& Tensor::data() const {
+    sync_data_to_host(*node);
+    return node->data;
+}
+
+std::vector<double>& Tensor::mutable_data() {
+    sync_data_to_host(*node);
+    mark_data_host_dirty();
     return node->data;
 }
 
 std::vector<double>& Tensor::grad() const {
+    return mutable_grad();
+}
+
+std::vector<double>& Tensor::mutable_grad() const {
+    sync_grad_to_host(*node);
     if (node->grad.empty()) {
         node->grad.assign(node->data.size(), 0.0);
     }
+    mark_grad_host_dirty();
     return node->grad;
+}
+
+void Tensor::mark_data_host_dirty() const {
+    if (node->device.type == DeviceType::CUDA) {
+        node->host_data_dirty = true;
+        node->device_data_dirty = false;
+    }
+}
+
+void Tensor::mark_grad_host_dirty() const {
+    if (node->device.type == DeviceType::CUDA) {
+        node->host_grad_dirty = true;
+        node->device_grad_dirty = false;
+    }
 }
 
 double Tensor::item() const {
     if (numel() != 1) {
         throw std::runtime_error("item() requires scalar tensor");
     }
+    sync_data_to_host(*node);
     return node->data[0];
 }
 
 void Tensor::zero_grad() {
     node->grad.assign(node->data.size(), 0.0);
+    if (node->device.type == DeviceType::CUDA) {
+        if (node->cuda_storage && node->cuda_storage->fill_grad) {
+            node->cuda_storage->fill_grad(*node->cuda_storage, node->grad.size(), 0.0f);
+            node->host_grad_dirty = false;
+            node->device_grad_dirty = true;
+        } else {
+            node->host_grad_dirty = true;
+            node->device_grad_dirty = false;
+        }
+    }
 }
 
 namespace {
@@ -131,6 +209,11 @@ void Tensor::backward() {
     std::vector<Tensor> order;
     topo_visit(*this, seen, order);
     grad().assign(1, 1.0);
+    if (node->device.type == DeviceType::CUDA && node->cuda_storage && node->cuda_storage->copy_grad_from_host) {
+        node->cuda_storage->copy_grad_from_host(*node->cuda_storage, node->grad);
+        node->host_grad_dirty = false;
+        node->device_grad_dirty = true;
+    }
     for (auto it = order.rbegin(); it != order.rend(); ++it) {
         if (it->node->backward_fn) {
             it->node->backward_fn();
