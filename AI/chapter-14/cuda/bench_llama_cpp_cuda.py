@@ -12,13 +12,19 @@ import requests
 
 
 BASE = os.environ.get("BASE", "http://127.0.0.1:8088/v1/chat/completions")
-MODEL = os.environ.get("MODEL", "qwen3-1.7b-q4km")
-MODEL_LABEL = os.environ.get("MODEL_LABEL", "Qwen3-1.7B Q4_K_M GGUF")
+MODEL = os.environ.get("MODEL", "qwen3-8b-q4km")
+MODEL_LABEL = os.environ.get("MODEL_LABEL", "Qwen3-8B Q4_K_M GGUF")
+SERVICE_LABEL = os.environ.get("SERVICE_LABEL", "llama.cpp CUDA")
 PROMPT = "请用中文简要说明 LLM 推理中 prefill 和 decode 的区别。"
 OUT = Path(
     os.environ.get(
-        "OUT", r"D:\cuda-llm-bench\results\llama-cpp-cuda-qwen3-1.7b.csv"
+        "OUT", r"D:\cuda-llm-bench\results\llama-cpp-cuda-qwen3-8b.csv"
     )
+)
+CONCURRENCIES = tuple(
+    int(x.strip())
+    for x in os.environ.get("CONCURRENCIES", "1,2,4").split(",")
+    if x.strip()
 )
 
 
@@ -121,7 +127,7 @@ def run_concurrency(n, ttft):
         avg_gpu = max_gpu = max_mem = avg_power = None
 
     return {
-        "服务": "llama.cpp CUDA",
+        "服务": SERVICE_LABEL,
         "模型": MODEL_LABEL,
         "并发": n,
         "TTFT(ms)": round(ttft, 1),
@@ -140,7 +146,7 @@ def main():
     OUT.parent.mkdir(parents=True, exist_ok=True)
     warmup()
     ttft = measure_ttft()
-    rows = [run_concurrency(n, ttft) for n in (1, 2, 4)]
+    rows = [run_concurrency(n, ttft) for n in CONCURRENCIES]
 
     with OUT.open("w", newline="", encoding="utf-8-sig") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()))

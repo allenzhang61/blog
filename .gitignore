@@ -26,6 +26,7 @@ AI/data/
 AI/cpp/build/
 AI/cpp/build_release/
 AI/cpp/cmake-build-debug/
+AI/codes/llm-train-cpp/build-cuda-check/
 
 AI/chapter-03/data/*.pt
 AI/chapter-03/data/*.csv
