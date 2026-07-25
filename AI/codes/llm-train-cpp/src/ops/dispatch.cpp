@@ -151,7 +151,7 @@ Tensor batch_matmul(const Tensor& a, const Tensor& b) {
 // 分发 causal mask 算子。
 Tensor causal_mask(const Tensor& scores, int64_t sequence_length, double mask_value) {
     if (scores.device().type == DeviceType::Metal) {
-        return cpu::causal_mask(scores, sequence_length, mask_value);
+        return metal::causal_mask(scores, sequence_length, mask_value);
     }
     if (scores.device().type == DeviceType::CUDA) {
         return cuda::causal_mask(scores, sequence_length, mask_value);

@@ -3,6 +3,9 @@
 #if LLM_CPP_ENABLE_CUDA_COMPILED
 #include "../kernels/cuda/cuda_runtime.hpp"
 #endif
+#if LLM_CPP_ENABLE_METAL_COMPILED
+#include "../kernels/metal/metal_runtime.hpp"
+#endif
 
 namespace llm {
 
@@ -34,6 +37,22 @@ AdamW::AdamW(std::vector<Tensor*> params, double lr, double weight_decay, double
         cuda_m_.push_back(nullptr);
         cuda_v_.push_back(nullptr);
 #endif
+#if LLM_CPP_ENABLE_METAL_COMPILED
+        if (p->device().type == DeviceType::Metal && metal::detail::runtime_available()) {
+            auto m = metal::detail::create_tensor_storage();
+            auto v = metal::detail::create_tensor_storage();
+            metal::detail::fill_data_buffer(*m, static_cast<size_t>(p->numel()), 0.0f);
+            metal::detail::fill_data_buffer(*v, static_cast<size_t>(p->numel()), 0.0f);
+            metal_m_.push_back(std::move(m));
+            metal_v_.push_back(std::move(v));
+        } else {
+            metal_m_.push_back(nullptr);
+            metal_v_.push_back(nullptr);
+        }
+#else
+        metal_m_.push_back(nullptr);
+        metal_v_.push_back(nullptr);
+#endif
     }
 }
 
@@ -63,6 +82,28 @@ void AdamW::step() {
             }
             cuda::detail::CudaRuntime::instance().adamw_update(
                 *p->node->cuda_storage, *p->node->cuda_storage, *cuda_m_[pi], *cuda_v_[pi],
+                static_cast<size_t>(p->numel()), static_cast<float>(lr_), static_cast<float>(weight_decay_),
+                static_cast<float>(beta1_), static_cast<float>(beta2_), static_cast<float>(eps_),
+                static_cast<float>(bias_correction1), static_cast<float>(bias_correction2));
+            p->node->host_data_dirty = false;
+            p->node->device_data_dirty = true;
+            continue;
+        }
+#endif
+#if LLM_CPP_ENABLE_METAL_COMPILED
+        if (p->device().type == DeviceType::Metal && p->node->metal_storage && metal_m_[pi] && metal_v_[pi]) {
+            if (p->node->host_data_dirty || !p->node->metal_storage->data) {
+                p->node->metal_storage->copy_data_from_host(*p->node->metal_storage, p->node->data);
+                p->node->host_data_dirty = false;
+                p->node->device_data_dirty = false;
+            }
+            if (p->node->host_grad_dirty || !p->node->metal_storage->grad) {
+                p->node->metal_storage->copy_grad_from_host(*p->node->metal_storage, p->node->grad);
+                p->node->host_grad_dirty = false;
+                p->node->device_grad_dirty = true;
+            }
+            metal::detail::adamw_update(
+                *p->node->metal_storage, *p->node->metal_storage, *metal_m_[pi], *metal_v_[pi],
                 static_cast<size_t>(p->numel()), static_cast<float>(lr_), static_cast<float>(weight_decay_),
                 static_cast<float>(beta1_), static_cast<float>(beta2_), static_cast<float>(eps_),
                 static_cast<float>(bias_correction1), static_cast<float>(bias_correction2));

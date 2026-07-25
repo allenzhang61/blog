@@ -121,6 +121,12 @@ add_executable(generate_text examples/generate_text.cpp)
 target_link_libraries(generate_text PRIVATE llm_train_cpp)
 target_compile_definitions(generate_text PRIVATE LLM_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
+add_executable(backend_benchmark examples/backend_benchmark.cpp)
+target_link_libraries(backend_benchmark PRIVATE llm_train_cpp)
+
+add_executable(train_benchmark examples/train_benchmark.cpp)
+target_link_libraries(train_benchmark PRIVATE llm_train_cpp)
+
 enable_testing()
 add_test(NAME llm_cpp_tests COMMAND llm_cpp_tests)
 

@@ -149,6 +149,13 @@ Tensor batch_matmul(const Tensor&, const Tensor&) {
     throw std::runtime_error(status());
 }
 
+Tensor causal_mask(const Tensor&, int64_t, double) {
+    // Metal 开启时对应：
+    // src/kernels/metal/MetalKernels.mm::llm::metal::causal_mask()
+    // -> src/kernels/metal/metal_kernels.metal::causal_mask_kernel()
+    throw std::runtime_error(status());
+}
+
 Tensor softmax(const Tensor&, int64_t) {
     // Metal 开启时对应：
     // src/kernels/metal/MetalKernels.mm::llm::metal::softmax()

@@ -6,21 +6,21 @@ namespace llm {
 
 double Trainer::train_one_epoch(GPTModel& model, DataLoader& loader, AdamW& optim) {
     Tensor x, y;
-    double last_loss = 0.0;
+    Tensor last_loss;
     int steps = 0;
     while (loader.next(x, y)) {
         optim.zero_grad();
         Tensor logits = model.forward(x);
         Tensor loss = ops::cross_entropy(logits, y);
-        last_loss = loss.item();
         loss.backward();
         optim.step();
+        last_loss = loss;
         ++steps;
     }
     if (steps == 0) {
         throw std::runtime_error("no training batches");
     }
-    return last_loss;
+    return last_loss.item();
 }
 
 double Trainer::train_steps(GPTModel& model, DataLoader& loader, AdamW& optim, int64_t steps) {
@@ -28,7 +28,7 @@ double Trainer::train_steps(GPTModel& model, DataLoader& loader, AdamW& optim, i
         throw std::runtime_error("train_steps expects positive steps");
     }
     Tensor x, y;
-    double last_loss = 0.0;
+    Tensor last_loss;
     for (int64_t step = 0; step < steps; ++step) {
         if (!loader.next(x, y)) {
             loader.reset();
@@ -39,11 +39,11 @@ double Trainer::train_steps(GPTModel& model, DataLoader& loader, AdamW& optim, i
         optim.zero_grad();
         Tensor logits = model.forward(x);
         Tensor loss = ops::cross_entropy(logits, y);
-        last_loss = loss.item();
         loss.backward();
         optim.step();
+        last_loss = loss;
     }
-    return last_loss;
+    return last_loss.item();
 }
 
 std::vector<int64_t> Trainer::generate_greedy(GPTModel& model, std::vector<int64_t> ids,

@@ -11,24 +11,42 @@ TensorCudaStorage::~TensorCudaStorage() {
 namespace {
 
 void sync_data_to_host(TensorNode& node) {
-    if (node.device.type != DeviceType::CUDA || !node.device_data_dirty || !node.cuda_storage) {
+    TensorCudaStorage* storage = nullptr;
+    const char* name = nullptr;
+    if (node.device.type == DeviceType::CUDA) {
+        storage = node.cuda_storage.get();
+        name = "CUDA";
+    } else if (node.device.type == DeviceType::Metal) {
+        storage = node.metal_storage.get();
+        name = "Metal";
+    }
+    if (storage == nullptr || !node.device_data_dirty) {
         return;
     }
-    if (node.cuda_storage->copy_data_to_host == nullptr) {
-        throw std::runtime_error("CUDA tensor data sync to host is unavailable");
+    if (storage->copy_data_to_host == nullptr) {
+        throw std::runtime_error(std::string(name) + " tensor data sync to host is unavailable");
     }
-    node.cuda_storage->copy_data_to_host(*node.cuda_storage, node.data);
+    storage->copy_data_to_host(*storage, node.data);
     node.device_data_dirty = false;
 }
 
 void sync_grad_to_host(TensorNode& node) {
-    if (node.device.type != DeviceType::CUDA || !node.device_grad_dirty || !node.cuda_storage) {
+    TensorCudaStorage* storage = nullptr;
+    const char* name = nullptr;
+    if (node.device.type == DeviceType::CUDA) {
+        storage = node.cuda_storage.get();
+        name = "CUDA";
+    } else if (node.device.type == DeviceType::Metal) {
+        storage = node.metal_storage.get();
+        name = "Metal";
+    }
+    if (storage == nullptr || !node.device_grad_dirty) {
         return;
     }
-    if (node.cuda_storage->copy_grad_to_host == nullptr) {
-        throw std::runtime_error("CUDA tensor grad sync to host is unavailable");
+    if (storage->copy_grad_to_host == nullptr) {
+        throw std::runtime_error(std::string(name) + " tensor grad sync to host is unavailable");
     }
-    node.cuda_storage->copy_grad_to_host(*node.cuda_storage, node.grad);
+    storage->copy_grad_to_host(*storage, node.grad);
     node.device_grad_dirty = false;
 }
 
@@ -47,7 +65,7 @@ Tensor::Tensor(std::vector<int64_t> shape, DType dtype, Device device, bool requ
     if (requires_grad) {
         node->grad.assign(node->data.size(), 0.0);
     }
-    if (node->device.type == DeviceType::CUDA) {
+    if (node->device.type == DeviceType::CUDA || node->device.type == DeviceType::Metal) {
         node->host_data_dirty = true;
         node->host_grad_dirty = requires_grad;
     }
@@ -67,7 +85,7 @@ Tensor::Tensor(std::vector<int64_t> shape, std::vector<double> data, DType dtype
     if (requires_grad) {
         node->grad.assign(node->data.size(), 0.0);
     }
-    if (node->device.type == DeviceType::CUDA) {
+    if (node->device.type == DeviceType::CUDA || node->device.type == DeviceType::Metal) {
         node->host_data_dirty = true;
         node->host_grad_dirty = requires_grad;
     }
@@ -152,14 +170,14 @@ std::vector<double>& Tensor::mutable_grad() const {
 }
 
 void Tensor::mark_data_host_dirty() const {
-    if (node->device.type == DeviceType::CUDA) {
+    if (node->device.type == DeviceType::CUDA || node->device.type == DeviceType::Metal) {
         node->host_data_dirty = true;
         node->device_data_dirty = false;
     }
 }
 
 void Tensor::mark_grad_host_dirty() const {
-    if (node->device.type == DeviceType::CUDA) {
+    if (node->device.type == DeviceType::CUDA || node->device.type == DeviceType::Metal) {
         node->host_grad_dirty = true;
         node->device_grad_dirty = false;
     }
@@ -175,9 +193,11 @@ double Tensor::item() const {
 
 void Tensor::zero_grad() {
     node->grad.assign(node->data.size(), 0.0);
-    if (node->device.type == DeviceType::CUDA) {
-        if (node->cuda_storage && node->cuda_storage->fill_grad) {
-            node->cuda_storage->fill_grad(*node->cuda_storage, node->grad.size(), 0.0f);
+    if (node->device.type == DeviceType::CUDA || node->device.type == DeviceType::Metal) {
+        TensorCudaStorage* storage = node->device.type == DeviceType::CUDA ? node->cuda_storage.get()
+                                                                           : node->metal_storage.get();
+        if (storage && storage->fill_grad) {
+            storage->fill_grad(*storage, node->grad.size(), 0.0f);
             node->host_grad_dirty = false;
             node->device_grad_dirty = true;
         } else {
@@ -209,8 +229,14 @@ void Tensor::backward() {
     std::vector<Tensor> order;
     topo_visit(*this, seen, order);
     grad().assign(1, 1.0);
-    if (node->device.type == DeviceType::CUDA && node->cuda_storage && node->cuda_storage->copy_grad_from_host) {
-        node->cuda_storage->copy_grad_from_host(*node->cuda_storage, node->grad);
+    TensorCudaStorage* storage = nullptr;
+    if (node->device.type == DeviceType::CUDA) {
+        storage = node->cuda_storage.get();
+    } else if (node->device.type == DeviceType::Metal) {
+        storage = node->metal_storage.get();
+    }
+    if (storage && storage->copy_grad_from_host) {
+        storage->copy_grad_from_host(*storage, node->grad);
         node->host_grad_dirty = false;
         node->device_grad_dirty = true;
     }

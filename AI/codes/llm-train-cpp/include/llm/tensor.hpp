@@ -6,8 +6,8 @@ namespace llm {
 
 struct TensorNode;
 
-// CUDA Tensor 的内部 device storage。公共 Tensor API 通过 shared_ptr 持有它；
-// 具体的分配、拷贝和释放逻辑由 CUDA runtime 注入。
+// CUDA / Metal Tensor 的内部 device storage。公共 Tensor API 通过 shared_ptr 持有它；
+// 具体的分配、拷贝和释放逻辑由对应 runtime 注入。
 struct TensorCudaStorage {
     void* data{nullptr};
     void* grad{nullptr};
@@ -129,13 +129,16 @@ struct TensorNode {
     // CUDA 专用 device storage。CPU/Metal 路径保持为空，具体定义在实现层。
     std::shared_ptr<TensorCudaStorage> cuda_storage;
 
-    // host data 有新写入，下一次 CUDA kernel 消费前需要同步到 device。
+    // Metal 专用 device storage。CPU/CUDA 路径保持为空，具体定义在实现层。
+    std::shared_ptr<TensorCudaStorage> metal_storage;
+
+    // host data 有新写入，下一次 GPU kernel 消费前需要同步到 device。
     bool host_data_dirty{false};
 
     // device data 有新写入，下一次 host 读取前需要同步到 host mirror。
     bool device_data_dirty{false};
 
-    // host grad 有新写入，下一次 CUDA kernel 消费前需要同步到 device。
+    // host grad 有新写入，下一次 GPU kernel 消费前需要同步到 device。
     bool host_grad_dirty{false};
 
     // device grad 有新写入，下一次 host 读取前需要同步到 host mirror。
