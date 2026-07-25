@@ -21,29 +21,28 @@ int blocks_for(int64_t count) {
     return static_cast<int>((count + kThreadsPerBlock - 1) / kThreadsPerBlock);
 }
 
-// 设备内存 RAII 包装，避免手动 cudaFree 泄漏。
-struct DeviceBuffer {
-    float* ptr{nullptr};
-    size_t count{0};
+} // namespace
 
-    DeviceBuffer() = default;
-    explicit DeviceBuffer(size_t n) : count(n) {
-        if (n > 0) {
-            cuda_check(cudaMalloc(&ptr, n * sizeof(float)), "cudaMalloc");
-        }
+namespace llm::cuda::detail {
+
+DeviceBuffer::DeviceBuffer(size_t n) : count(n) {
+    if (n > 0) {
+        cuda_check(cudaMalloc(&ptr, n * sizeof(float)), "cudaMalloc");
     }
-    DeviceBuffer(const DeviceBuffer&) = delete;
-    DeviceBuffer& operator=(const DeviceBuffer&) = delete;
-    DeviceBuffer(DeviceBuffer&& other) noexcept : ptr(other.ptr), count(other.count) {
-        other.ptr = nullptr;
-        other.count = 0;
+}
+
+DeviceBuffer::DeviceBuffer(DeviceBuffer&& other) noexcept : ptr(other.ptr), count(other.count) {
+    other.ptr = nullptr;
+    other.count = 0;
+}
+
+DeviceBuffer::~DeviceBuffer() {
+    if (ptr != nullptr) {
+        cudaFree(ptr);
     }
-    ~DeviceBuffer() {
-        if (ptr != nullptr) {
-            cudaFree(ptr);
-        }
-    }
-};
+}
+
+namespace {
 
 DeviceBuffer upload(const std::vector<float>& host) {
     DeviceBuffer buf(host.size());
@@ -66,8 +65,6 @@ std::vector<float> download(const DeviceBuffer& buf) {
 }
 
 } // namespace
-
-namespace llm::cuda::detail {
 
 CudaRuntime& CudaRuntime::instance() {
     static CudaRuntime runtime;

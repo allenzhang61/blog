@@ -1,5 +1,6 @@
 #include "llm/device.hpp"
 
+#include <cstdlib>
 #include <stdexcept>
 
 namespace llm {
@@ -41,6 +42,24 @@ Device Device::parse(const std::string& text) {
 
 std::string Device::str() const {
     return to_string(type) + ":" + std::to_string(index);
+}
+
+Device select_device(const std::string& backend) {
+    if (backend.empty()) {
+        return {};
+    }
+    return Device::parse(backend);
+}
+
+Device select_device_from_arg_or_env(const std::string& arg, const char* env_name) {
+    if (!arg.empty()) {
+        return select_device(arg);
+    }
+    const char* value = std::getenv(env_name);
+    if (value == nullptr || std::string(value).empty()) {
+        return {};
+    }
+    return select_device(value);
 }
 
 } // namespace llm

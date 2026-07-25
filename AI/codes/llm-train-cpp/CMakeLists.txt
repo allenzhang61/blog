@@ -18,8 +18,6 @@ set(LLM_CPP_SOURCES
     src/backend/cpu/CPUBackend.cpp
     src/backend/metal/MetalDeviceBackend.cpp
     src/backend/cuda/CUDADeviceBackend.cpp
-    src/backend/UnimplementedBackend.cpp
-    src/backend/device_select.cpp
     src/kernels/cpu/elementwise.cpp
     src/kernels/cpu/matmul.cpp
     src/kernels/cpu/softmax.cpp
@@ -60,7 +58,7 @@ if(LLM_CPP_ENABLE_CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
         # CUDA 开启：真实 kernel + 委派实现（对应 Metal 的 MetalKernels.mm + MetalBackend.mm）。
-        list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_kernels.cu)
+        list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_ops.cu)
         list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_device_kernels.cu)
         list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_runtime.cu)
         list(APPEND LLM_CPP_SOURCES src/backend/cuda/CUDABackend.cpp)

@@ -10,6 +10,19 @@
 
 namespace llm::cuda::detail {
 
+// 设备内存 RAII 包装，避免手动 cudaFree 泄漏。
+struct DeviceBuffer {
+    float* ptr{nullptr};
+    size_t count{0};
+
+    DeviceBuffer() = default;
+    explicit DeviceBuffer(size_t n);
+    DeviceBuffer(const DeviceBuffer&) = delete;
+    DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+    DeviceBuffer(DeviceBuffer&& other) noexcept;
+    ~DeviceBuffer();
+};
+
 // CUDA host 端调度与内存搬运封装。
 class CudaRuntime {
 public:

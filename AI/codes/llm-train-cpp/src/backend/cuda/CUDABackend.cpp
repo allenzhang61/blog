@@ -2,7 +2,7 @@
 #include "../../kernels/cuda/cuda_ops.hpp"
 
 // 这个文件是「已启用 CUDA 编译」时使用的实现（对应 Metal 的 MetalBackend.mm）。
-// cuda_backend_* 直接委派给 src/kernels/cuda/cuda_kernels.cu 里的 llm::cuda:: 运行时。
+// cuda_backend_* 直接委派给 src/kernels/cuda/cuda_ops.cu 里的 llm::cuda:: 运行时。
 
 namespace llm {
 
