@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "../../tensor/tensor_cuda_storage.hpp"
+#include "llm/tensor.hpp"
 
 namespace llm::metal::detail {
 

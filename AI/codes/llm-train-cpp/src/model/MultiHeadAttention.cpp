@@ -2,6 +2,8 @@
 
 #include "llm/ops.hpp"
 
+#include <stdexcept>
+
 namespace llm {
 
 MultiHeadAttention::MultiHeadAttention(int64_t d_in, int64_t d_out_, int64_t context, int64_t heads,

@@ -1,5 +1,11 @@
 #include "llm/tensor.hpp"
 
+#include <algorithm>
+#include <random>
+#include <stdexcept>
+#include <unordered_map>
+#include <utility>
+
 namespace llm {
 
 TensorCudaStorage::~TensorCudaStorage() {

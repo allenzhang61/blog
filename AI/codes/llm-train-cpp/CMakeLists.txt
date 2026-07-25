@@ -9,9 +9,10 @@ option(LLM_CPP_ENABLE_METAL "Build the Metal backend on Apple platforms" OFF)
 option(LLM_CPP_ENABLE_CUDA "Build the CUDA backend when CUDA Toolkit is available" OFF)
 
 set(LLM_CPP_SOURCES
-    src/core/core.cpp
+    src/utils/device.cpp
+    src/utils/utils.cpp
     src/tensor/tensor.cpp
-    src/ops/dispatch.cpp
+    src/ops/ops.cpp
     src/backend/Backend.cpp
     src/backend/BackendRegistry.cpp
     src/backend/cpu/CPUBackend.cpp

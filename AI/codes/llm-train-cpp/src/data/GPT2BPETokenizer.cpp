@@ -1,5 +1,11 @@
 #include "llm/data/GPT2BPETokenizer.hpp"
 
+#include <algorithm>
+#include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
 namespace llm {
 
 GPT2BPETokenizer::GPT2BPETokenizer(const std::string& ranks_path) {

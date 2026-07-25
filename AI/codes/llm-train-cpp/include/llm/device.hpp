@@ -1,24 +1,6 @@
 #pragma once
 
-#include <algorithm>
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <fstream>
-#include <functional>
-#include <iomanip>
-#include <iostream>
-#include <limits>
-#include <map>
-#include <memory>
-#include <numeric>
-#include <random>
-#include <sstream>
-#include <stdexcept>
 #include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 
 namespace llm {
 
@@ -46,17 +28,5 @@ struct Device {
     // 转成字符串形式，便于日志和错误信息展示。
     std::string str() const;
 };
-
-// 计算 shape 中所有维度的乘积，也就是张量元素总数。
-int64_t product(const std::vector<int64_t>& shape);
-
-// 将负数维度转换为正数维度，例如 -1 表示最后一维。
-int64_t canonical_dim(int64_t dim, int64_t rank);
-
-// 简单断言工具；条件不满足时抛出异常。
-void check(bool cond, const std::string& message);
-
-// 浮点近似比较工具，常用于测试数值是否足够接近。
-void check_close(double a, double b, double tol, const std::string& message);
 
 } // namespace llm

@@ -21,7 +21,7 @@ include/llm/backend/ # Backend、BackendRegistry、CPUBackend 等按类拆分的
 include/llm/data/    # GPT2BPETokenizer、DataLoader
 include/llm/model/   # Module、Linear、Embedding、GPTModel 等模型类
 include/llm/train/   # AdamW、Trainer
-src/core/         # 基础类型、Device、检查函数
+src/utils/        # Device、shape 工具与检查函数
 src/tensor/       # Tensor 与动态图 autograd
 src/ops/          # 统一算子入口，向下调用 backend / kernels
 src/backend/      # BackendRegistry、CPUBackend、CUDABackend、MetalBackend 等后端入口

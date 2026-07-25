@@ -2,6 +2,8 @@
 
 #include "llm/ops.hpp"
 
+#include <stdexcept>
+
 namespace llm {
 
 Linear::Linear(int64_t in_features, int64_t out_features, bool bias_enabled, Device device)

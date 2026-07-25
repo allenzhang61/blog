@@ -1,6 +1,10 @@
 #pragma once
 
-#include "llm/tensor.hpp"
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace llm {
 

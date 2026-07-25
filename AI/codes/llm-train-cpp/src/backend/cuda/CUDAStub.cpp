@@ -1,6 +1,8 @@
 #include "llm/backend/Backend.hpp"
 #include "../../kernels/cuda/cuda_ops.hpp"
 
+#include <stdexcept>
+
 // 这个文件是「未启用 CUDA 编译」时使用的 stub。
 // CMake 在 LLM_CPP_ENABLE_CUDA=ON 且找到 CUDA Toolkit 时，会改用：
 // - src/backend/cuda/CUDABackend.cpp

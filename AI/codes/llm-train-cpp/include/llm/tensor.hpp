@@ -1,6 +1,13 @@
 #pragma once
 
-#include "llm/core.hpp"
+#include "llm/device.hpp"
+#include "llm/utils.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <vector>
 
 namespace llm {
 

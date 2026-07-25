@@ -1,5 +1,8 @@
 #include "llm/train/AdamW.hpp"
 
+#include <cmath>
+#include <utility>
+
 #if LLM_CPP_ENABLE_CUDA_COMPILED
 #include "../kernels/cuda/cuda_runtime.hpp"
 #endif

@@ -5,6 +5,8 @@
 #import <Metal/Metal.h>
 
 #include <cstring>
+#include <map>
+#include <stdexcept>
 
 namespace {
 

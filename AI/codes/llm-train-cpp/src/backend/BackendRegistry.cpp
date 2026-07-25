@@ -3,6 +3,8 @@
 #include "llm/backend/CUDABackend.hpp"
 #include "llm/backend/MetalBackend.hpp"
 
+#include <stdexcept>
+
 namespace llm {
 
 Backend& BackendRegistry::get(Device device) {

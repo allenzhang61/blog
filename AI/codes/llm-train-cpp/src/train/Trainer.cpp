@@ -2,6 +2,10 @@
 
 #include "llm/ops.hpp"
 
+#include <algorithm>
+#include <stdexcept>
+#include <utility>
+
 namespace llm {
 
 double Trainer::train_one_epoch(GPTModel& model, DataLoader& loader, AdamW& optim) {

@@ -1,5 +1,9 @@
 #include "llm/data/DataLoader.hpp"
 
+#include <algorithm>
+#include <random>
+#include <utility>
+
 namespace llm {
 
 DataLoader::DataLoader(std::vector<int64_t> ids, int64_t batch, int64_t context,

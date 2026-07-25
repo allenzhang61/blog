@@ -1,6 +1,7 @@
 #pragma once
 
-#include "llm/core.hpp"
+#include "llm/device.hpp"
+#include "llm/utils.hpp"
 #include "llm/tensor.hpp"
 #include "llm/ops.hpp"
 #include "llm/backend.hpp"

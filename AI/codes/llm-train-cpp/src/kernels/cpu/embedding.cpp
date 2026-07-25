@@ -1,5 +1,7 @@
 #include "cpu_ops.hpp"
 
+#include <stdexcept>
+
 namespace llm {
 namespace cpu {
 
