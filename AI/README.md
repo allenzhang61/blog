@@ -68,6 +68,7 @@
   - 时间序列基础模型
     - [time series model - introduce](chapter-03/03-027.md)
     - [time series model - code](chapter-03/03-028.ipynb)
+  - [nanoGPT + unpc data](chapter-03/03-029.md)
   - 实现一个用于文本生成的GPT模型
     - [实现 dummy 框架](chapter-03/03-007.ipynb)
     - [快捷连接示例](chapter-03/03-009.ipynb)
