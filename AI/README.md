@@ -64,7 +64,10 @@
     - [简化计算过程](chapter-03/03-012.ipynb)
     - [逐步计算注意力权重](chapter-03/03-013.ipynb)
     - [实现一个简洁的自注意力机制 Python 类](chapter-03/03-014.ipynb)
-    - [QKV 通俗理解](chapter-03/03-027.md)
+    - QKV 通俗理解 //todo
+  - 时间序列基础模型
+    - [time series model - introduce](chapter-03/03-027.md)
+    - [time series model - code](chapter-03/03-028.ipynb)
   - 实现一个用于文本生成的GPT模型
     - [实现 dummy 框架](chapter-03/03-007.ipynb)
     - [快捷连接示例](chapter-03/03-009.ipynb)
@@ -286,6 +289,7 @@
 
 ## 资料
 
+- 业界经验：https://developer.aliyun.com/article/931983
 - 概率论与数理统计(浙大四版)
 - 机器学习
   - Machine-Learning 《机器学习（西瓜书）》_周志华
