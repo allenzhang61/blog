@@ -23,7 +23,7 @@ std::vector<double> to_double(const std::vector<float>& values) {
     return std::vector<double>(values.begin(), values.end());
 }
 
-llm::TensorCudaStorage& ensure_cuda_storage(const llm::Tensor& t) {
+llm::TensorStorage& ensure_cuda_storage(const llm::Tensor& t) {
     if (!t.node->cuda_storage) {
         t.node->cuda_storage = llm::cuda::detail::CudaRuntime::instance().create_tensor_storage();
     }
@@ -31,7 +31,7 @@ llm::TensorCudaStorage& ensure_cuda_storage(const llm::Tensor& t) {
 }
 
 void ensure_cuda_data(const llm::Tensor& t) {
-    llm::TensorCudaStorage& storage = ensure_cuda_storage(t);
+    llm::TensorStorage& storage = ensure_cuda_storage(t);
     if (t.node->host_data_dirty || storage.data == nullptr || storage.data_count < static_cast<size_t>(t.numel())) {
         llm::cuda::detail::CudaRuntime::instance().copy_data_from_host(storage, t.node->data);
         t.node->host_data_dirty = false;
@@ -40,7 +40,7 @@ void ensure_cuda_data(const llm::Tensor& t) {
 }
 
 void ensure_cuda_grad(const llm::Tensor& t) {
-    llm::TensorCudaStorage& storage = ensure_cuda_storage(t);
+    llm::TensorStorage& storage = ensure_cuda_storage(t);
     if (t.node->grad.empty()) {
         t.node->grad.assign(static_cast<size_t>(t.numel()), 0.0);
         t.node->host_grad_dirty = true;
@@ -132,8 +132,8 @@ Tensor mul(const Tensor& a, const Tensor& b) {
             ensure_cuda_grad(out);
             ensure_cuda_data(a);
             ensure_cuda_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_cuda_grad(a);
                 a_grad = a.node->cuda_storage.get();
@@ -190,8 +190,8 @@ Tensor div(const Tensor& a, const Tensor& b) {
             ensure_cuda_grad(out);
             ensure_cuda_data(a);
             ensure_cuda_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_cuda_grad(a);
                 a_grad = a.node->cuda_storage.get();
@@ -371,8 +371,8 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
             ensure_cuda_grad(out);
             ensure_cuda_data(a);
             ensure_cuda_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_cuda_grad(a);
                 a_grad = a.node->cuda_storage.get();
@@ -417,8 +417,8 @@ Tensor batch_matmul(const Tensor& a, const Tensor& b) {
             ensure_cuda_grad(out);
             ensure_cuda_data(a);
             ensure_cuda_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_cuda_grad(a);
                 a_grad = a.node->cuda_storage.get();
@@ -580,9 +580,9 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
             ensure_cuda_grad(out);
             ensure_cuda_data(x);
             ensure_cuda_data(scale);
-            llm::TensorCudaStorage* x_grad = nullptr;
-            llm::TensorCudaStorage* scale_grad = nullptr;
-            llm::TensorCudaStorage* shift_grad = nullptr;
+            llm::TensorStorage* x_grad = nullptr;
+            llm::TensorStorage* scale_grad = nullptr;
+            llm::TensorStorage* shift_grad = nullptr;
             if (scale.requires_grad()) {
                 ensure_cuda_grad(scale);
                 scale_grad = scale.node->cuda_storage.get();

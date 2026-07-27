@@ -12,6 +12,7 @@ int64_t product(const std::vector<int64_t>& shape) {
     if (shape.empty()) {
         return 1;
     }
+    // 从初始值 1 开始，用乘法把 shape 里的每个维度依次累乘，得到元素总数（如 {2,3,4} -> 24）。
     return std::accumulate(shape.begin(), shape.end(), int64_t{1}, std::multiplies<int64_t>());
 }
 
@@ -23,20 +24,6 @@ int64_t canonical_dim(int64_t dim, int64_t rank) {
         throw std::runtime_error("dim out of range");
     }
     return dim;
-}
-
-void check(bool cond, const std::string& message) {
-    if (!cond) {
-        throw std::runtime_error("check failed: " + message);
-    }
-}
-
-void check_close(double a, double b, double tol, const std::string& message) {
-    if (std::fabs(a - b) > tol) {
-        std::ostringstream oss;
-        oss << message << " expected " << b << " got " << a;
-        throw std::runtime_error(oss.str());
-    }
 }
 
 } // namespace llm

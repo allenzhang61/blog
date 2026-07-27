@@ -87,7 +87,7 @@ void CudaRuntime::require() const {
 
 namespace {
 
-void release_tensor_storage(TensorCudaStorage& storage) {
+void release_tensor_storage(TensorStorage& storage) {
     if (storage.data != nullptr) {
         cudaFree(storage.data);
         storage.data = nullptr;
@@ -137,71 +137,71 @@ void ensure_float_buffer(void*& ptr, size_t& current_count, size_t requested_cou
     current_count = requested_count;
 }
 
-void tensor_copy_data_from_host(TensorCudaStorage& storage, const std::vector<double>& host) {
+void tensor_copy_data_from_host(TensorStorage& storage, const std::vector<double>& host) {
     ensure_float_buffer(storage.data, storage.data_count, host.size(), "cuda tensor data buffer");
     copy_from_host_to_float_buffer(storage.data, host, "cuda tensor data H2D");
 }
 
-void tensor_copy_data_to_host(TensorCudaStorage& storage, std::vector<double>& host) {
+void tensor_copy_data_to_host(TensorStorage& storage, std::vector<double>& host) {
     copy_from_float_buffer_to_host(storage.data, storage.data_count, host, "cuda tensor data D2H");
 }
 
-void tensor_copy_grad_from_host(TensorCudaStorage& storage, const std::vector<double>& host) {
+void tensor_copy_grad_from_host(TensorStorage& storage, const std::vector<double>& host) {
     ensure_float_buffer(storage.grad, storage.grad_count, host.size(), "cuda tensor grad buffer");
     copy_from_host_to_float_buffer(storage.grad, host, "cuda tensor grad H2D");
 }
 
-void tensor_copy_grad_to_host(TensorCudaStorage& storage, std::vector<double>& host) {
+void tensor_copy_grad_to_host(TensorStorage& storage, std::vector<double>& host) {
     copy_from_float_buffer_to_host(storage.grad, storage.grad_count, host, "cuda tensor grad D2H");
 }
 
 } // namespace
 
-std::shared_ptr<TensorCudaStorage> CudaRuntime::create_tensor_storage() {
+std::shared_ptr<TensorStorage> CudaRuntime::create_tensor_storage() {
     require();
-    auto storage = std::make_shared<TensorCudaStorage>();
+    auto storage = std::make_shared<TensorStorage>();
     storage->release = release_tensor_storage;
     storage->copy_data_from_host = tensor_copy_data_from_host;
     storage->copy_data_to_host = tensor_copy_data_to_host;
     storage->copy_grad_from_host = tensor_copy_grad_from_host;
     storage->copy_grad_to_host = tensor_copy_grad_to_host;
-    storage->fill_grad = [](TensorCudaStorage& s, size_t count, float value) {
+    storage->fill_grad = [](TensorStorage& s, size_t count, float value) {
         CudaRuntime::instance().fill_grad_buffer(s, count, value);
     };
     return storage;
 }
 
-void CudaRuntime::ensure_data_buffer(TensorCudaStorage& storage, size_t count) {
+void CudaRuntime::ensure_data_buffer(TensorStorage& storage, size_t count) {
     require();
     ensure_float_buffer(storage.data, storage.data_count, count, "cuda tensor data buffer");
 }
 
-void CudaRuntime::ensure_grad_buffer(TensorCudaStorage& storage, size_t count) {
+void CudaRuntime::ensure_grad_buffer(TensorStorage& storage, size_t count) {
     require();
     ensure_float_buffer(storage.grad, storage.grad_count, count, "cuda tensor grad buffer");
 }
 
-void CudaRuntime::copy_data_from_host(TensorCudaStorage& storage, const std::vector<double>& host) {
+void CudaRuntime::copy_data_from_host(TensorStorage& storage, const std::vector<double>& host) {
     require();
     tensor_copy_data_from_host(storage, host);
 }
 
-void CudaRuntime::copy_data_to_host(TensorCudaStorage& storage, std::vector<double>& host) {
+void CudaRuntime::copy_data_to_host(TensorStorage& storage, std::vector<double>& host) {
     require();
     tensor_copy_data_to_host(storage, host);
 }
 
-void CudaRuntime::copy_grad_from_host(TensorCudaStorage& storage, const std::vector<double>& host) {
+void CudaRuntime::copy_grad_from_host(TensorStorage& storage, const std::vector<double>& host) {
     require();
     tensor_copy_grad_from_host(storage, host);
 }
 
-void CudaRuntime::copy_grad_to_host(TensorCudaStorage& storage, std::vector<double>& host) {
+void CudaRuntime::copy_grad_to_host(TensorStorage& storage, std::vector<double>& host) {
     require();
     tensor_copy_grad_to_host(storage, host);
 }
 
-void CudaRuntime::fill_data_buffer(TensorCudaStorage& storage, size_t count, float value) {
+void CudaRuntime::fill_data_buffer(TensorStorage& storage, size_t count, float value) {
     require();
     ensure_data_buffer(storage, count);
     fill_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -209,7 +209,7 @@ void CudaRuntime::fill_data_buffer(TensorCudaStorage& storage, size_t count, flo
     sync();
 }
 
-void CudaRuntime::fill_grad_buffer(TensorCudaStorage& storage, size_t count, float value) {
+void CudaRuntime::fill_grad_buffer(TensorStorage& storage, size_t count, float value) {
     require();
     ensure_grad_buffer(storage, count);
     fill_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -217,16 +217,16 @@ void CudaRuntime::fill_grad_buffer(TensorCudaStorage& storage, size_t count, flo
     sync();
 }
 
-void CudaRuntime::set_data_scalar(TensorCudaStorage& storage, float value) {
+void CudaRuntime::set_data_scalar(TensorStorage& storage, float value) {
     fill_data_buffer(storage, 1, value);
 }
 
-void CudaRuntime::set_grad_scalar(TensorCudaStorage& storage, float value) {
+void CudaRuntime::set_grad_scalar(TensorStorage& storage, float value) {
     fill_grad_buffer(storage, 1, value);
 }
 
-void CudaRuntime::elementwise2_buffer(const char* op, TensorCudaStorage& out,
-                                      const TensorCudaStorage& a, const TensorCudaStorage& b,
+void CudaRuntime::elementwise2_buffer(const char* op, TensorStorage& out,
+                                      const TensorStorage& a, const TensorStorage& b,
                                       unsigned int b_size, size_t count) {
     require();
     ensure_data_buffer(out, count);
@@ -250,7 +250,7 @@ void CudaRuntime::elementwise2_buffer(const char* op, TensorCudaStorage& out,
     sync();
 }
 
-void CudaRuntime::mul_scalar_buffer(TensorCudaStorage& out, const TensorCudaStorage& a,
+void CudaRuntime::mul_scalar_buffer(TensorStorage& out, const TensorStorage& a,
                                     float scalar, size_t count) {
     require();
     ensure_data_buffer(out, count);
@@ -260,7 +260,7 @@ void CudaRuntime::mul_scalar_buffer(TensorCudaStorage& out, const TensorCudaStor
     sync();
 }
 
-void CudaRuntime::unary_buffer(const char* op, TensorCudaStorage& out, const TensorCudaStorage& a,
+void CudaRuntime::unary_buffer(const char* op, TensorStorage& out, const TensorStorage& a,
                                float scalar, size_t count) {
     require();
     ensure_data_buffer(out, count);
@@ -290,7 +290,7 @@ void CudaRuntime::unary_buffer(const char* op, TensorCudaStorage& out, const Ten
     sync();
 }
 
-void CudaRuntime::gather_buffer(TensorCudaStorage& out, const TensorCudaStorage& a,
+void CudaRuntime::gather_buffer(TensorStorage& out, const TensorStorage& a,
                                 const std::vector<unsigned int>& index) {
     require();
     int64_t count = static_cast<int64_t>(index.size());
@@ -306,7 +306,7 @@ void CudaRuntime::gather_buffer(TensorCudaStorage& out, const TensorCudaStorage&
     cudaFree(d_index);
 }
 
-void CudaRuntime::scale_data_buffer(TensorCudaStorage& storage, size_t count, float scalar) {
+void CudaRuntime::scale_data_buffer(TensorStorage& storage, size_t count, float scalar) {
     require();
     mul_scalar_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<const float*>(storage.data), static_cast<float*>(storage.data), scalar,
@@ -314,8 +314,8 @@ void CudaRuntime::scale_data_buffer(TensorCudaStorage& storage, size_t count, fl
     sync();
 }
 
-void CudaRuntime::reduce_buffer(const char* op, TensorCudaStorage& out,
-                                const TensorCudaStorage& a, size_t count) {
+void CudaRuntime::reduce_buffer(const char* op, TensorStorage& out,
+                                const TensorStorage& a, size_t count) {
     require();
     ensure_data_buffer(out, 1);
     if (std::string(op) == "sum") {
@@ -328,8 +328,8 @@ void CudaRuntime::reduce_buffer(const char* op, TensorCudaStorage& out,
     sync();
 }
 
-void CudaRuntime::matmul_buffer(TensorCudaStorage& out, const TensorCudaStorage& a,
-                                const TensorCudaStorage& b, unsigned int m, unsigned int k,
+void CudaRuntime::matmul_buffer(TensorStorage& out, const TensorStorage& a,
+                                const TensorStorage& b, unsigned int m, unsigned int k,
                                 unsigned int n) {
     require();
     ensure_data_buffer(out, static_cast<size_t>(m) * n);
@@ -341,8 +341,8 @@ void CudaRuntime::matmul_buffer(TensorCudaStorage& out, const TensorCudaStorage&
     sync();
 }
 
-void CudaRuntime::batch_matmul_buffer(TensorCudaStorage& out, const TensorCudaStorage& a,
-                                      const TensorCudaStorage& b, unsigned int batches,
+void CudaRuntime::batch_matmul_buffer(TensorStorage& out, const TensorStorage& a,
+                                      const TensorStorage& b, unsigned int batches,
                                       unsigned int heads, unsigned int m, unsigned int k,
                                       unsigned int n) {
     require();
@@ -354,7 +354,7 @@ void CudaRuntime::batch_matmul_buffer(TensorCudaStorage& out, const TensorCudaSt
     sync();
 }
 
-void CudaRuntime::softmax_buffer(TensorCudaStorage& out, const TensorCudaStorage& a,
+void CudaRuntime::softmax_buffer(TensorStorage& out, const TensorStorage& a,
                                  unsigned int rows, unsigned int width) {
     require();
     ensure_data_buffer(out, static_cast<size_t>(rows) * width);
@@ -363,7 +363,7 @@ void CudaRuntime::softmax_buffer(TensorCudaStorage& out, const TensorCudaStorage
     sync();
 }
 
-void CudaRuntime::log_softmax_buffer(TensorCudaStorage& out, const TensorCudaStorage& a,
+void CudaRuntime::log_softmax_buffer(TensorStorage& out, const TensorStorage& a,
                                      unsigned int rows, unsigned int width) {
     require();
     ensure_data_buffer(out, static_cast<size_t>(rows) * width);
@@ -372,8 +372,8 @@ void CudaRuntime::log_softmax_buffer(TensorCudaStorage& out, const TensorCudaSto
     sync();
 }
 
-void CudaRuntime::layernorm_buffer(TensorCudaStorage& out, const TensorCudaStorage& x,
-                                   const TensorCudaStorage& scale, const TensorCudaStorage& shift,
+void CudaRuntime::layernorm_buffer(TensorStorage& out, const TensorStorage& x,
+                                   const TensorStorage& scale, const TensorStorage& shift,
                                    unsigned int rows, unsigned int width, float eps) {
     require();
     ensure_data_buffer(out, static_cast<size_t>(rows) * width);
@@ -383,8 +383,8 @@ void CudaRuntime::layernorm_buffer(TensorCudaStorage& out, const TensorCudaStora
     sync();
 }
 
-void CudaRuntime::embedding_buffer(TensorCudaStorage& out, const TensorCudaStorage& ids,
-                                   const TensorCudaStorage& weight, unsigned int count,
+void CudaRuntime::embedding_buffer(TensorStorage& out, const TensorStorage& ids,
+                                   const TensorStorage& weight, unsigned int count,
                                    unsigned int dim) {
     require();
     int64_t total = static_cast<int64_t>(count) * dim;
@@ -395,8 +395,8 @@ void CudaRuntime::embedding_buffer(TensorCudaStorage& out, const TensorCudaStora
     sync();
 }
 
-void CudaRuntime::cross_entropy_loss_buffer(TensorCudaStorage& out, const TensorCudaStorage& logits,
-                                            const TensorCudaStorage& targets, unsigned int rows,
+void CudaRuntime::cross_entropy_loss_buffer(TensorStorage& out, const TensorStorage& logits,
+                                            const TensorStorage& targets, unsigned int rows,
                                             unsigned int vocab) {
     require();
     ensure_data_buffer(out, 1);
@@ -406,7 +406,7 @@ void CudaRuntime::cross_entropy_loss_buffer(TensorCudaStorage& out, const Tensor
     sync();
 }
 
-void CudaRuntime::add_grad(TensorCudaStorage& target, const TensorCudaStorage& out_grad,
+void CudaRuntime::add_grad(TensorStorage& target, const TensorStorage& out_grad,
                            unsigned int target_size, size_t count, float scale) {
     require();
     add_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -415,9 +415,9 @@ void CudaRuntime::add_grad(TensorCudaStorage& target, const TensorCudaStorage& o
     sync();
 }
 
-void CudaRuntime::elementwise_grad(const char* op, TensorCudaStorage* a_grad, TensorCudaStorage* b_grad,
-                                   const TensorCudaStorage& a, const TensorCudaStorage& b,
-                                   const TensorCudaStorage& out_grad, size_t count) {
+void CudaRuntime::elementwise_grad(const char* op, TensorStorage* a_grad, TensorStorage* b_grad,
+                                   const TensorStorage& a, const TensorStorage& b,
+                                   const TensorStorage& out_grad, size_t count) {
     require();
     int blocks = blocks_for(static_cast<int64_t>(count));
     if (std::string(op) == "mul") {
@@ -436,7 +436,7 @@ void CudaRuntime::elementwise_grad(const char* op, TensorCudaStorage* a_grad, Te
     sync();
 }
 
-void CudaRuntime::mul_scalar_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out_grad,
+void CudaRuntime::mul_scalar_grad(TensorStorage& a_grad, const TensorStorage& out_grad,
                                   float scalar, size_t count) {
     require();
     mul_scalar_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -445,8 +445,8 @@ void CudaRuntime::mul_scalar_grad(TensorCudaStorage& a_grad, const TensorCudaSto
     sync();
 }
 
-void CudaRuntime::pow_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& a,
-                           const TensorCudaStorage& out_grad, float exponent, size_t count) {
+void CudaRuntime::pow_grad(TensorStorage& a_grad, const TensorStorage& a,
+                           const TensorStorage& out_grad, float exponent, size_t count) {
     require();
     pow_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<float*>(a_grad.grad), static_cast<const float*>(a.data),
@@ -454,7 +454,7 @@ void CudaRuntime::pow_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& a
     sync();
 }
 
-void CudaRuntime::reduce_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out_grad,
+void CudaRuntime::reduce_grad(TensorStorage& a_grad, const TensorStorage& out_grad,
                               size_t count, float scale) {
     require();
     reduce_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -463,7 +463,7 @@ void CudaRuntime::reduce_grad(TensorCudaStorage& a_grad, const TensorCudaStorage
     sync();
 }
 
-void CudaRuntime::scatter_add_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out_grad,
+void CudaRuntime::scatter_add_grad(TensorStorage& a_grad, const TensorStorage& out_grad,
                                    const std::vector<unsigned int>& index) {
     require();
     unsigned int* d_index = nullptr;
@@ -478,9 +478,9 @@ void CudaRuntime::scatter_add_grad(TensorCudaStorage& a_grad, const TensorCudaSt
     cudaFree(d_index);
 }
 
-void CudaRuntime::matmul_grad(TensorCudaStorage* a_grad, TensorCudaStorage* b_grad,
-                              const TensorCudaStorage& a, const TensorCudaStorage& b,
-                              const TensorCudaStorage& out_grad, unsigned int m, unsigned int k,
+void CudaRuntime::matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad,
+                              const TensorStorage& a, const TensorStorage& b,
+                              const TensorStorage& out_grad, unsigned int m, unsigned int k,
                               unsigned int n) {
     require();
     dim3 threads(16, 16, 1);
@@ -499,9 +499,9 @@ void CudaRuntime::matmul_grad(TensorCudaStorage* a_grad, TensorCudaStorage* b_gr
     sync();
 }
 
-void CudaRuntime::batch_matmul_grad(TensorCudaStorage* a_grad, TensorCudaStorage* b_grad,
-                                    const TensorCudaStorage& a, const TensorCudaStorage& b,
-                                    const TensorCudaStorage& out_grad, unsigned int batches,
+void CudaRuntime::batch_matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad,
+                                    const TensorStorage& a, const TensorStorage& b,
+                                    const TensorStorage& out_grad, unsigned int batches,
                                     unsigned int heads, unsigned int m, unsigned int k,
                                     unsigned int n) {
     require();
@@ -520,8 +520,8 @@ void CudaRuntime::batch_matmul_grad(TensorCudaStorage* a_grad, TensorCudaStorage
     sync();
 }
 
-void CudaRuntime::softmax_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out,
-                               const TensorCudaStorage& out_grad, unsigned int rows,
+void CudaRuntime::softmax_grad(TensorStorage& a_grad, const TensorStorage& out,
+                               const TensorStorage& out_grad, unsigned int rows,
                                unsigned int width) {
     require();
     softmax_grad_kernel<<<blocks_for(rows), kThreadsPerBlock>>>(
@@ -530,8 +530,8 @@ void CudaRuntime::softmax_grad(TensorCudaStorage& a_grad, const TensorCudaStorag
     sync();
 }
 
-void CudaRuntime::cross_entropy_grad(TensorCudaStorage& logits_grad, const TensorCudaStorage& logits,
-                                     const TensorCudaStorage& targets, const TensorCudaStorage& out_grad,
+void CudaRuntime::cross_entropy_grad(TensorStorage& logits_grad, const TensorStorage& logits,
+                                     const TensorStorage& targets, const TensorStorage& out_grad,
                                      unsigned int rows, unsigned int vocab) {
     require();
     int64_t total = static_cast<int64_t>(rows) * vocab;
@@ -541,8 +541,8 @@ void CudaRuntime::cross_entropy_grad(TensorCudaStorage& logits_grad, const Tenso
     sync();
 }
 
-void CudaRuntime::embedding_grad(TensorCudaStorage& weight_grad, const TensorCudaStorage& ids,
-                                 const TensorCudaStorage& out_grad, unsigned int count,
+void CudaRuntime::embedding_grad(TensorStorage& weight_grad, const TensorStorage& ids,
+                                 const TensorStorage& out_grad, unsigned int count,
                                  unsigned int dim) {
     require();
     int64_t total = static_cast<int64_t>(count) * dim;
@@ -552,9 +552,9 @@ void CudaRuntime::embedding_grad(TensorCudaStorage& weight_grad, const TensorCud
     sync();
 }
 
-void CudaRuntime::layernorm_grad(TensorCudaStorage* x_grad, TensorCudaStorage* scale_grad,
-                                 TensorCudaStorage* shift_grad, const TensorCudaStorage& x,
-                                 const TensorCudaStorage& scale, const TensorCudaStorage& out_grad,
+void CudaRuntime::layernorm_grad(TensorStorage* x_grad, TensorStorage* scale_grad,
+                                 TensorStorage* shift_grad, const TensorStorage& x,
+                                 const TensorStorage& scale, const TensorStorage& out_grad,
                                  unsigned int rows, unsigned int width, float eps) {
     require();
     int64_t total = static_cast<int64_t>(rows) * width;
@@ -574,8 +574,8 @@ void CudaRuntime::layernorm_grad(TensorCudaStorage* x_grad, TensorCudaStorage* s
     sync();
 }
 
-void CudaRuntime::gelu_grad(TensorCudaStorage& x_grad, const TensorCudaStorage& x,
-                            const TensorCudaStorage& out_grad, size_t count) {
+void CudaRuntime::gelu_grad(TensorStorage& x_grad, const TensorStorage& x,
+                            const TensorStorage& out_grad, size_t count) {
     require();
     gelu_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<float*>(x_grad.grad), static_cast<const float*>(x.data),
@@ -583,8 +583,8 @@ void CudaRuntime::gelu_grad(TensorCudaStorage& x_grad, const TensorCudaStorage& 
     sync();
 }
 
-void CudaRuntime::adamw_update(TensorCudaStorage& param, TensorCudaStorage& grad,
-                               TensorCudaStorage& m, TensorCudaStorage& v, size_t count,
+void CudaRuntime::adamw_update(TensorStorage& param, TensorStorage& grad,
+                               TensorStorage& m, TensorStorage& v, size_t count,
                                float lr, float weight_decay, float beta1, float beta2,
                                float eps, float bias_correction1, float bias_correction2) {
     require();
@@ -597,7 +597,7 @@ void CudaRuntime::adamw_update(TensorCudaStorage& param, TensorCudaStorage& grad
     sync();
 }
 
-void CudaRuntime::causal_mask_buffer(TensorCudaStorage& out, const TensorCudaStorage& scores,
+void CudaRuntime::causal_mask_buffer(TensorStorage& out, const TensorStorage& scores,
                                      unsigned int batches, unsigned int heads,
                                      unsigned int sequence_length, float mask_value) {
     require();
@@ -609,7 +609,7 @@ void CudaRuntime::causal_mask_buffer(TensorCudaStorage& out, const TensorCudaSto
     sync();
 }
 
-void CudaRuntime::causal_mask_grad(TensorCudaStorage& scores_grad, const TensorCudaStorage& out_grad,
+void CudaRuntime::causal_mask_grad(TensorStorage& scores_grad, const TensorStorage& out_grad,
                                    unsigned int batches, unsigned int heads,
                                    unsigned int sequence_length) {
     require();

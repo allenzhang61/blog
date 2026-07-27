@@ -108,8 +108,16 @@ if(LLM_CPP_ENABLE_METAL_COMPILED)
     target_link_libraries(llm_train_cpp PUBLIC ${FOUNDATION_FRAMEWORK} ${METAL_FRAMEWORK})
 endif()
 
-add_executable(llm_cpp_tests tests/test_main.cpp)
-target_link_libraries(llm_cpp_tests PRIVATE llm_train_cpp)
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+add_executable(llm_cpp_tests tests/test_cpu.cpp tests/utils/test_utils.cpp tests/utils/test_device.cpp)
+target_link_libraries(llm_cpp_tests PRIVATE llm_train_cpp GTest::gtest_main)
 target_compile_definitions(llm_cpp_tests PRIVATE LLM_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(train_gpt examples/train_gpt.cpp)
@@ -127,12 +135,13 @@ add_executable(train_benchmark examples/train_benchmark.cpp)
 target_link_libraries(train_benchmark PRIVATE llm_train_cpp)
 
 enable_testing()
-add_test(NAME llm_cpp_tests COMMAND llm_cpp_tests)
+include(GoogleTest)
+gtest_discover_tests(llm_cpp_tests)
 
 if(LLM_CPP_ENABLE_METAL_COMPILED)
     add_executable(llm_cpp_metal_smoke tests/test_metal.cpp)
-    target_link_libraries(llm_cpp_metal_smoke PRIVATE llm_train_cpp)
-    add_test(NAME llm_cpp_metal_smoke COMMAND llm_cpp_metal_smoke)
+    target_link_libraries(llm_cpp_metal_smoke PRIVATE llm_train_cpp GTest::gtest_main)
+    gtest_discover_tests(llm_cpp_metal_smoke)
 
     add_executable(metal_benchmark examples/metal_benchmark.cpp)
     target_link_libraries(metal_benchmark PRIVATE llm_train_cpp)
@@ -140,6 +149,6 @@ endif()
 
 if(LLM_CPP_ENABLE_CUDA_COMPILED)
     add_executable(llm_cpp_cuda_smoke tests/test_cuda.cpp)
-    target_link_libraries(llm_cpp_cuda_smoke PRIVATE llm_train_cpp)
-    add_test(NAME llm_cpp_cuda_smoke COMMAND llm_cpp_cuda_smoke)
+    target_link_libraries(llm_cpp_cuda_smoke PRIVATE llm_train_cpp GTest::gtest_main)
+    gtest_discover_tests(llm_cpp_cuda_smoke)
 endif()

@@ -32,75 +32,75 @@ public:
     std::string status() const;
     void require() const;
 
-    std::shared_ptr<TensorCudaStorage> create_tensor_storage();
-    void ensure_data_buffer(TensorCudaStorage& storage, size_t count);
-    void ensure_grad_buffer(TensorCudaStorage& storage, size_t count);
-    void copy_data_from_host(TensorCudaStorage& storage, const std::vector<double>& host);
-    void copy_data_to_host(TensorCudaStorage& storage, std::vector<double>& host);
-    void copy_grad_from_host(TensorCudaStorage& storage, const std::vector<double>& host);
-    void copy_grad_to_host(TensorCudaStorage& storage, std::vector<double>& host);
-    void fill_data_buffer(TensorCudaStorage& storage, size_t count, float value);
-    void fill_grad_buffer(TensorCudaStorage& storage, size_t count, float value);
-    void set_data_scalar(TensorCudaStorage& storage, float value);
-    void set_grad_scalar(TensorCudaStorage& storage, float value);
-    void elementwise2_buffer(const char* op, TensorCudaStorage& out, const TensorCudaStorage& a,
-                             const TensorCudaStorage& b, unsigned int b_size, size_t count);
-    void mul_scalar_buffer(TensorCudaStorage& out, const TensorCudaStorage& a, float scalar, size_t count);
-    void unary_buffer(const char* op, TensorCudaStorage& out, const TensorCudaStorage& a, float scalar, size_t count);
-    void gather_buffer(TensorCudaStorage& out, const TensorCudaStorage& a,
+    std::shared_ptr<TensorStorage> create_tensor_storage();
+    void ensure_data_buffer(TensorStorage& storage, size_t count);
+    void ensure_grad_buffer(TensorStorage& storage, size_t count);
+    void copy_data_from_host(TensorStorage& storage, const std::vector<double>& host);
+    void copy_data_to_host(TensorStorage& storage, std::vector<double>& host);
+    void copy_grad_from_host(TensorStorage& storage, const std::vector<double>& host);
+    void copy_grad_to_host(TensorStorage& storage, std::vector<double>& host);
+    void fill_data_buffer(TensorStorage& storage, size_t count, float value);
+    void fill_grad_buffer(TensorStorage& storage, size_t count, float value);
+    void set_data_scalar(TensorStorage& storage, float value);
+    void set_grad_scalar(TensorStorage& storage, float value);
+    void elementwise2_buffer(const char* op, TensorStorage& out, const TensorStorage& a,
+                             const TensorStorage& b, unsigned int b_size, size_t count);
+    void mul_scalar_buffer(TensorStorage& out, const TensorStorage& a, float scalar, size_t count);
+    void unary_buffer(const char* op, TensorStorage& out, const TensorStorage& a, float scalar, size_t count);
+    void gather_buffer(TensorStorage& out, const TensorStorage& a,
                        const std::vector<unsigned int>& index);
-    void scale_data_buffer(TensorCudaStorage& storage, size_t count, float scalar);
-    void reduce_buffer(const char* op, TensorCudaStorage& out, const TensorCudaStorage& a, size_t count);
-    void matmul_buffer(TensorCudaStorage& out, const TensorCudaStorage& a, const TensorCudaStorage& b,
+    void scale_data_buffer(TensorStorage& storage, size_t count, float scalar);
+    void reduce_buffer(const char* op, TensorStorage& out, const TensorStorage& a, size_t count);
+    void matmul_buffer(TensorStorage& out, const TensorStorage& a, const TensorStorage& b,
                        unsigned int m, unsigned int k, unsigned int n);
-    void batch_matmul_buffer(TensorCudaStorage& out, const TensorCudaStorage& a, const TensorCudaStorage& b,
+    void batch_matmul_buffer(TensorStorage& out, const TensorStorage& a, const TensorStorage& b,
                              unsigned int batches, unsigned int heads, unsigned int m,
                              unsigned int k, unsigned int n);
-    void softmax_buffer(TensorCudaStorage& out, const TensorCudaStorage& a, unsigned int rows, unsigned int width);
-    void log_softmax_buffer(TensorCudaStorage& out, const TensorCudaStorage& a, unsigned int rows, unsigned int width);
-    void layernorm_buffer(TensorCudaStorage& out, const TensorCudaStorage& x, const TensorCudaStorage& scale,
-                          const TensorCudaStorage& shift, unsigned int rows, unsigned int width, float eps);
-    void embedding_buffer(TensorCudaStorage& out, const TensorCudaStorage& ids, const TensorCudaStorage& weight,
+    void softmax_buffer(TensorStorage& out, const TensorStorage& a, unsigned int rows, unsigned int width);
+    void log_softmax_buffer(TensorStorage& out, const TensorStorage& a, unsigned int rows, unsigned int width);
+    void layernorm_buffer(TensorStorage& out, const TensorStorage& x, const TensorStorage& scale,
+                          const TensorStorage& shift, unsigned int rows, unsigned int width, float eps);
+    void embedding_buffer(TensorStorage& out, const TensorStorage& ids, const TensorStorage& weight,
                           unsigned int count, unsigned int dim);
-    void cross_entropy_loss_buffer(TensorCudaStorage& out, const TensorCudaStorage& logits,
-                                   const TensorCudaStorage& targets, unsigned int rows, unsigned int vocab);
-    void add_grad(TensorCudaStorage& target, const TensorCudaStorage& out_grad, unsigned int target_size,
+    void cross_entropy_loss_buffer(TensorStorage& out, const TensorStorage& logits,
+                                   const TensorStorage& targets, unsigned int rows, unsigned int vocab);
+    void add_grad(TensorStorage& target, const TensorStorage& out_grad, unsigned int target_size,
                   size_t count, float scale = 1.0f);
-    void elementwise_grad(const char* op, TensorCudaStorage* a_grad, TensorCudaStorage* b_grad,
-                          const TensorCudaStorage& a, const TensorCudaStorage& b,
-                          const TensorCudaStorage& out_grad, size_t count);
-    void mul_scalar_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out_grad, float scalar, size_t count);
-    void pow_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& a, const TensorCudaStorage& out_grad,
+    void elementwise_grad(const char* op, TensorStorage* a_grad, TensorStorage* b_grad,
+                          const TensorStorage& a, const TensorStorage& b,
+                          const TensorStorage& out_grad, size_t count);
+    void mul_scalar_grad(TensorStorage& a_grad, const TensorStorage& out_grad, float scalar, size_t count);
+    void pow_grad(TensorStorage& a_grad, const TensorStorage& a, const TensorStorage& out_grad,
                   float exponent, size_t count);
-    void reduce_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out_grad, size_t count, float scale);
-    void scatter_add_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out_grad,
+    void reduce_grad(TensorStorage& a_grad, const TensorStorage& out_grad, size_t count, float scale);
+    void scatter_add_grad(TensorStorage& a_grad, const TensorStorage& out_grad,
                           const std::vector<unsigned int>& index);
-    void matmul_grad(TensorCudaStorage* a_grad, TensorCudaStorage* b_grad, const TensorCudaStorage& a,
-                     const TensorCudaStorage& b, const TensorCudaStorage& out_grad,
+    void matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad, const TensorStorage& a,
+                     const TensorStorage& b, const TensorStorage& out_grad,
                      unsigned int m, unsigned int k, unsigned int n);
-    void batch_matmul_grad(TensorCudaStorage* a_grad, TensorCudaStorage* b_grad, const TensorCudaStorage& a,
-                           const TensorCudaStorage& b, const TensorCudaStorage& out_grad,
+    void batch_matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad, const TensorStorage& a,
+                           const TensorStorage& b, const TensorStorage& out_grad,
                            unsigned int batches, unsigned int heads, unsigned int m,
                            unsigned int k, unsigned int n);
-    void softmax_grad(TensorCudaStorage& a_grad, const TensorCudaStorage& out,
-                      const TensorCudaStorage& out_grad, unsigned int rows, unsigned int width);
-    void cross_entropy_grad(TensorCudaStorage& logits_grad, const TensorCudaStorage& logits,
-                            const TensorCudaStorage& targets, const TensorCudaStorage& out_grad,
+    void softmax_grad(TensorStorage& a_grad, const TensorStorage& out,
+                      const TensorStorage& out_grad, unsigned int rows, unsigned int width);
+    void cross_entropy_grad(TensorStorage& logits_grad, const TensorStorage& logits,
+                            const TensorStorage& targets, const TensorStorage& out_grad,
                             unsigned int rows, unsigned int vocab);
-    void embedding_grad(TensorCudaStorage& weight_grad, const TensorCudaStorage& ids,
-                        const TensorCudaStorage& out_grad, unsigned int count, unsigned int dim);
-    void layernorm_grad(TensorCudaStorage* x_grad, TensorCudaStorage* scale_grad, TensorCudaStorage* shift_grad,
-                        const TensorCudaStorage& x, const TensorCudaStorage& scale,
-                        const TensorCudaStorage& out_grad, unsigned int rows, unsigned int width, float eps);
-    void gelu_grad(TensorCudaStorage& x_grad, const TensorCudaStorage& x,
-                   const TensorCudaStorage& out_grad, size_t count);
-    void adamw_update(TensorCudaStorage& param, TensorCudaStorage& grad, TensorCudaStorage& m, TensorCudaStorage& v,
+    void embedding_grad(TensorStorage& weight_grad, const TensorStorage& ids,
+                        const TensorStorage& out_grad, unsigned int count, unsigned int dim);
+    void layernorm_grad(TensorStorage* x_grad, TensorStorage* scale_grad, TensorStorage* shift_grad,
+                        const TensorStorage& x, const TensorStorage& scale,
+                        const TensorStorage& out_grad, unsigned int rows, unsigned int width, float eps);
+    void gelu_grad(TensorStorage& x_grad, const TensorStorage& x,
+                   const TensorStorage& out_grad, size_t count);
+    void adamw_update(TensorStorage& param, TensorStorage& grad, TensorStorage& m, TensorStorage& v,
                       size_t count, float lr, float weight_decay, float beta1, float beta2,
                       float eps, float bias_correction1, float bias_correction2);
-    void causal_mask_buffer(TensorCudaStorage& out, const TensorCudaStorage& scores,
+    void causal_mask_buffer(TensorStorage& out, const TensorStorage& scores,
                             unsigned int batches, unsigned int heads, unsigned int sequence_length,
                             float mask_value);
-    void causal_mask_grad(TensorCudaStorage& scores_grad, const TensorCudaStorage& out_grad,
+    void causal_mask_grad(TensorStorage& scores_grad, const TensorStorage& out_grad,
                           unsigned int batches, unsigned int heads, unsigned int sequence_length);
 
     std::vector<float> elementwise2(const char* op, const std::vector<float>& a,

@@ -28,6 +28,8 @@ AI/cpp/build_release/
 AI/cpp/cmake-build-debug/
 AI/codes/llm-train-cpp/build-cuda-check/
 AI/codes/llm-train-cpp/cmake-build-*
+AI/codes/llm-train-cpp/build-*
+AI/codes/llm-train-cpp/default.profraw
 
 AI/chapter-03/data/*.pt
 AI/chapter-03/data/*.csv

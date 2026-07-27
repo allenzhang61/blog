@@ -29,16 +29,16 @@ private:
     std::vector<std::vector<double>> v_;
 
     // CUDA 参数的一阶矩 device buffer；CPU 参数保持为空。
-    std::vector<std::shared_ptr<TensorCudaStorage>> cuda_m_;
+    std::vector<std::shared_ptr<TensorStorage>> cuda_m_;
 
     // CUDA 参数的二阶矩 device buffer；CPU 参数保持为空。
-    std::vector<std::shared_ptr<TensorCudaStorage>> cuda_v_;
+    std::vector<std::shared_ptr<TensorStorage>> cuda_v_;
 
     // Metal 参数的一阶矩 device buffer；CPU/CUDA 参数保持为空。
-    std::vector<std::shared_ptr<TensorCudaStorage>> metal_m_;
+    std::vector<std::shared_ptr<TensorStorage>> metal_m_;
 
     // Metal 参数的二阶矩 device buffer；CPU/CUDA 参数保持为空。
-    std::vector<std::shared_ptr<TensorCudaStorage>> metal_v_;
+    std::vector<std::shared_ptr<TensorStorage>> metal_v_;
 
     // 学习率。
     double lr_;

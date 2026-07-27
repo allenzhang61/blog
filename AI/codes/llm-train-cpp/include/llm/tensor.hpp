@@ -15,22 +15,28 @@ struct TensorNode;
 
 // CUDA / Metal Tensor 的内部 device storage。公共 Tensor API 通过 shared_ptr 持有它；
 // 具体的分配、拷贝和释放逻辑由对应 runtime 注入。
-struct TensorCudaStorage {
-    void* data{nullptr};
-    void* grad{nullptr};
-    size_t data_count{0};
-    size_t grad_count{0};
-    void (*release)(TensorCudaStorage& storage){nullptr};
-    void (*copy_data_from_host)(TensorCudaStorage& storage, const std::vector<double>& host){nullptr};
-    void (*copy_data_to_host)(TensorCudaStorage& storage, std::vector<double>& host){nullptr};
-    void (*copy_grad_from_host)(TensorCudaStorage& storage, const std::vector<double>& host){nullptr};
-    void (*copy_grad_to_host)(TensorCudaStorage& storage, std::vector<double>& host){nullptr};
-    void (*fill_grad)(TensorCudaStorage& storage, size_t count, float value){nullptr};
+struct TensorStorage {
+    void* data{nullptr};   // 指向设备端数据缓冲区的指针。
+    void* grad{nullptr};   // 指向设备端梯度缓冲区的指针。
+    size_t data_count{0};  // 数据缓冲区的元素个数。
+    size_t grad_count{0};  // 梯度缓冲区的元素个数。
+    // 释放设备端缓冲区。
+    void (*release)(TensorStorage& storage){nullptr};
+    // 把 host 数据拷贝到设备端 data 缓冲区。
+    void (*copy_data_from_host)(TensorStorage& storage, const std::vector<double>& host){nullptr};
+    // 把设备端 data 缓冲区拷回 host。
+    void (*copy_data_to_host)(TensorStorage& storage, std::vector<double>& host){nullptr};
+    // 把 host 梯度拷贝到设备端 grad 缓冲区。
+    void (*copy_grad_from_host)(TensorStorage& storage, const std::vector<double>& host){nullptr};
+    // 把设备端 grad 缓冲区拷回 host。
+    void (*copy_grad_to_host)(TensorStorage& storage, std::vector<double>& host){nullptr};
+    // 用指定值填充设备端 grad 缓冲区。
+    void (*fill_grad)(TensorStorage& storage, size_t count, float value){nullptr};
 
-    TensorCudaStorage() = default;
-    TensorCudaStorage(const TensorCudaStorage&) = delete;
-    TensorCudaStorage& operator=(const TensorCudaStorage&) = delete;
-    ~TensorCudaStorage();
+    TensorStorage() = default;                                     // 默认构造，缓冲区为空。
+    TensorStorage(const TensorStorage&) = delete;            // 禁止拷贝构造，避免重复释放设备内存。
+    TensorStorage& operator=(const TensorStorage&) = delete; // 禁止拷贝赋值，同上。
+    ~TensorStorage();                                              // 析构时调用 release 回收设备内存。
 };
 
 // 轻量级张量对象。
@@ -122,6 +128,7 @@ struct TensorNode {
     std::vector<int64_t> shape;
 
     // 张量数据类型。
+    // DType 只是记录"逻辑类型"的标签，底层存储统一是 double
     DType dtype{DType::Float32};
 
     // 张量所在设备。
@@ -134,10 +141,10 @@ struct TensorNode {
     std::vector<double> grad;
 
     // CUDA 专用 device storage。CPU/Metal 路径保持为空，具体定义在实现层。
-    std::shared_ptr<TensorCudaStorage> cuda_storage;
+    std::shared_ptr<TensorStorage> cuda_storage;
 
     // Metal 专用 device storage。CPU/CUDA 路径保持为空，具体定义在实现层。
-    std::shared_ptr<TensorCudaStorage> metal_storage;
+    std::shared_ptr<TensorStorage> metal_storage;
 
     // host data 有新写入，下一次 GPU kernel 消费前需要同步到 device。
     bool host_data_dirty{false};

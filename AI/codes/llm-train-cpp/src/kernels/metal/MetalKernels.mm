@@ -250,12 +250,12 @@ public:
         return run3buffer1d("cross_entropy_row_loss_kernel", logits, targets, &params, sizeof(params), rows);
     }
 
-    std::shared_ptr<llm::TensorCudaStorage> create_tensor_storage() {
+    std::shared_ptr<llm::TensorStorage> create_tensor_storage() {
         if (!available()) {
             throw std::runtime_error(status_);
         }
-        auto storage = std::make_shared<llm::TensorCudaStorage>();
-        storage->release = [](llm::TensorCudaStorage& s) {
+        auto storage = std::make_shared<llm::TensorStorage>();
+        storage->release = [](llm::TensorStorage& s) {
             release_buffer(s.data);
             release_buffer(s.grad);
             s.data = nullptr;
@@ -263,66 +263,66 @@ public:
             s.data_count = 0;
             s.grad_count = 0;
         };
-        storage->copy_data_from_host = [](llm::TensorCudaStorage& s, const std::vector<double>& host) {
+        storage->copy_data_from_host = [](llm::TensorStorage& s, const std::vector<double>& host) {
             MetalRuntime::instance().copy_data_from_host(s, host);
         };
-        storage->copy_data_to_host = [](llm::TensorCudaStorage& s, std::vector<double>& host) {
+        storage->copy_data_to_host = [](llm::TensorStorage& s, std::vector<double>& host) {
             MetalRuntime::instance().copy_data_to_host(s, host);
         };
-        storage->copy_grad_from_host = [](llm::TensorCudaStorage& s, const std::vector<double>& host) {
+        storage->copy_grad_from_host = [](llm::TensorStorage& s, const std::vector<double>& host) {
             MetalRuntime::instance().copy_grad_from_host(s, host);
         };
-        storage->copy_grad_to_host = [](llm::TensorCudaStorage& s, std::vector<double>& host) {
+        storage->copy_grad_to_host = [](llm::TensorStorage& s, std::vector<double>& host) {
             MetalRuntime::instance().copy_grad_to_host(s, host);
         };
-        storage->fill_grad = [](llm::TensorCudaStorage& s, size_t count, float value) {
+        storage->fill_grad = [](llm::TensorStorage& s, size_t count, float value) {
             MetalRuntime::instance().fill_grad_buffer(s, count, value);
         };
         return storage;
     }
 
-    void ensure_data_buffer(llm::TensorCudaStorage& storage, size_t count) {
+    void ensure_data_buffer(llm::TensorStorage& storage, size_t count) {
         ensure_float_buffer(storage.data, storage.data_count, count);
     }
 
-    void ensure_grad_buffer(llm::TensorCudaStorage& storage, size_t count) {
+    void ensure_grad_buffer(llm::TensorStorage& storage, size_t count) {
         ensure_float_buffer(storage.grad, storage.grad_count, count);
     }
 
-    void copy_data_from_host(llm::TensorCudaStorage& storage, const std::vector<double>& host) {
+    void copy_data_from_host(llm::TensorStorage& storage, const std::vector<double>& host) {
         ensure_data_buffer(storage, host.size());
         copy_from_host(storage.data, host);
     }
 
-    void copy_data_to_host(llm::TensorCudaStorage& storage, std::vector<double>& host) {
+    void copy_data_to_host(llm::TensorStorage& storage, std::vector<double>& host) {
         copy_to_host(storage.data, storage.data_count, host);
     }
 
-    void copy_grad_from_host(llm::TensorCudaStorage& storage, const std::vector<double>& host) {
+    void copy_grad_from_host(llm::TensorStorage& storage, const std::vector<double>& host) {
         ensure_grad_buffer(storage, host.size());
         copy_from_host(storage.grad, host);
     }
 
-    void copy_grad_to_host(llm::TensorCudaStorage& storage, std::vector<double>& host) {
+    void copy_grad_to_host(llm::TensorStorage& storage, std::vector<double>& host) {
         copy_to_host(storage.grad, storage.grad_count, host);
     }
 
-    void fill_data_buffer(llm::TensorCudaStorage& storage, size_t count, float value) {
+    void fill_data_buffer(llm::TensorStorage& storage, size_t count, float value) {
         ensure_data_buffer(storage, count);
         run_fill(buffer_from(storage.data), count, value);
     }
 
-    void fill_grad_buffer(llm::TensorCudaStorage& storage, size_t count, float value) {
+    void fill_grad_buffer(llm::TensorStorage& storage, size_t count, float value) {
         ensure_grad_buffer(storage, count);
         run_fill(buffer_from(storage.grad), count, value);
     }
 
-    void set_grad_scalar(llm::TensorCudaStorage& storage, float value) {
+    void set_grad_scalar(llm::TensorStorage& storage, float value) {
         fill_grad_buffer(storage, 1, value);
     }
 
-    void elementwise2_buffer(const char* op, llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a,
-                             const llm::TensorCudaStorage& b, uint32_t b_size, size_t count) {
+    void elementwise2_buffer(const char* op, llm::TensorStorage& out, const llm::TensorStorage& a,
+                             const llm::TensorStorage& b, uint32_t b_size, size_t count) {
         ensure_data_buffer(out, count);
         id<MTLComputePipelineState> pipeline = get_pipeline(std::string(op) == "add" ? "add_kernel" :
                                                             std::string(op) == "mul" ? "mul_kernel" : "div_kernel");
@@ -342,12 +342,12 @@ public:
         submit(command);
     }
 
-    void mul_scalar_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a, float scalar, size_t count) {
+    void mul_scalar_buffer(llm::TensorStorage& out, const llm::TensorStorage& a, float scalar, size_t count) {
         ScalarParams params{scalar};
         unary_like("mul_scalar_kernel", out, a, &params, sizeof(params), count);
     }
 
-    void unary_buffer(const char* op, llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a,
+    void unary_buffer(const char* op, llm::TensorStorage& out, const llm::TensorStorage& a,
                       float scalar, size_t count) {
         ScalarParams params{scalar};
         std::string name(op);
@@ -356,7 +356,7 @@ public:
         unary_like(kernel, out, a, name == "pow" ? &params : nullptr, name == "pow" ? sizeof(params) : 0, count);
     }
 
-    void gather_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a,
+    void gather_buffer(llm::TensorStorage& out, const llm::TensorStorage& a,
                        const std::vector<unsigned int>& index) {
         ensure_data_buffer(out, index.size());
         id<MTLComputePipelineState> pipeline = get_pipeline("gather_kernel");
@@ -374,8 +374,8 @@ public:
         submit(command);
     }
 
-    void scale_data_buffer(llm::TensorCudaStorage& storage, size_t count, float scalar) {
-        llm::TensorCudaStorage out;
+    void scale_data_buffer(llm::TensorStorage& storage, size_t count, float scalar) {
+        llm::TensorStorage out;
         out.data = storage.data;
         out.data_count = storage.data_count;
         mul_scalar_buffer(out, storage, scalar, count);
@@ -383,7 +383,7 @@ public:
         storage.data_count = out.data_count;
     }
 
-    void reduce_buffer(const char* op, llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a, size_t count) {
+    void reduce_buffer(const char* op, llm::TensorStorage& out, const llm::TensorStorage& a, size_t count) {
         ensure_data_buffer(out, 1);
         uint32_t c = static_cast<uint32_t>(count);
         id<MTLComputePipelineState> pipeline = get_pipeline(std::string(op) == "max" ? "max_kernel" : "sum_kernel");
@@ -400,15 +400,15 @@ public:
         submit(command);
     }
 
-    void matmul_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a, const llm::TensorCudaStorage& b,
+    void matmul_buffer(llm::TensorStorage& out, const llm::TensorStorage& a, const llm::TensorStorage& b,
                        uint32_t m, uint32_t k, uint32_t n) {
         ensure_data_buffer(out, static_cast<size_t>(m) * n);
         MatmulParams params{m, k, n};
         run_matmul_buffers(out, a, b, params);
     }
 
-    void batch_matmul_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a,
-                             const llm::TensorCudaStorage& b, uint32_t batches, uint32_t heads,
+    void batch_matmul_buffer(llm::TensorStorage& out, const llm::TensorStorage& a,
+                             const llm::TensorStorage& b, uint32_t batches, uint32_t heads,
                              uint32_t m, uint32_t k, uint32_t n) {
         ensure_data_buffer(out, static_cast<size_t>(batches) * heads * m * n);
         BatchMatmulParams params{batches, heads, m, k, n};
@@ -416,7 +416,7 @@ public:
                            static_cast<size_t>(batches) * heads * m * n);
     }
 
-    void causal_mask_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& scores,
+    void causal_mask_buffer(llm::TensorStorage& out, const llm::TensorStorage& scores,
                             uint32_t batches, uint32_t heads, uint32_t sequence_length, float mask_value) {
         size_t count = static_cast<size_t>(batches) * heads * sequence_length * sequence_length;
         ensure_data_buffer(out, count);
@@ -435,20 +435,20 @@ public:
         submit(command);
     }
 
-    void softmax_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a, uint32_t rows, uint32_t width) {
+    void softmax_buffer(llm::TensorStorage& out, const llm::TensorStorage& a, uint32_t rows, uint32_t width) {
         ensure_data_buffer(out, static_cast<size_t>(rows) * width);
         SoftmaxParams params{rows, width};
         run_1input_params("softmax_kernel", out, a, &params, sizeof(params), rows);
     }
 
-    void log_softmax_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a, uint32_t rows, uint32_t width) {
+    void log_softmax_buffer(llm::TensorStorage& out, const llm::TensorStorage& a, uint32_t rows, uint32_t width) {
         ensure_data_buffer(out, static_cast<size_t>(rows) * width);
         SoftmaxParams params{rows, width};
         run_1input_params("log_softmax_kernel", out, a, &params, sizeof(params), rows);
     }
 
-    void layernorm_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& x,
-                          const llm::TensorCudaStorage& scale, const llm::TensorCudaStorage& shift,
+    void layernorm_buffer(llm::TensorStorage& out, const llm::TensorStorage& x,
+                          const llm::TensorStorage& scale, const llm::TensorStorage& shift,
                           uint32_t rows, uint32_t width, float eps) {
         ensure_data_buffer(out, static_cast<size_t>(rows) * width);
         LayerNormParams params{rows, width, eps};
@@ -468,30 +468,30 @@ public:
         submit(command);
     }
 
-    void embedding_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& ids,
-                          const llm::TensorCudaStorage& weight, uint32_t count, uint32_t dim) {
+    void embedding_buffer(llm::TensorStorage& out, const llm::TensorStorage& ids,
+                          const llm::TensorStorage& weight, uint32_t count, uint32_t dim) {
         ensure_data_buffer(out, static_cast<size_t>(count) * dim);
         EmbeddingParams params{count, dim};
         run_3buffer_params("embedding_kernel", out, ids, weight, &params, sizeof(params), static_cast<size_t>(count) * dim);
     }
 
-    void cross_entropy_loss_buffer(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& logits,
-                                   const llm::TensorCudaStorage& targets, uint32_t rows, uint32_t vocab) {
+    void cross_entropy_loss_buffer(llm::TensorStorage& out, const llm::TensorStorage& logits,
+                                   const llm::TensorStorage& targets, uint32_t rows, uint32_t vocab) {
         ensure_data_buffer(out, 1);
         CrossEntropyParams params{rows, vocab};
         run_3buffer_params("cross_entropy_loss_kernel", out, logits, targets, &params, sizeof(params), 1);
     }
 
-    void add_grad(llm::TensorCudaStorage& target, const llm::TensorCudaStorage& out_grad,
+    void add_grad(llm::TensorStorage& target, const llm::TensorStorage& out_grad,
                   uint32_t target_size, size_t count, float scale = 1.0f) {
         ensure_grad_buffer(target, target_size == 0 ? count : target_size);
         GradParams params{target_size, static_cast<uint32_t>(count), scale};
         run_grad1("add_grad_kernel", target, out_grad, &params, sizeof(params), count);
     }
 
-    void elementwise_grad(const char* op, llm::TensorCudaStorage* a_grad, llm::TensorCudaStorage* b_grad,
-                          const llm::TensorCudaStorage& a, const llm::TensorCudaStorage& b,
-                          const llm::TensorCudaStorage& out_grad, size_t count) {
+    void elementwise_grad(const char* op, llm::TensorStorage* a_grad, llm::TensorStorage* b_grad,
+                          const llm::TensorStorage& a, const llm::TensorStorage& b,
+                          const llm::TensorStorage& out_grad, size_t count) {
         ElementwiseGradParams params{static_cast<uint32_t>(count), a_grad ? 1u : 0u, b_grad ? 1u : 0u};
         id<MTLComputePipelineState> pipeline = get_pipeline(std::string(op) == "div" ? "div_grad_kernel" : "mul_grad_kernel");
         id<MTLBuffer> params_buffer = [device_ newBufferWithBytes:&params length:sizeof(params)
@@ -510,14 +510,14 @@ public:
         submit(command);
     }
 
-    void mul_scalar_grad(llm::TensorCudaStorage& a_grad, const llm::TensorCudaStorage& out_grad,
+    void mul_scalar_grad(llm::TensorStorage& a_grad, const llm::TensorStorage& out_grad,
                          float scalar, size_t count) {
         GradParams params{0, static_cast<uint32_t>(count), scalar};
         run_grad1("mul_scalar_grad_kernel", a_grad, out_grad, &params, sizeof(params), count);
     }
 
-    void pow_grad(llm::TensorCudaStorage& a_grad, const llm::TensorCudaStorage& a,
-                  const llm::TensorCudaStorage& out_grad, float exponent, size_t count) {
+    void pow_grad(llm::TensorStorage& a_grad, const llm::TensorStorage& a,
+                  const llm::TensorStorage& out_grad, float exponent, size_t count) {
         ensure_grad_buffer(a_grad, count);
         GradParams params{0, static_cast<uint32_t>(count), exponent};
         id<MTLComputePipelineState> pipeline = get_pipeline("pow_grad_kernel");
@@ -535,14 +535,14 @@ public:
         submit(command);
     }
 
-    void reduce_grad(llm::TensorCudaStorage& a_grad, const llm::TensorCudaStorage& out_grad,
+    void reduce_grad(llm::TensorStorage& a_grad, const llm::TensorStorage& out_grad,
                      size_t count, float scale) {
         ensure_grad_buffer(a_grad, count);
         GradParams params{0, static_cast<uint32_t>(count), scale};
         run_grad1("reduce_grad_kernel", a_grad, out_grad, &params, sizeof(params), count);
     }
 
-    void scatter_add_grad(llm::TensorCudaStorage& a_grad, const llm::TensorCudaStorage& out_grad,
+    void scatter_add_grad(llm::TensorStorage& a_grad, const llm::TensorStorage& out_grad,
                           const std::vector<unsigned int>& index) {
         ensure_grad_buffer(a_grad, index.size());
         uint32_t count = static_cast<uint32_t>(index.size());
@@ -564,9 +564,9 @@ public:
         submit(command);
     }
 
-    void matmul_grad(llm::TensorCudaStorage* a_grad, llm::TensorCudaStorage* b_grad,
-                     const llm::TensorCudaStorage& a, const llm::TensorCudaStorage& b,
-                     const llm::TensorCudaStorage& out_grad, uint32_t m, uint32_t k, uint32_t n) {
+    void matmul_grad(llm::TensorStorage* a_grad, llm::TensorStorage* b_grad,
+                     const llm::TensorStorage& a, const llm::TensorStorage& b,
+                     const llm::TensorStorage& out_grad, uint32_t m, uint32_t k, uint32_t n) {
         MatmulParams params{m, k, n};
         if (a_grad) {
             ensure_grad_buffer(*a_grad, static_cast<size_t>(m) * k);
@@ -578,9 +578,9 @@ public:
         }
     }
 
-    void batch_matmul_grad(llm::TensorCudaStorage* a_grad, llm::TensorCudaStorage* b_grad,
-                           const llm::TensorCudaStorage& a, const llm::TensorCudaStorage& b,
-                           const llm::TensorCudaStorage& out_grad, uint32_t batches, uint32_t heads,
+    void batch_matmul_grad(llm::TensorStorage* a_grad, llm::TensorStorage* b_grad,
+                           const llm::TensorStorage& a, const llm::TensorStorage& b,
+                           const llm::TensorStorage& out_grad, uint32_t batches, uint32_t heads,
                            uint32_t m, uint32_t k, uint32_t n) {
         BatchMatmulParams params{batches, heads, m, k, n};
         if (a_grad) {
@@ -595,15 +595,15 @@ public:
         }
     }
 
-    void softmax_grad(llm::TensorCudaStorage& a_grad, const llm::TensorCudaStorage& out,
-                      const llm::TensorCudaStorage& out_grad, uint32_t rows, uint32_t width) {
+    void softmax_grad(llm::TensorStorage& a_grad, const llm::TensorStorage& out,
+                      const llm::TensorStorage& out_grad, uint32_t rows, uint32_t width) {
         ensure_grad_buffer(a_grad, static_cast<size_t>(rows) * width);
         SoftmaxParams params{rows, width};
         run_grad3("softmax_grad_kernel", a_grad, out, out_grad, &params, sizeof(params), rows);
     }
 
-    void cross_entropy_grad(llm::TensorCudaStorage& logits_grad, const llm::TensorCudaStorage& logits,
-                            const llm::TensorCudaStorage& targets, const llm::TensorCudaStorage& out_grad,
+    void cross_entropy_grad(llm::TensorStorage& logits_grad, const llm::TensorStorage& logits,
+                            const llm::TensorStorage& targets, const llm::TensorStorage& out_grad,
                             uint32_t rows, uint32_t vocab) {
         ensure_grad_buffer(logits_grad, static_cast<size_t>(rows) * vocab);
         CrossEntropyParams params{rows, vocab};
@@ -623,17 +623,17 @@ public:
         submit(command);
     }
 
-    void embedding_grad(llm::TensorCudaStorage& weight_grad, const llm::TensorCudaStorage& ids,
-                        const llm::TensorCudaStorage& out_grad, uint32_t count, uint32_t dim) {
+    void embedding_grad(llm::TensorStorage& weight_grad, const llm::TensorStorage& ids,
+                        const llm::TensorStorage& out_grad, uint32_t count, uint32_t dim) {
         ensure_grad_buffer(weight_grad, weight_grad.data_count);
         EmbeddingParams params{count, dim};
         run_grad3("embedding_grad_kernel", weight_grad, ids, out_grad, &params, sizeof(params),
                   static_cast<size_t>(count) * dim);
     }
 
-    void layernorm_grad(llm::TensorCudaStorage* x_grad, llm::TensorCudaStorage* scale_grad,
-                        llm::TensorCudaStorage* shift_grad, const llm::TensorCudaStorage& x,
-                        const llm::TensorCudaStorage& scale, const llm::TensorCudaStorage& out_grad,
+    void layernorm_grad(llm::TensorStorage* x_grad, llm::TensorStorage* scale_grad,
+                        llm::TensorStorage* shift_grad, const llm::TensorStorage& x,
+                        const llm::TensorStorage& scale, const llm::TensorStorage& out_grad,
                         uint32_t rows, uint32_t width, float eps) {
         LayerNormParams params{rows, width, eps};
         if (x_grad) {
@@ -677,8 +677,8 @@ public:
         }
     }
 
-    void gelu_grad(llm::TensorCudaStorage& x_grad, const llm::TensorCudaStorage& x,
-                   const llm::TensorCudaStorage& out_grad, size_t count) {
+    void gelu_grad(llm::TensorStorage& x_grad, const llm::TensorStorage& x,
+                   const llm::TensorStorage& out_grad, size_t count) {
         ensure_grad_buffer(x_grad, count);
         uint32_t c = static_cast<uint32_t>(count);
         id<MTLComputePipelineState> pipeline = get_pipeline("gelu_grad_kernel");
@@ -696,7 +696,7 @@ public:
         submit(command);
     }
 
-    void causal_mask_grad(llm::TensorCudaStorage& scores_grad, const llm::TensorCudaStorage& out_grad,
+    void causal_mask_grad(llm::TensorStorage& scores_grad, const llm::TensorStorage& out_grad,
                           uint32_t batches, uint32_t heads, uint32_t sequence_length) {
         size_t count = static_cast<size_t>(batches) * heads * sequence_length * sequence_length;
         ensure_grad_buffer(scores_grad, count);
@@ -704,8 +704,8 @@ public:
         run_grad1("causal_mask_grad_kernel", scores_grad, out_grad, &params, sizeof(params), count);
     }
 
-    void adamw_update(llm::TensorCudaStorage& param, llm::TensorCudaStorage& grad,
-                      llm::TensorCudaStorage& m, llm::TensorCudaStorage& v, size_t count,
+    void adamw_update(llm::TensorStorage& param, llm::TensorStorage& grad,
+                      llm::TensorStorage& m, llm::TensorStorage& v, size_t count,
                       float lr, float weight_decay, float beta1, float beta2, float eps,
                       float bias_correction1, float bias_correction2) {
         ensure_data_buffer(param, count);
@@ -974,7 +974,7 @@ private:
         submit(command);
     }
 
-    void unary_like(const char* kernel_name, llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a,
+    void unary_like(const char* kernel_name, llm::TensorStorage& out, const llm::TensorStorage& a,
                     const void* params, size_t params_size, size_t count) {
         ensure_data_buffer(out, count);
         id<MTLComputePipelineState> pipeline = get_pipeline(kernel_name);
@@ -995,8 +995,8 @@ private:
         submit(command);
     }
 
-    void run_matmul_buffers(llm::TensorCudaStorage& out, const llm::TensorCudaStorage& a,
-                            const llm::TensorCudaStorage& b, const MatmulParams& params) {
+    void run_matmul_buffers(llm::TensorStorage& out, const llm::TensorStorage& a,
+                            const llm::TensorStorage& b, const MatmulParams& params) {
         id<MTLComputePipelineState> pipeline = get_pipeline("matmul_kernel");
         id<MTLBuffer> params_buffer = [device_ newBufferWithBytes:&params length:sizeof(params)
                                                           options:MTLResourceStorageModeShared];
@@ -1015,8 +1015,8 @@ private:
         submit(command);
     }
 
-    void run_3buffer_params(const char* kernel_name, llm::TensorCudaStorage& out,
-                            const llm::TensorCudaStorage& a, const llm::TensorCudaStorage& b,
+    void run_3buffer_params(const char* kernel_name, llm::TensorStorage& out,
+                            const llm::TensorStorage& a, const llm::TensorStorage& b,
                             const void* params, size_t params_size, size_t count) {
         id<MTLComputePipelineState> pipeline = get_pipeline(kernel_name);
         id<MTLBuffer> params_buffer = [device_ newBufferWithBytes:params length:params_size
@@ -1033,8 +1033,8 @@ private:
         submit(command);
     }
 
-    void run_1input_params(const char* kernel_name, llm::TensorCudaStorage& out,
-                           const llm::TensorCudaStorage& a, const void* params,
+    void run_1input_params(const char* kernel_name, llm::TensorStorage& out,
+                           const llm::TensorStorage& a, const void* params,
                            size_t params_size, size_t rows) {
         id<MTLComputePipelineState> pipeline = get_pipeline(kernel_name);
         id<MTLBuffer> params_buffer = [device_ newBufferWithBytes:params length:params_size
@@ -1050,8 +1050,8 @@ private:
         submit(command);
     }
 
-    void run_matmul_grad2d(const char* kernel_name, llm::TensorCudaStorage& target,
-                           const llm::TensorCudaStorage& input, const llm::TensorCudaStorage& out_grad,
+    void run_matmul_grad2d(const char* kernel_name, llm::TensorStorage& target,
+                           const llm::TensorStorage& input, const llm::TensorStorage& out_grad,
                            const MatmulParams& params, uint32_t grid_x, uint32_t grid_y) {
         id<MTLComputePipelineState> pipeline = get_pipeline(kernel_name);
         id<MTLBuffer> params_buffer = [device_ newBufferWithBytes:&params length:sizeof(params)
@@ -1070,8 +1070,8 @@ private:
         submit(command);
     }
 
-    void run_grad3(const char* kernel_name, llm::TensorCudaStorage& target,
-                   const llm::TensorCudaStorage& input, const llm::TensorCudaStorage& out_grad,
+    void run_grad3(const char* kernel_name, llm::TensorStorage& target,
+                   const llm::TensorStorage& input, const llm::TensorStorage& out_grad,
                    const void* params, size_t params_size, size_t count) {
         id<MTLComputePipelineState> pipeline = get_pipeline(kernel_name);
         id<MTLBuffer> params_buffer = [device_ newBufferWithBytes:params length:params_size
@@ -1088,7 +1088,7 @@ private:
         submit(command);
     }
 
-    void run_grad1(const char* kernel_name, llm::TensorCudaStorage& target, const llm::TensorCudaStorage& out_grad,
+    void run_grad1(const char* kernel_name, llm::TensorStorage& target, const llm::TensorStorage& out_grad,
                    const void* params, size_t params_size, size_t count) {
         id<MTLComputePipelineState> pipeline = get_pipeline(kernel_name);
         id<MTLBuffer> params_buffer = [device_ newBufferWithBytes:params length:params_size
@@ -1169,7 +1169,7 @@ std::vector<double> to_double(const std::vector<float>& values) {
     return std::vector<double>(values.begin(), values.end());
 }
 
-llm::TensorCudaStorage& ensure_metal_storage(const llm::Tensor& t) {
+llm::TensorStorage& ensure_metal_storage(const llm::Tensor& t) {
     if (!t.node->metal_storage) {
         t.node->metal_storage = MetalRuntime::instance().create_tensor_storage();
     }
@@ -1177,7 +1177,7 @@ llm::TensorCudaStorage& ensure_metal_storage(const llm::Tensor& t) {
 }
 
 void ensure_metal_data(const llm::Tensor& t) {
-    llm::TensorCudaStorage& storage = ensure_metal_storage(t);
+    llm::TensorStorage& storage = ensure_metal_storage(t);
     if (t.node->host_data_dirty || storage.data == nullptr || storage.data_count < static_cast<size_t>(t.numel())) {
         MetalRuntime::instance().copy_data_from_host(storage, t.node->data);
         t.node->host_data_dirty = false;
@@ -1186,7 +1186,7 @@ void ensure_metal_data(const llm::Tensor& t) {
 }
 
 void ensure_metal_grad(const llm::Tensor& t) {
-    llm::TensorCudaStorage& storage = ensure_metal_storage(t);
+    llm::TensorStorage& storage = ensure_metal_storage(t);
     if (t.node->grad.empty()) {
         t.node->grad.assign(static_cast<size_t>(t.numel()), 0.0);
         t.node->host_grad_dirty = true;
@@ -1221,15 +1221,15 @@ bool runtime_available() {
     return MetalRuntime::instance().available();
 }
 
-std::shared_ptr<TensorCudaStorage> create_tensor_storage() {
+std::shared_ptr<TensorStorage> create_tensor_storage() {
     return MetalRuntime::instance().create_tensor_storage();
 }
 
-void fill_data_buffer(TensorCudaStorage& storage, size_t count, float value) {
+void fill_data_buffer(TensorStorage& storage, size_t count, float value) {
     MetalRuntime::instance().fill_data_buffer(storage, count, value);
 }
 
-void adamw_update(TensorCudaStorage& param, TensorCudaStorage& grad, TensorCudaStorage& m, TensorCudaStorage& v,
+void adamw_update(TensorStorage& param, TensorStorage& grad, TensorStorage& m, TensorStorage& v,
                   size_t count, float lr, float weight_decay, float beta1, float beta2,
                   float eps, float bias_correction1, float bias_correction2) {
     MetalRuntime::instance().adamw_update(param, grad, m, v, count, lr, weight_decay, beta1, beta2, eps,
@@ -1299,8 +1299,8 @@ Tensor mul(const Tensor& a, const Tensor& b) {
             ensure_metal_grad(out);
             ensure_metal_data(a);
             ensure_metal_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_metal_grad(a);
                 a_grad = a.node->metal_storage.get();
@@ -1354,8 +1354,8 @@ Tensor div(const Tensor& a, const Tensor& b) {
             ensure_metal_grad(out);
             ensure_metal_data(a);
             ensure_metal_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_metal_grad(a);
                 a_grad = a.node->metal_storage.get();
@@ -1393,8 +1393,8 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
             ensure_metal_grad(out);
             ensure_metal_data(a);
             ensure_metal_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_metal_grad(a);
                 a_grad = a.node->metal_storage.get();
@@ -1435,8 +1435,8 @@ Tensor batch_matmul(const Tensor& a, const Tensor& b) {
             ensure_metal_grad(out);
             ensure_metal_data(a);
             ensure_metal_data(b);
-            llm::TensorCudaStorage* a_grad = nullptr;
-            llm::TensorCudaStorage* b_grad = nullptr;
+            llm::TensorStorage* a_grad = nullptr;
+            llm::TensorStorage* b_grad = nullptr;
             if (a.requires_grad()) {
                 ensure_metal_grad(a);
                 a_grad = a.node->metal_storage.get();
@@ -1520,9 +1520,9 @@ Tensor layernorm(const Tensor& x, const Tensor& scale, const Tensor& shift, doub
             ensure_metal_grad(out);
             ensure_metal_data(x);
             ensure_metal_data(scale);
-            llm::TensorCudaStorage* x_grad = nullptr;
-            llm::TensorCudaStorage* scale_grad = nullptr;
-            llm::TensorCudaStorage* shift_grad = nullptr;
+            llm::TensorStorage* x_grad = nullptr;
+            llm::TensorStorage* scale_grad = nullptr;
+            llm::TensorStorage* shift_grad = nullptr;
             if (x.requires_grad()) {
                 ensure_metal_grad(x);
                 x_grad = x.node->metal_storage.get();
