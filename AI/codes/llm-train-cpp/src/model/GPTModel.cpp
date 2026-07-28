@@ -12,19 +12,23 @@ GPTModel::GPTModel(GPTConfig cfg_)
     }
 }
 
+// 符号：B=batch, T=序列长度, C=emb_dim, V=vocab_size
+// ids: (B, T) 的 token 索引 -> 返回: (B, T, V) 的 logits
 Tensor GPTModel::forward(const Tensor& ids) {
     int64_t T = ids.shape()[1];
+    // 构造位置索引 [0, 1, ..., T-1]，形状 (T)
     std::vector<int64_t> pos(T);
     for (int64_t i = 0; i < T; ++i) {
         pos[i] = i;
     }
     Tensor pos_ids = Tensor::from_ints(pos, {T}, cfg.device);
+    // token 嵌入 (B,T,C) 与位置嵌入 (T,C) 相加（广播）-> (B,T,C)
     Tensor x = ops::add(tok_emb.forward(ids), pos_emb.forward(pos_ids));
     for (auto& block : blocks) {
-        x = block.forward(x);
+        x = block.forward(x);       // 每个 Transformer 块保持 (B,T,C)
     }
-    x = final_norm.forward(x);
-    return out_head.forward(x);
+    x = final_norm.forward(x);      // (B,T,C)
+    return out_head.forward(x);     // (B,T,C) -> (B,T,V)
 }
 
 std::vector<Tensor*> GPTModel::parameters() {

@@ -9,6 +9,8 @@ LayerNorm::LayerNorm(int64_t emb_dim, Device device)
       shift(Tensor::zeros({emb_dim}, device, true)) {
 }
 
+// 对末维(emb_dim)做归一化，形状不变：x: (..., emb_dim) -> 返回: (..., emb_dim)
+// scale/shift: (emb_dim)，逐元素缩放和平移
 Tensor LayerNorm::forward(const Tensor& x) {
     return ops::layernorm(x, scale, shift, eps);
 }
