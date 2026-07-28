@@ -128,6 +128,19 @@ Tensor Tensor::randn(const std::vector<int64_t>& shape, double scale, Device dev
     return t;
 }
 
+Tensor Tensor::uniform(const std::vector<int64_t>& shape, double bound, Device device, bool requires_grad) {
+    Tensor t(shape, DType::Float32, device, requires_grad);
+    // 函数内 static 局部引擎：首次调用 uniform 时以种子 456 初始化一次，
+    // 之后所有调用共用这一个实例并持续推进随机序列，保证初始化确定性/可复现。
+    // 与 randn 里的 gen(123) 是相互独立的两个引擎（各用各的种子）。
+    static std::mt19937 gen(456);
+    std::uniform_real_distribution<double> dist(-bound, bound);
+    for (auto& v : t.data()) {
+        v = dist(gen);
+    }
+    return t;
+}
+
 Tensor Tensor::from_vector(const std::vector<double>& values, const std::vector<int64_t>& shape,
                            Device device, bool requires_grad) {
     return Tensor(shape, values, DType::Float32, device, requires_grad);
@@ -273,6 +286,20 @@ void Tensor::backward() {
         if (it->node->backward_fn) {
             it->node->backward_fn();
         }
+    }
+    // 反向传播完成后主动打断计算图，避免内存泄漏。
+    //
+    // 每个中间节点的 backward_fn 闭包按值捕获了输出张量自身（含 shared_ptr<TensorNode>），
+    // 形成 node -> backward_fn -> 捕获的 Tensor -> node 的自引用循环，
+    // 导致整张图的引用计数永不归零、无法析构。训练时每步都新建一整张大图，
+    // 若不清理会在几十步内累积到数十 GB 内存。
+    //
+    // 本项目不做二次反向，backward 结束后图即可丢弃：清空各节点的 backward_fn 和 parents，
+    // 循环引用被打断，中间节点随 order 离开作用域而正常释放；叶子（参数）节点的
+    // shared_ptr 仍由模型持有，其 data/grad 不受影响。
+    for (auto& t : order) {
+        t.node->backward_fn = nullptr;
+        t.node->parents.clear();
     }
 }
 

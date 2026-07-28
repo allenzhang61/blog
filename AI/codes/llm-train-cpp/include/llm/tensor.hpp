@@ -67,6 +67,11 @@ public:
     static Tensor randn(const std::vector<int64_t>& shape, double scale = 0.02,
                         Device device = {}, bool requires_grad = false);
 
+    // 创建均匀分布随机张量，取值范围 [-bound, bound]。
+    // 用于对齐 PyTorch nn.Linear 的默认 Kaiming uniform 初始化（bound = 1/sqrt(fan_in)）。
+    static Tensor uniform(const std::vector<int64_t>& shape, double bound,
+                          Device device = {}, bool requires_grad = false);
+
     // 从 double 数组创建 Float32 语义的张量。
     static Tensor from_vector(const std::vector<double>& values, const std::vector<int64_t>& shape,
                               Device device = {}, bool requires_grad = false);

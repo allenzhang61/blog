@@ -2,13 +2,20 @@
 
 #include "llm/ops.hpp"
 
+#include <cmath>
 #include <stdexcept>
 
 namespace llm {
 
+// 权重初始化对齐 PyTorch nn.Linear 的默认（Kaiming uniform）：
+//   weight, bias ~ U(-1/sqrt(fan_in), 1/sqrt(fan_in))，fan_in = in_features。
+// 固定 std=0.02 在浅层可用，但深层（如 12 层 GPT）残差流方差累积会导致训练停滞，
+// 因此改用与 PyTorch 一致的按 fan_in 缩放的均匀分布初始化。
 Linear::Linear(int64_t in_features, int64_t out_features, bool bias_enabled, Device device)
-    : weight(Tensor::randn({in_features, out_features}, 0.02, device, true)),
-      bias(Tensor::zeros({out_features}, device, true)),
+    : weight(Tensor::uniform({in_features, out_features},
+                             1.0 / std::sqrt(static_cast<double>(in_features)), device, true)),
+      bias(Tensor::uniform({out_features},
+                           1.0 / std::sqrt(static_cast<double>(in_features)), device, true)),
       use_bias(bias_enabled) {}
 
 // x: (..., in_features) -> 返回: (..., out_features)

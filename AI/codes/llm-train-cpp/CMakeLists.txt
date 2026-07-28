@@ -116,7 +116,7 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-add_executable(llm_cpp_tests tests/test_cpu.cpp tests/utils/test_utils.cpp tests/utils/test_device.cpp)
+add_executable(llm_cpp_tests tests/test_cpu.cpp tests/utils/test_utils.cpp tests/utils/test_device.cpp tests/tensor/test_tensor.cpp)
 target_link_libraries(llm_cpp_tests PRIVATE llm_train_cpp GTest::gtest_main)
 target_compile_definitions(llm_cpp_tests PRIVATE LLM_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
