@@ -168,7 +168,10 @@ bool Tensor::requires_grad() const {
 }
 
 int64_t Tensor::numel() const {
-    return static_cast<int64_t>(node->data.size());
+    if (node->shape.empty() && node->data.empty() && !node->cuda_storage && !node->metal_storage) {
+        return 0;
+    }
+    return product(node->shape);
 }
 
 std::vector<double>& Tensor::data() {
@@ -193,7 +196,7 @@ std::vector<double>& Tensor::grad() const {
 std::vector<double>& Tensor::mutable_grad() const {
     sync_grad_to_host(*node);
     if (node->grad.empty()) {
-        node->grad.assign(node->data.size(), 0.0);
+        node->grad.assign(static_cast<size_t>(numel()), 0.0);
     }
     mark_grad_host_dirty();
     return node->grad;
@@ -223,7 +226,7 @@ double Tensor::item() const {
 
 void Tensor::zero_grad() {
     // 先把 host 端梯度缓冲区全部清零（大小与数据一致）。
-    node->grad.assign(node->data.size(), 0.0);
+    node->grad.assign(static_cast<size_t>(numel()), 0.0);
     // 对于 GPU 设备，还需要同步清零设备端的梯度缓冲区。
     if (node->device.type == DeviceType::CUDA || node->device.type == DeviceType::Metal) {
         // 根据设备类型取对应的设备存储。
@@ -232,7 +235,7 @@ void Tensor::zero_grad() {
         if (storage && storage->fill_grad) {
             // 设备端已分配且支持 fill_grad：直接在设备上把梯度填 0，
             // 此时设备端是最新的（device 为脏、host 干净），避免多余的 host->device 拷贝。
-            storage->fill_grad(*storage, node->grad.size(), 0.0f);
+            storage->fill_grad(*storage, static_cast<size_t>(numel()), 0.0f);
             node->host_grad_dirty = false;
             node->device_grad_dirty = true;
         } else {

@@ -77,6 +77,11 @@ __global__ void log_softmax_kernel(const float* x, float* out, unsigned int rows
 __global__ void cross_entropy_loss_kernel(const float* logits, const float* targets, float* loss,
                                           unsigned int rows, unsigned int vocab);
 
+// 每行一个 block 的并行交叉熵 loss，输出每一行的 loss 值。
+__global__ void cross_entropy_row_loss_parallel_kernel(const float* logits, const float* targets,
+                                                       float* row_losses, unsigned int rows,
+                                                       unsigned int vocab);
+
 // 将 out_grad 累加到 target_grad；target_size 非 0 时按目标大小做广播归约。
 __global__ void add_grad_kernel(float* target_grad, const float* out_grad, unsigned int target_size,
                                 long long count, float scale);
@@ -130,6 +135,11 @@ __global__ void softmax_grad_kernel(float* a_grad, const float* out, const float
 __global__ void cross_entropy_grad_kernel(float* logits_grad, const float* logits,
                                           const float* targets, const float* out_grad,
                                           unsigned int rows, unsigned int vocab);
+
+// 每行一个 block 的并行 cross_entropy 反向。
+__global__ void cross_entropy_grad_rows_kernel(float* logits_grad, const float* logits,
+                                               const float* targets, const float* out_grad,
+                                               unsigned int rows, unsigned int vocab);
 
 // embedding 对 weight 的反向，将 token 位置梯度累加回对应词表行。
 __global__ void embedding_grad_kernel(float* weight_grad, const float* ids, const float* out_grad,

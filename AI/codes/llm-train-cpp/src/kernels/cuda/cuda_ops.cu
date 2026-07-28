@@ -2,6 +2,7 @@
 #include "cuda_runtime.hpp"
 
 #include <cmath>
+#include <algorithm>
 #include <stdexcept>
 #include <vector>
 
@@ -42,11 +43,21 @@ void ensure_cuda_data(const llm::Tensor& t) {
 void ensure_cuda_grad(const llm::Tensor& t) {
     llm::TensorStorage& storage = ensure_cuda_storage(t);
     if (t.node->grad.empty()) {
-        t.node->grad.assign(static_cast<size_t>(t.numel()), 0.0);
-        t.node->host_grad_dirty = true;
+        if (storage.grad == nullptr || storage.grad_count < static_cast<size_t>(t.numel())) {
+            llm::cuda::detail::CudaRuntime::instance().fill_grad_buffer(storage, static_cast<size_t>(t.numel()), 0.0f);
+        }
+        t.node->host_grad_dirty = false;
+        t.node->device_grad_dirty = true;
+        return;
     }
     if (t.node->host_grad_dirty || storage.grad == nullptr || storage.grad_count < static_cast<size_t>(t.numel())) {
-        llm::cuda::detail::CudaRuntime::instance().copy_grad_from_host(storage, t.node->grad);
+        bool host_grad_is_zero = std::all_of(t.node->grad.begin(), t.node->grad.end(),
+                                             [](double value) { return value == 0.0; });
+        if ((storage.grad == nullptr || storage.grad_count < static_cast<size_t>(t.numel())) && host_grad_is_zero) {
+            llm::cuda::detail::CudaRuntime::instance().fill_grad_buffer(storage, static_cast<size_t>(t.numel()), 0.0f);
+        } else {
+            llm::cuda::detail::CudaRuntime::instance().copy_grad_from_host(storage, t.node->grad);
+        }
         t.node->host_grad_dirty = false;
         t.node->device_grad_dirty = true;
     }
@@ -58,10 +69,18 @@ void mark_cuda_grad_dirty(const llm::Tensor& t) {
 }
 
 llm::Tensor make_cuda_output(const std::vector<int64_t>& shape, llm::Device device, bool requires_grad) {
-    llm::Tensor out(shape, llm::DType::Float32, device, requires_grad);
+    llm::Tensor out;
+    out.node->shape = shape;
+    out.node->dtype = llm::DType::Float32;
+    out.node->device = device;
+    out.node->requires_grad = requires_grad;
     out.node->cuda_storage = llm::cuda::detail::CudaRuntime::instance().create_tensor_storage();
+    // CUDA outputs keep device storage authoritative. Avoid allocating large
+    // host mirrors for intermediates such as normal-profile logits [2,256,50257].
     out.node->host_data_dirty = false;
     out.node->device_data_dirty = true;
+    out.node->host_grad_dirty = false;
+    out.node->device_grad_dirty = false;
     return out;
 }
 

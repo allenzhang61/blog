@@ -3,7 +3,11 @@
 
 #include <cuda_runtime.h>
 
+#include <chrono>
+#include <cstdlib>
+#include <iostream>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -20,6 +24,147 @@ constexpr int kThreadsPerBlock = 256;
 int blocks_for(int64_t count) {
     return static_cast<int>((count + kThreadsPerBlock - 1) / kThreadsPerBlock);
 }
+
+struct ProfileEntry {
+    int calls{0};
+    double ms{0.0};
+};
+
+enum class ProfileOp : int {
+    AddGrad,
+    AdamwUpdate,
+    BatchMatmulBuffer,
+    BatchMatmulGrad,
+    CausalMaskBuffer,
+    CausalMaskGrad,
+    CopyDataFromHost,
+    CopyDataToHost,
+    CopyGradFromHost,
+    CopyGradToHost,
+    CrossEntropyGrad,
+    CrossEntropyLossBuffer,
+    Elementwise2Buffer,
+    ElementwiseGrad,
+    EmbeddingBuffer,
+    EmbeddingGrad,
+    FillDataBuffer,
+    FillGradBuffer,
+    GatherBuffer,
+    GeluGrad,
+    LayernormBuffer,
+    LayernormGrad,
+    LogSoftmaxBuffer,
+    MatmulBuffer,
+    MatmulGrad,
+    MulScalarBuffer,
+    MulScalarGrad,
+    PowGrad,
+    ReduceBuffer,
+    ReduceGrad,
+    ScaleDataBuffer,
+    ScatterAddGrad,
+    SoftmaxBuffer,
+    SoftmaxGrad,
+    UnaryBuffer,
+    Count
+};
+
+const char* profile_op_name(ProfileOp op) {
+    static const char* names[] = {
+        "add_grad",
+        "adamw_update",
+        "batch_matmul_buffer",
+        "batch_matmul_grad",
+        "causal_mask_buffer",
+        "causal_mask_grad",
+        "copy_data_from_host",
+        "copy_data_to_host",
+        "copy_grad_from_host",
+        "copy_grad_to_host",
+        "cross_entropy_grad",
+        "cross_entropy_loss_buffer",
+        "elementwise2_buffer",
+        "elementwise_grad",
+        "embedding_buffer",
+        "embedding_grad",
+        "fill_data_buffer",
+        "fill_grad_buffer",
+        "gather_buffer",
+        "gelu_grad",
+        "layernorm_buffer",
+        "layernorm_grad",
+        "log_softmax_buffer",
+        "matmul_buffer",
+        "matmul_grad",
+        "mul_scalar_buffer",
+        "mul_scalar_grad",
+        "pow_grad",
+        "reduce_buffer",
+        "reduce_grad",
+        "scale_data_buffer",
+        "scatter_add_grad",
+        "softmax_buffer",
+        "softmax_grad",
+        "unary_buffer",
+    };
+    return names[static_cast<int>(op)];
+}
+
+ProfileEntry* profile_entries() {
+    static ProfileEntry entries[static_cast<int>(ProfileOp::Count)];
+    return entries;
+}
+
+bool profile_enabled() {
+    static bool enabled = std::getenv("LLM_CPP_CUDA_PROFILE") != nullptr;
+    return enabled;
+}
+
+void print_profile() {
+    if (!profile_enabled()) {
+        return;
+    }
+    std::cerr << "[cuda profile]\n";
+    auto* entries = profile_entries();
+    for (int i = 0; i < static_cast<int>(ProfileOp::Count); ++i) {
+        const auto& entry = entries[i];
+        if (entry.calls == 0) {
+            continue;
+        }
+        std::cerr << "  op=" << profile_op_name(static_cast<ProfileOp>(i))
+                  << " calls=" << entry.calls
+                  << " total_ms=" << entry.ms
+                  << " avg_ms=" << (entry.ms / static_cast<double>(entry.calls))
+                  << "\n";
+    }
+}
+
+struct ProfileTimer {
+    explicit ProfileTimer(ProfileOp op_) : op(op_) {
+        static bool registered = [] {
+            std::atexit(print_profile);
+            return true;
+        }();
+        (void)registered;
+        if (profile_enabled()) {
+            start = std::chrono::steady_clock::now();
+        }
+    }
+
+    ~ProfileTimer() {
+        if (!profile_enabled()) {
+            return;
+        }
+        auto end = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(end - start).count();
+        auto& entry = profile_entries()[static_cast<int>(op)];
+        entry.calls += 1;
+        entry.ms += ms;
+    }
+
+    ProfileOp op;
+    std::chrono::steady_clock::time_point start{};
+};
 
 } // namespace
 
@@ -182,26 +327,31 @@ void CudaRuntime::ensure_grad_buffer(TensorStorage& storage, size_t count) {
 }
 
 void CudaRuntime::copy_data_from_host(TensorStorage& storage, const std::vector<double>& host) {
+    ProfileTimer timer(ProfileOp::CopyDataFromHost);
     require();
     tensor_copy_data_from_host(storage, host);
 }
 
 void CudaRuntime::copy_data_to_host(TensorStorage& storage, std::vector<double>& host) {
+    ProfileTimer timer(ProfileOp::CopyDataToHost);
     require();
     tensor_copy_data_to_host(storage, host);
 }
 
 void CudaRuntime::copy_grad_from_host(TensorStorage& storage, const std::vector<double>& host) {
+    ProfileTimer timer(ProfileOp::CopyGradFromHost);
     require();
     tensor_copy_grad_from_host(storage, host);
 }
 
 void CudaRuntime::copy_grad_to_host(TensorStorage& storage, std::vector<double>& host) {
+    ProfileTimer timer(ProfileOp::CopyGradToHost);
     require();
     tensor_copy_grad_to_host(storage, host);
 }
 
 void CudaRuntime::fill_data_buffer(TensorStorage& storage, size_t count, float value) {
+    ProfileTimer timer(ProfileOp::FillDataBuffer);
     require();
     ensure_data_buffer(storage, count);
     fill_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -210,6 +360,7 @@ void CudaRuntime::fill_data_buffer(TensorStorage& storage, size_t count, float v
 }
 
 void CudaRuntime::fill_grad_buffer(TensorStorage& storage, size_t count, float value) {
+    ProfileTimer timer(ProfileOp::FillGradBuffer);
     require();
     ensure_grad_buffer(storage, count);
     fill_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -228,6 +379,7 @@ void CudaRuntime::set_grad_scalar(TensorStorage& storage, float value) {
 void CudaRuntime::elementwise2_buffer(const char* op, TensorStorage& out,
                                       const TensorStorage& a, const TensorStorage& b,
                                       unsigned int b_size, size_t count) {
+    ProfileTimer timer(ProfileOp::Elementwise2Buffer);
     require();
     ensure_data_buffer(out, count);
     int blocks = blocks_for(static_cast<int64_t>(count));
@@ -252,6 +404,7 @@ void CudaRuntime::elementwise2_buffer(const char* op, TensorStorage& out,
 
 void CudaRuntime::mul_scalar_buffer(TensorStorage& out, const TensorStorage& a,
                                     float scalar, size_t count) {
+    ProfileTimer timer(ProfileOp::MulScalarBuffer);
     require();
     ensure_data_buffer(out, count);
     mul_scalar_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
@@ -262,6 +415,7 @@ void CudaRuntime::mul_scalar_buffer(TensorStorage& out, const TensorStorage& a,
 
 void CudaRuntime::unary_buffer(const char* op, TensorStorage& out, const TensorStorage& a,
                                float scalar, size_t count) {
+    ProfileTimer timer(ProfileOp::UnaryBuffer);
     require();
     ensure_data_buffer(out, count);
     int blocks = blocks_for(static_cast<int64_t>(count));
@@ -292,6 +446,7 @@ void CudaRuntime::unary_buffer(const char* op, TensorStorage& out, const TensorS
 
 void CudaRuntime::gather_buffer(TensorStorage& out, const TensorStorage& a,
                                 const std::vector<unsigned int>& index) {
+    ProfileTimer timer(ProfileOp::GatherBuffer);
     require();
     int64_t count = static_cast<int64_t>(index.size());
     unsigned int* d_index = nullptr;
@@ -307,6 +462,7 @@ void CudaRuntime::gather_buffer(TensorStorage& out, const TensorStorage& a,
 }
 
 void CudaRuntime::scale_data_buffer(TensorStorage& storage, size_t count, float scalar) {
+    ProfileTimer timer(ProfileOp::ScaleDataBuffer);
     require();
     mul_scalar_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<const float*>(storage.data), static_cast<float*>(storage.data), scalar,
@@ -316,6 +472,7 @@ void CudaRuntime::scale_data_buffer(TensorStorage& storage, size_t count, float 
 
 void CudaRuntime::reduce_buffer(const char* op, TensorStorage& out,
                                 const TensorStorage& a, size_t count) {
+    ProfileTimer timer(ProfileOp::ReduceBuffer);
     require();
     ensure_data_buffer(out, 1);
     if (std::string(op) == "sum") {
@@ -331,6 +488,7 @@ void CudaRuntime::reduce_buffer(const char* op, TensorStorage& out,
 void CudaRuntime::matmul_buffer(TensorStorage& out, const TensorStorage& a,
                                 const TensorStorage& b, unsigned int m, unsigned int k,
                                 unsigned int n) {
+    ProfileTimer timer(ProfileOp::MatmulBuffer);
     require();
     ensure_data_buffer(out, static_cast<size_t>(m) * n);
     dim3 threads(16, 16, 1);
@@ -345,6 +503,7 @@ void CudaRuntime::batch_matmul_buffer(TensorStorage& out, const TensorStorage& a
                                       const TensorStorage& b, unsigned int batches,
                                       unsigned int heads, unsigned int m, unsigned int k,
                                       unsigned int n) {
+    ProfileTimer timer(ProfileOp::BatchMatmulBuffer);
     require();
     int64_t total = static_cast<int64_t>(batches) * heads * m * n;
     ensure_data_buffer(out, static_cast<size_t>(total));
@@ -356,6 +515,7 @@ void CudaRuntime::batch_matmul_buffer(TensorStorage& out, const TensorStorage& a
 
 void CudaRuntime::softmax_buffer(TensorStorage& out, const TensorStorage& a,
                                  unsigned int rows, unsigned int width) {
+    ProfileTimer timer(ProfileOp::SoftmaxBuffer);
     require();
     ensure_data_buffer(out, static_cast<size_t>(rows) * width);
     softmax_kernel<<<blocks_for(rows), kThreadsPerBlock>>>(static_cast<const float*>(a.data),
@@ -365,6 +525,7 @@ void CudaRuntime::softmax_buffer(TensorStorage& out, const TensorStorage& a,
 
 void CudaRuntime::log_softmax_buffer(TensorStorage& out, const TensorStorage& a,
                                      unsigned int rows, unsigned int width) {
+    ProfileTimer timer(ProfileOp::LogSoftmaxBuffer);
     require();
     ensure_data_buffer(out, static_cast<size_t>(rows) * width);
     log_softmax_kernel<<<blocks_for(rows), kThreadsPerBlock>>>(static_cast<const float*>(a.data),
@@ -375,6 +536,7 @@ void CudaRuntime::log_softmax_buffer(TensorStorage& out, const TensorStorage& a,
 void CudaRuntime::layernorm_buffer(TensorStorage& out, const TensorStorage& x,
                                    const TensorStorage& scale, const TensorStorage& shift,
                                    unsigned int rows, unsigned int width, float eps) {
+    ProfileTimer timer(ProfileOp::LayernormBuffer);
     require();
     ensure_data_buffer(out, static_cast<size_t>(rows) * width);
     layernorm_kernel<<<blocks_for(rows), kThreadsPerBlock>>>(
@@ -386,6 +548,7 @@ void CudaRuntime::layernorm_buffer(TensorStorage& out, const TensorStorage& x,
 void CudaRuntime::embedding_buffer(TensorStorage& out, const TensorStorage& ids,
                                    const TensorStorage& weight, unsigned int count,
                                    unsigned int dim) {
+    ProfileTimer timer(ProfileOp::EmbeddingBuffer);
     require();
     int64_t total = static_cast<int64_t>(count) * dim;
     ensure_data_buffer(out, static_cast<size_t>(total));
@@ -398,16 +561,24 @@ void CudaRuntime::embedding_buffer(TensorStorage& out, const TensorStorage& ids,
 void CudaRuntime::cross_entropy_loss_buffer(TensorStorage& out, const TensorStorage& logits,
                                             const TensorStorage& targets, unsigned int rows,
                                             unsigned int vocab) {
+    ProfileTimer timer(ProfileOp::CrossEntropyLossBuffer);
     require();
     ensure_data_buffer(out, 1);
-    cross_entropy_loss_kernel<<<1, 1>>>(static_cast<const float*>(logits.data),
-                                        static_cast<const float*>(targets.data),
-                                        static_cast<float*>(out.data), rows, vocab);
+    float* row_losses = nullptr;
+    cuda_check(cudaMalloc(&row_losses, rows * sizeof(float)), "cudaMalloc cross entropy row losses");
+    cross_entropy_row_loss_parallel_kernel<<<rows, kThreadsPerBlock>>>(
+        static_cast<const float*>(logits.data),
+        static_cast<const float*>(targets.data),
+        row_losses, rows, vocab);
+    sum_kernel<<<1, 1>>>(row_losses, static_cast<float*>(out.data), rows);
+    scale_data_buffer(out, 1, 1.0f / static_cast<float>(rows));
     sync();
+    cudaFree(row_losses);
 }
 
 void CudaRuntime::add_grad(TensorStorage& target, const TensorStorage& out_grad,
                            unsigned int target_size, size_t count, float scale) {
+    ProfileTimer timer(ProfileOp::AddGrad);
     require();
     add_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<float*>(target.grad), static_cast<const float*>(out_grad.grad), target_size,
@@ -418,6 +589,7 @@ void CudaRuntime::add_grad(TensorStorage& target, const TensorStorage& out_grad,
 void CudaRuntime::elementwise_grad(const char* op, TensorStorage* a_grad, TensorStorage* b_grad,
                                    const TensorStorage& a, const TensorStorage& b,
                                    const TensorStorage& out_grad, size_t count) {
+    ProfileTimer timer(ProfileOp::ElementwiseGrad);
     require();
     int blocks = blocks_for(static_cast<int64_t>(count));
     if (std::string(op) == "mul") {
@@ -438,6 +610,7 @@ void CudaRuntime::elementwise_grad(const char* op, TensorStorage* a_grad, Tensor
 
 void CudaRuntime::mul_scalar_grad(TensorStorage& a_grad, const TensorStorage& out_grad,
                                   float scalar, size_t count) {
+    ProfileTimer timer(ProfileOp::MulScalarGrad);
     require();
     mul_scalar_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<float*>(a_grad.grad), static_cast<const float*>(out_grad.grad), scalar,
@@ -447,6 +620,7 @@ void CudaRuntime::mul_scalar_grad(TensorStorage& a_grad, const TensorStorage& ou
 
 void CudaRuntime::pow_grad(TensorStorage& a_grad, const TensorStorage& a,
                            const TensorStorage& out_grad, float exponent, size_t count) {
+    ProfileTimer timer(ProfileOp::PowGrad);
     require();
     pow_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<float*>(a_grad.grad), static_cast<const float*>(a.data),
@@ -456,6 +630,7 @@ void CudaRuntime::pow_grad(TensorStorage& a_grad, const TensorStorage& a,
 
 void CudaRuntime::reduce_grad(TensorStorage& a_grad, const TensorStorage& out_grad,
                               size_t count, float scale) {
+    ProfileTimer timer(ProfileOp::ReduceGrad);
     require();
     reduce_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<float*>(a_grad.grad), static_cast<const float*>(out_grad.grad),
@@ -465,6 +640,7 @@ void CudaRuntime::reduce_grad(TensorStorage& a_grad, const TensorStorage& out_gr
 
 void CudaRuntime::scatter_add_grad(TensorStorage& a_grad, const TensorStorage& out_grad,
                                    const std::vector<unsigned int>& index) {
+    ProfileTimer timer(ProfileOp::ScatterAddGrad);
     require();
     unsigned int* d_index = nullptr;
     cuda_check(cudaMalloc(&d_index, index.size() * sizeof(unsigned int)), "cudaMalloc index");
@@ -482,6 +658,7 @@ void CudaRuntime::matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad,
                               const TensorStorage& a, const TensorStorage& b,
                               const TensorStorage& out_grad, unsigned int m, unsigned int k,
                               unsigned int n) {
+    ProfileTimer timer(ProfileOp::MatmulGrad);
     require();
     dim3 threads(16, 16, 1);
     if (a_grad != nullptr) {
@@ -504,6 +681,7 @@ void CudaRuntime::batch_matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad
                                     const TensorStorage& out_grad, unsigned int batches,
                                     unsigned int heads, unsigned int m, unsigned int k,
                                     unsigned int n) {
+    ProfileTimer timer(ProfileOp::BatchMatmulGrad);
     require();
     if (a_grad != nullptr) {
         int64_t total = static_cast<int64_t>(batches) * heads * m * k;
@@ -523,6 +701,7 @@ void CudaRuntime::batch_matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad
 void CudaRuntime::softmax_grad(TensorStorage& a_grad, const TensorStorage& out,
                                const TensorStorage& out_grad, unsigned int rows,
                                unsigned int width) {
+    ProfileTimer timer(ProfileOp::SoftmaxGrad);
     require();
     softmax_grad_kernel<<<blocks_for(rows), kThreadsPerBlock>>>(
         static_cast<float*>(a_grad.grad), static_cast<const float*>(out.data),
@@ -533,9 +712,9 @@ void CudaRuntime::softmax_grad(TensorStorage& a_grad, const TensorStorage& out,
 void CudaRuntime::cross_entropy_grad(TensorStorage& logits_grad, const TensorStorage& logits,
                                      const TensorStorage& targets, const TensorStorage& out_grad,
                                      unsigned int rows, unsigned int vocab) {
+    ProfileTimer timer(ProfileOp::CrossEntropyGrad);
     require();
-    int64_t total = static_cast<int64_t>(rows) * vocab;
-    cross_entropy_grad_kernel<<<blocks_for(total), kThreadsPerBlock>>>(
+    cross_entropy_grad_rows_kernel<<<rows, kThreadsPerBlock>>>(
         static_cast<float*>(logits_grad.grad), static_cast<const float*>(logits.data),
         static_cast<const float*>(targets.data), static_cast<const float*>(out_grad.grad), rows, vocab);
     sync();
@@ -544,6 +723,7 @@ void CudaRuntime::cross_entropy_grad(TensorStorage& logits_grad, const TensorSto
 void CudaRuntime::embedding_grad(TensorStorage& weight_grad, const TensorStorage& ids,
                                  const TensorStorage& out_grad, unsigned int count,
                                  unsigned int dim) {
+    ProfileTimer timer(ProfileOp::EmbeddingGrad);
     require();
     int64_t total = static_cast<int64_t>(count) * dim;
     embedding_grad_kernel<<<blocks_for(total), kThreadsPerBlock>>>(
@@ -556,6 +736,7 @@ void CudaRuntime::layernorm_grad(TensorStorage* x_grad, TensorStorage* scale_gra
                                  TensorStorage* shift_grad, const TensorStorage& x,
                                  const TensorStorage& scale, const TensorStorage& out_grad,
                                  unsigned int rows, unsigned int width, float eps) {
+    ProfileTimer timer(ProfileOp::LayernormGrad);
     require();
     int64_t total = static_cast<int64_t>(rows) * width;
     if (x_grad != nullptr) {
@@ -576,6 +757,7 @@ void CudaRuntime::layernorm_grad(TensorStorage* x_grad, TensorStorage* scale_gra
 
 void CudaRuntime::gelu_grad(TensorStorage& x_grad, const TensorStorage& x,
                             const TensorStorage& out_grad, size_t count) {
+    ProfileTimer timer(ProfileOp::GeluGrad);
     require();
     gelu_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
         static_cast<float*>(x_grad.grad), static_cast<const float*>(x.data),
@@ -587,6 +769,7 @@ void CudaRuntime::adamw_update(TensorStorage& param, TensorStorage& grad,
                                TensorStorage& m, TensorStorage& v, size_t count,
                                float lr, float weight_decay, float beta1, float beta2,
                                float eps, float bias_correction1, float bias_correction2) {
+    ProfileTimer timer(ProfileOp::AdamwUpdate);
     require();
     ensure_data_buffer(m, count);
     ensure_data_buffer(v, count);
@@ -600,6 +783,7 @@ void CudaRuntime::adamw_update(TensorStorage& param, TensorStorage& grad,
 void CudaRuntime::causal_mask_buffer(TensorStorage& out, const TensorStorage& scores,
                                      unsigned int batches, unsigned int heads,
                                      unsigned int sequence_length, float mask_value) {
+    ProfileTimer timer(ProfileOp::CausalMaskBuffer);
     require();
     int64_t total = static_cast<int64_t>(batches) * heads * sequence_length * sequence_length;
     ensure_data_buffer(out, static_cast<size_t>(total));
@@ -612,6 +796,7 @@ void CudaRuntime::causal_mask_buffer(TensorStorage& out, const TensorStorage& sc
 void CudaRuntime::causal_mask_grad(TensorStorage& scores_grad, const TensorStorage& out_grad,
                                    unsigned int batches, unsigned int heads,
                                    unsigned int sequence_length) {
+    ProfileTimer timer(ProfileOp::CausalMaskGrad);
     require();
     int64_t total = static_cast<int64_t>(batches) * heads * sequence_length * sequence_length;
     causal_mask_grad_kernel<<<blocks_for(total), kThreadsPerBlock>>>(

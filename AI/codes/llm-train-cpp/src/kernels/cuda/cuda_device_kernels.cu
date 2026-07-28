@@ -264,6 +264,51 @@ __global__ void cross_entropy_loss_kernel(const float* logits, const float* targ
     loss[0] = acc / (float)rows;
 }
 
+__global__ void cross_entropy_row_loss_parallel_kernel(const float* logits, const float* targets,
+                                                       float* row_losses, unsigned int rows,
+                                                       unsigned int vocab) {
+    unsigned int row = blockIdx.x;
+    if (row >= rows) {
+        return;
+    }
+    unsigned int tid = threadIdx.x;
+    unsigned int base = row * vocab;
+    __shared__ float scratch[256];
+
+    float local_max = -INFINITY;
+    for (unsigned int v = tid; v < vocab; v += blockDim.x) {
+        local_max = fmaxf(local_max, logits[base + v]);
+    }
+    scratch[tid] = local_max;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            scratch[tid] = fmaxf(scratch[tid], scratch[tid + stride]);
+        }
+        __syncthreads();
+    }
+    float mx = scratch[0];
+
+    float local_sum = 0.0f;
+    for (unsigned int v = tid; v < vocab; v += blockDim.x) {
+        local_sum += expf(logits[base + v] - mx);
+    }
+    scratch[tid] = local_sum;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            scratch[tid] += scratch[tid + stride];
+        }
+        __syncthreads();
+    }
+    float denom = scratch[0];
+    if (tid == 0) {
+        unsigned int target = (unsigned int)(targets[row]);
+        float p = expf(logits[base + target] - mx) / denom;
+        row_losses[row] = -logf(fmaxf(p, 1.0e-12f));
+    }
+}
+
 __global__ void add_grad_kernel(float* target_grad, const float* out_grad, unsigned int target_size,
                                 long long count, float scale) {
     long long id = blockIdx.x * blockDim.x + threadIdx.x;
@@ -442,6 +487,55 @@ __global__ void cross_entropy_grad_kernel(float* logits_grad, const float* logit
         g -= 1.0f;
     }
     atomicAdd(&logits_grad[id], out_grad[0] * g / (float)rows);
+}
+
+__global__ void cross_entropy_grad_rows_kernel(float* logits_grad, const float* logits,
+                                               const float* targets, const float* out_grad,
+                                               unsigned int rows, unsigned int vocab) {
+    unsigned int row = blockIdx.x;
+    if (row >= rows) {
+        return;
+    }
+    unsigned int tid = threadIdx.x;
+    unsigned int base = row * vocab;
+    __shared__ float scratch[256];
+
+    float local_max = -INFINITY;
+    for (unsigned int v = tid; v < vocab; v += blockDim.x) {
+        local_max = fmaxf(local_max, logits[base + v]);
+    }
+    scratch[tid] = local_max;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            scratch[tid] = fmaxf(scratch[tid], scratch[tid + stride]);
+        }
+        __syncthreads();
+    }
+    float mx = scratch[0];
+
+    float local_sum = 0.0f;
+    for (unsigned int v = tid; v < vocab; v += blockDim.x) {
+        local_sum += expf(logits[base + v] - mx);
+    }
+    scratch[tid] = local_sum;
+    __syncthreads();
+    for (unsigned int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            scratch[tid] += scratch[tid + stride];
+        }
+        __syncthreads();
+    }
+    float denom = scratch[0];
+    unsigned int target = (unsigned int)(targets[row]);
+    float scale = out_grad[0] / (float)rows;
+    for (unsigned int v = tid; v < vocab; v += blockDim.x) {
+        float g = expf(logits[base + v] - mx) / denom;
+        if (v == target) {
+            g -= 1.0f;
+        }
+        logits_grad[base + v] += scale * g;
+    }
 }
 
 __global__ void embedding_grad_kernel(float* weight_grad, const float* ids, const float* out_grad,
