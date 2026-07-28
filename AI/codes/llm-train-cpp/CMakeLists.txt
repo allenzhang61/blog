@@ -81,6 +81,13 @@ target_compile_definitions(llm_train_cpp PUBLIC
 target_compile_options(llm_train_cpp PUBLIC
     $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>
 )
+if(APPLE)
+    # macOS 自带 Accelerate 框架（含 BLAS）。用 cblas_dgemm 替换手写 matmul，
+    # 可获得数量级的矩阵乘加速（多线程 + 向量化 + 缓存分块）。
+    find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
+    target_link_libraries(llm_train_cpp PUBLIC ${ACCELERATE_FRAMEWORK})
+    target_compile_definitions(llm_train_cpp PUBLIC LLM_CPP_USE_BLAS=1)
+endif()
 if(LLM_CPP_ENABLE_CUDA_COMPILED)
     target_compile_options(llm_train_cpp PRIVATE
         $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:-Xcompiler=/utf-8>
