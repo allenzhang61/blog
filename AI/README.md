@@ -85,6 +85,7 @@
       - 数据清洗、去重、混合比例
       - Scaling Law
       - LoRA、QLoRA、PEFT
+        - [lora](chapter-03/03-030.md)
       - SFT
       - Reward Model
       - RLHF、DPO、GRPO
