@@ -1,11 +1,14 @@
 #include "cuda_runtime.hpp"
 #include "cuda_device_kernels.cuh"
 
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -16,6 +19,13 @@ void cuda_check(cudaError_t status, const char* what) {
     if (status != cudaSuccess) {
         throw std::runtime_error(std::string("CUDA error in ") + what + ": " +
                                  cudaGetErrorString(status));
+    }
+}
+
+void cublas_check(cublasStatus_t status, const char* what) {
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        throw std::runtime_error(std::string("cuBLAS error in ") + what + ": " +
+                                 std::to_string(static_cast<int>(status)));
     }
 }
 
@@ -65,6 +75,8 @@ enum class ProfileOp : int {
     ScatterAddGrad,
     SoftmaxBuffer,
     SoftmaxGrad,
+    TransposeAddGrad,
+    TransposeBuffer,
     UnaryBuffer,
     Count
 };
@@ -105,6 +117,8 @@ const char* profile_op_name(ProfileOp op) {
         "scatter_add_grad",
         "softmax_buffer",
         "softmax_grad",
+        "transpose_add_grad",
+        "transpose_buffer",
         "unary_buffer",
     };
     return names[static_cast<int>(op)];
@@ -280,6 +294,58 @@ void ensure_float_buffer(void*& ptr, size_t& current_count, size_t requested_cou
         cuda_check(cudaMalloc(&ptr, requested_count * sizeof(float)), what);
     }
     current_count = requested_count;
+}
+
+TransposeParams make_transpose_params(const std::vector<int64_t>& shape, int64_t dim0, int64_t dim1,
+                                      size_t& count) {
+    if (shape.size() > 4) {
+        throw std::runtime_error("CUDA transpose supports rank <= 4");
+    }
+    if (dim0 < 0 || dim1 < 0 || dim0 >= static_cast<int64_t>(shape.size()) ||
+        dim1 >= static_cast<int64_t>(shape.size())) {
+        throw std::runtime_error("CUDA transpose dim out of range");
+    }
+
+    std::vector<int64_t> out_shape = shape;
+    std::swap(out_shape[static_cast<size_t>(dim0)], out_shape[static_cast<size_t>(dim1)]);
+    std::vector<int64_t> in_strides(shape.size(), 1);
+    std::vector<int64_t> out_strides(out_shape.size(), 1);
+    for (int64_t i = static_cast<int64_t>(shape.size()) - 2; i >= 0; --i) {
+        in_strides[static_cast<size_t>(i)] =
+            in_strides[static_cast<size_t>(i + 1)] * shape[static_cast<size_t>(i + 1)];
+        out_strides[static_cast<size_t>(i)] =
+            out_strides[static_cast<size_t>(i + 1)] * out_shape[static_cast<size_t>(i + 1)];
+    }
+
+    count = 1;
+    for (int64_t dim : shape) {
+        if (dim < 0) {
+            throw std::runtime_error("CUDA transpose negative shape");
+        }
+        count *= static_cast<size_t>(dim);
+    }
+
+    TransposeParams params{};
+    params.rank = static_cast<unsigned int>(shape.size());
+    for (size_t d = 0; d < shape.size(); ++d) {
+        if (shape[d] > std::numeric_limits<unsigned int>::max() ||
+            out_shape[d] > std::numeric_limits<unsigned int>::max() ||
+            in_strides[d] > std::numeric_limits<unsigned int>::max() ||
+            out_strides[d] > std::numeric_limits<unsigned int>::max()) {
+            throw std::runtime_error("CUDA transpose shape too large");
+        }
+        int64_t input_dim = static_cast<int64_t>(d);
+        if (input_dim == dim0) {
+            input_dim = dim1;
+        } else if (input_dim == dim1) {
+            input_dim = dim0;
+        }
+        params.shape[d] = static_cast<unsigned int>(shape[d]);
+        params.out_shape[d] = static_cast<unsigned int>(out_shape[d]);
+        params.in_strides[d] = static_cast<unsigned int>(in_strides[static_cast<size_t>(input_dim)]);
+        params.out_strides[d] = static_cast<unsigned int>(out_strides[d]);
+    }
+    return params;
 }
 
 void tensor_copy_data_from_host(TensorStorage& storage, const std::vector<double>& host) {
@@ -461,6 +527,19 @@ void CudaRuntime::gather_buffer(TensorStorage& out, const TensorStorage& a,
     cudaFree(d_index);
 }
 
+void CudaRuntime::transpose_buffer(TensorStorage& out, const TensorStorage& a,
+                                   const std::vector<int64_t>& shape, int64_t dim0, int64_t dim1) {
+    ProfileTimer timer(ProfileOp::TransposeBuffer);
+    require();
+    size_t count = 0;
+    TransposeParams params = make_transpose_params(shape, dim0, dim1, count);
+    ensure_data_buffer(out, count);
+    transpose_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
+        static_cast<const float*>(a.data), static_cast<float*>(out.data), params,
+        static_cast<long long>(count));
+    sync();
+}
+
 void CudaRuntime::scale_data_buffer(TensorStorage& storage, size_t count, float scalar) {
     ProfileTimer timer(ProfileOp::ScaleDataBuffer);
     require();
@@ -491,11 +570,18 @@ void CudaRuntime::matmul_buffer(TensorStorage& out, const TensorStorage& a,
     ProfileTimer timer(ProfileOp::MatmulBuffer);
     require();
     ensure_data_buffer(out, static_cast<size_t>(m) * n);
-    dim3 threads(16, 16, 1);
-    dim3 grid((n + threads.x - 1) / threads.x, (m + threads.y - 1) / threads.y, 1);
-    matmul_kernel<<<grid, threads>>>(static_cast<const float*>(a.data),
-                                     static_cast<const float*>(b.data),
-                                     static_cast<float*>(out.data), m, k, n);
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    // Row-major C[m,n] = A[m,k] * B[k,n] is column-major C^T[n,m] = B^T[n,k] * A^T[k,m].
+    cublas_check(cublasSgemm(static_cast<cublasHandle_t>(cublas_handle_),
+                             CUBLAS_OP_N, CUBLAS_OP_N,
+                             static_cast<int>(n), static_cast<int>(m), static_cast<int>(k),
+                             &alpha,
+                             static_cast<const float*>(b.data), static_cast<int>(n),
+                             static_cast<const float*>(a.data), static_cast<int>(k),
+                             &beta,
+                             static_cast<float*>(out.data), static_cast<int>(n)),
+                 "matmul_buffer");
     sync();
 }
 
@@ -654,24 +740,49 @@ void CudaRuntime::scatter_add_grad(TensorStorage& a_grad, const TensorStorage& o
     cudaFree(d_index);
 }
 
+void CudaRuntime::transpose_add_grad(TensorStorage& target_grad, const TensorStorage& out_grad,
+                                     const std::vector<int64_t>& shape, int64_t dim0, int64_t dim1) {
+    ProfileTimer timer(ProfileOp::TransposeAddGrad);
+    require();
+    size_t count = 0;
+    TransposeParams params = make_transpose_params(shape, dim0, dim1, count);
+    transpose_add_grad_kernel<<<blocks_for(static_cast<int64_t>(count)), kThreadsPerBlock>>>(
+        static_cast<float*>(target_grad.grad), static_cast<const float*>(out_grad.grad), params,
+        static_cast<long long>(count));
+    sync();
+}
+
 void CudaRuntime::matmul_grad(TensorStorage* a_grad, TensorStorage* b_grad,
                               const TensorStorage& a, const TensorStorage& b,
                               const TensorStorage& out_grad, unsigned int m, unsigned int k,
                               unsigned int n) {
     ProfileTimer timer(ProfileOp::MatmulGrad);
     require();
-    dim3 threads(16, 16, 1);
+    const float alpha = 1.0f;
+    const float beta = 1.0f;
     if (a_grad != nullptr) {
-        dim3 grid((k + threads.x - 1) / threads.x, (m + threads.y - 1) / threads.y, 1);
-        matmul_grad_a_kernel<<<grid, threads>>>(static_cast<float*>(a_grad->grad),
-                                                static_cast<const float*>(b.data),
-                                                static_cast<const float*>(out_grad.grad), m, k, n);
+        // dA[m,k] += dO[m,n] * B^T[n,k].
+        cublas_check(cublasSgemm(static_cast<cublasHandle_t>(cublas_handle_),
+                                 CUBLAS_OP_T, CUBLAS_OP_N,
+                                 static_cast<int>(k), static_cast<int>(m), static_cast<int>(n),
+                                 &alpha,
+                                 static_cast<const float*>(b.data), static_cast<int>(n),
+                                 static_cast<const float*>(out_grad.grad), static_cast<int>(n),
+                                 &beta,
+                                 static_cast<float*>(a_grad->grad), static_cast<int>(k)),
+                     "matmul_grad_a");
     }
     if (b_grad != nullptr) {
-        dim3 grid((n + threads.x - 1) / threads.x, (k + threads.y - 1) / threads.y, 1);
-        matmul_grad_b_kernel<<<grid, threads>>>(static_cast<float*>(b_grad->grad),
-                                                static_cast<const float*>(a.data),
-                                                static_cast<const float*>(out_grad.grad), m, k, n);
+        // dB[k,n] += A^T[k,m] * dO[m,n].
+        cublas_check(cublasSgemm(static_cast<cublasHandle_t>(cublas_handle_),
+                                 CUBLAS_OP_N, CUBLAS_OP_T,
+                                 static_cast<int>(n), static_cast<int>(k), static_cast<int>(m),
+                                 &alpha,
+                                 static_cast<const float*>(out_grad.grad), static_cast<int>(n),
+                                 static_cast<const float*>(a.data), static_cast<int>(k),
+                                 &beta,
+                                 static_cast<float*>(b_grad->grad), static_cast<int>(n)),
+                     "matmul_grad_b");
     }
     sync();
 }
@@ -977,12 +1088,26 @@ CudaRuntime::CudaRuntime() {
         return;
     }
     available_ = true;
+    cublasHandle_t handle = nullptr;
+    cublasStatus_t cublas_status = cublasCreate(&handle);
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        available_ = false;
+        status_ = "CUDA backend is unavailable: failed to create cuBLAS handle";
+        return;
+    }
+    cublas_handle_ = handle;
     status_ = "CUDA backend available";
+}
+
+CudaRuntime::~CudaRuntime() {
+    if (cublas_handle_ != nullptr) {
+        cublasDestroy(static_cast<cublasHandle_t>(cublas_handle_));
+        cublas_handle_ = nullptr;
+    }
 }
 
 void CudaRuntime::sync() {
     cuda_check(cudaGetLastError(), "kernel launch");
-    cuda_check(cudaDeviceSynchronize(), "cudaDeviceSynchronize");
 }
 
 } // namespace llm::cuda::detail

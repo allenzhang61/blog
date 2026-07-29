@@ -27,6 +27,7 @@ struct DeviceBuffer {
 class CudaRuntime {
 public:
     static CudaRuntime& instance();
+    ~CudaRuntime();
 
     bool available() const;
     std::string status() const;
@@ -49,6 +50,10 @@ public:
     void unary_buffer(const char* op, TensorStorage& out, const TensorStorage& a, float scalar, size_t count);
     void gather_buffer(TensorStorage& out, const TensorStorage& a,
                        const std::vector<unsigned int>& index);
+    void transpose_buffer(TensorStorage& out, const TensorStorage& a,
+                          const std::vector<int64_t>& shape, int64_t dim0, int64_t dim1);
+    void transpose_add_grad(TensorStorage& target_grad, const TensorStorage& out_grad,
+                            const std::vector<int64_t>& shape, int64_t dim0, int64_t dim1);
     void scale_data_buffer(TensorStorage& storage, size_t count, float scalar);
     void reduce_buffer(const char* op, TensorStorage& out, const TensorStorage& a, size_t count);
     void matmul_buffer(TensorStorage& out, const TensorStorage& a, const TensorStorage& b,
@@ -130,6 +135,7 @@ private:
 
     bool available_{false};
     std::string status_;
+    void* cublas_handle_{nullptr};
 };
 
 } // namespace llm::cuda::detail

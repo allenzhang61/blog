@@ -46,6 +46,15 @@ struct GradParams {
     float scale;
 };
 
+struct TransposeParams {
+    uint rank;
+    uint count;
+    uint shape[4];
+    uint out_shape[4];
+    uint in_strides[4];
+    uint out_strides[4];
+};
+
 struct AdamWParams {
     uint count;
     float lr;
@@ -264,6 +273,23 @@ kernel void gather_kernel(device const float* a [[buffer(0)]],
     out[id] = a[index[id]];
 }
 
+kernel void transpose_kernel(device const float* a [[buffer(0)]],
+                             device float* out [[buffer(1)]],
+                             constant TransposeParams& params [[buffer(2)]],
+                             uint id [[thread_position_in_grid]]) {
+    if (id >= params.count) {
+        return;
+    }
+    uint rem = id;
+    uint in_flat = 0;
+    for (uint d = 0; d < params.rank; ++d) {
+        uint idx = rem / params.out_strides[d];
+        rem %= params.out_strides[d];
+        in_flat += idx * params.in_strides[d];
+    }
+    out[id] = a[in_flat];
+}
+
 // 单线程全量规约求和，count 通过 b_size buffer 传入。
 kernel void sum_kernel(device const float* a [[buffer(0)]],
                        device float* out [[buffer(1)]],
@@ -457,6 +483,23 @@ kernel void scatter_add_grad_kernel(device atomic_float* a_grad [[buffer(0)]],
     atomic_fetch_add_explicit(&a_grad[index[id]], out_grad[id], memory_order_relaxed);
 }
 
+kernel void transpose_add_grad_kernel(device atomic_float* target_grad [[buffer(0)]],
+                                      device const float* out_grad [[buffer(1)]],
+                                      constant TransposeParams& params [[buffer(2)]],
+                                      uint id [[thread_position_in_grid]]) {
+    if (id >= params.count) {
+        return;
+    }
+    uint rem = id;
+    uint in_flat = 0;
+    for (uint d = 0; d < params.rank; ++d) {
+        uint idx = rem / params.out_strides[d];
+        rem %= params.out_strides[d];
+        in_flat += idx * params.in_strides[d];
+    }
+    atomic_fetch_add_explicit(&target_grad[in_flat], out_grad[id], memory_order_relaxed);
+}
+
 kernel void matmul_grad_a_kernel(device float* a_grad [[buffer(0)]],
                                  device const float* b [[buffer(1)]],
                                  device const float* out_grad [[buffer(2)]],
@@ -579,6 +622,35 @@ kernel void cross_entropy_grad_kernel(device float* logits_grad [[buffer(0)]],
         g -= 1.0f;
     }
     logits_grad[id] += out_grad[0] * g / float(params.rows);
+}
+
+kernel void cross_entropy_grad_rows_kernel(device float* logits_grad [[buffer(0)]],
+                                           device const float* logits [[buffer(1)]],
+                                           device const float* targets [[buffer(2)]],
+                                           device const float* out_grad [[buffer(3)]],
+                                           constant CrossEntropyParams& params [[buffer(4)]],
+                                           uint row [[thread_position_in_grid]]) {
+    if (row >= params.rows) {
+        return;
+    }
+    uint base = row * params.vocab;
+    float mx = -INFINITY;
+    for (uint v = 0; v < params.vocab; ++v) {
+        mx = max(mx, logits[base + v]);
+    }
+    float denom = 0.0;
+    for (uint v = 0; v < params.vocab; ++v) {
+        denom += exp(logits[base + v] - mx);
+    }
+    uint target = uint(targets[row]);
+    float scale = out_grad[0] / float(params.rows);
+    for (uint v = 0; v < params.vocab; ++v) {
+        float g = exp(logits[base + v] - mx) / denom;
+        if (v == target) {
+            g -= 1.0f;
+        }
+        logits_grad[base + v] += scale * g;
+    }
 }
 
 kernel void embedding_grad_kernel(device atomic_float* weight_grad [[buffer(0)]],

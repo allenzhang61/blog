@@ -33,6 +33,22 @@ __global__ void log_kernel(const float* a, float* out, long long count);
 __global__ void gather_kernel(const float* a, const unsigned int* index, float* out,
                               long long count);
 
+struct TransposeParams {
+    unsigned int rank;
+    unsigned int shape[4];
+    unsigned int out_shape[4];
+    unsigned int in_strides[4];
+    unsigned int out_strides[4];
+};
+
+// Generic rank<=4 transpose, computing gather indices on device.
+__global__ void transpose_kernel(const float* a, float* out, TransposeParams params,
+                                 long long count);
+
+// Transpose backward: target_grad[input_flat] += out_grad[output_flat].
+__global__ void transpose_add_grad_kernel(float* target_grad, const float* out_grad,
+                                          TransposeParams params, long long count);
+
 // GELU 前向激活。
 __global__ void gelu_kernel(const float* x, float* out, long long count);
 

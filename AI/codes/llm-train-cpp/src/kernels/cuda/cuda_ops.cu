@@ -338,33 +338,17 @@ Tensor transpose(const Tensor& a, int64_t dim0, int64_t dim1) {
     dim1 = canonical_dim(dim1, rank);
     std::vector<int64_t> out_shape = shape;
     std::swap(out_shape[dim0], out_shape[dim1]);
-    auto in_strides = strides_for(shape);
-    auto out_strides = strides_for(out_shape);
-    // host 端预计算「输出扁平位置 -> 输入扁平位置」映射，交给 gather_kernel 在 GPU 上重排。
-    std::vector<unsigned int> index(static_cast<size_t>(a.numel()));
-    for (int64_t flat = 0; flat < a.numel(); ++flat) {
-        int64_t rem = flat;
-        std::vector<int64_t> idx(rank);
-        for (int64_t d = 0; d < rank; ++d) {
-            idx[d] = rem / out_strides[d];
-            rem %= out_strides[d];
-        }
-        std::swap(idx[dim0], idx[dim1]);
-        int64_t in_flat = 0;
-        for (int64_t d = 0; d < rank; ++d) {
-            in_flat += idx[d] * in_strides[d];
-        }
-        index[flat] = static_cast<unsigned int>(in_flat);
-    }
     ensure_cuda_data(a);
     Tensor out = make_cuda_output(out_shape, a.device(), a.requires_grad());
-    CudaRuntime::instance().gather_buffer(*out.node->cuda_storage, *a.node->cuda_storage, index);
+    CudaRuntime::instance().transpose_buffer(*out.node->cuda_storage, *a.node->cuda_storage,
+                                             shape, dim0, dim1);
     if (a.requires_grad()) {
         out.node->parents = {a};
-        out.node->backward_fn = [a, out, index]() mutable {
+        out.node->backward_fn = [a, out, shape, dim0, dim1]() mutable {
             ensure_cuda_grad(out);
             ensure_cuda_grad(a);
-            CudaRuntime::instance().scatter_add_grad(*a.node->cuda_storage, *out.node->cuda_storage, index);
+            CudaRuntime::instance().transpose_add_grad(*a.node->cuda_storage, *out.node->cuda_storage,
+                                                       shape, dim0, dim1);
             mark_cuda_grad_dirty(a);
         };
     }

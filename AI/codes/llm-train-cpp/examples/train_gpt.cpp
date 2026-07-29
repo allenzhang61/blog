@@ -30,15 +30,17 @@ int main(int argc, char** argv) {
     try {
         using namespace llm;
 
-        // 用法：train_gpt [backend] [profile] [max_steps] [profile_steps]
+        // 用法：train_gpt [backend] [profile] [max_steps] [profile_steps] [log_interval]
         //   backend：cpu / metal / cuda（留空则按环境变量或默认设备选择）。
         //   profile：normal（默认，12 层完整配置）或 small（3 层小配置，快速冒烟/对齐）。
         //   max_steps：可选，限制训练 step 数；0 表示跑完整配置。
         //   profile_steps：可选，非 0 时输出每步耗时拆分，用于调试 backend 性能。
+        //   log_interval：可选，默认 1 每步打印；0 表示只在最后读取并打印 loss。
         std::string backend_arg = argc > 1 ? argv[1] : "";
         std::string profile_arg = argc > 2 ? argv[2] : "normal";
         int max_steps = argc > 3 ? std::stoi(argv[3]) : 0;
         bool profile_steps = argc > 4 ? std::stoi(argv[4]) != 0 : false;
+        int log_interval = argc > 5 ? std::stoi(argv[5]) : 1;
         Device device = select_device_from_arg_or_env(backend_arg);
 
         const bool small = (profile_arg == "small");
@@ -73,6 +75,8 @@ int main(int argc, char** argv) {
         const int kNumEpochs = small ? 30 : 10;
         int global_step = -1;
         double last_loss = 0.0;
+        Tensor last_loss_tensor;
+        bool has_last_loss = false;
         bool stop = false;
         for (int epoch = 0; epoch < kNumEpochs; ++epoch) {
             loader.reset();
@@ -94,10 +98,18 @@ int main(int argc, char** argv) {
                 optim.step();
                 auto optim_done = std::chrono::steady_clock::now();
                 ++global_step;
-                last_loss = loss.item();
+                last_loss_tensor = loss;
+                has_last_loss = true;
                 auto item_done = std::chrono::steady_clock::now();
-                std::cout << "[step " << global_step << "] epoch=" << epoch
-                          << " train_loss=" << last_loss << std::endl;
+                bool should_log = log_interval > 0 && (global_step % log_interval == 0);
+                if (should_log || profile_steps) {
+                    last_loss = loss.item();
+                    item_done = std::chrono::steady_clock::now();
+                }
+                if (should_log) {
+                    std::cout << "[step " << global_step << "] epoch=" << epoch
+                              << " train_loss=" << last_loss << std::endl;
+                }
                 if (profile_steps) {
                     auto ms = [](auto a, auto b) {
                         return std::chrono::duration<double, std::milli>(b - a).count();
@@ -122,6 +134,9 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (has_last_loss && log_interval == 0) {
+            last_loss = last_loss_tensor.item();
+        }
         std::cout << "train_gpt " << device.str() << " final train_loss: " << last_loss << "\n";
         return 0;
     } catch (const std::exception& err) {

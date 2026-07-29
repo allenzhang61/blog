@@ -71,6 +71,38 @@ __global__ void gather_kernel(const float* a, const unsigned int* index, float* 
     }
 }
 
+__global__ void transpose_kernel(const float* a, float* out, TransposeParams params,
+                                 long long count) {
+    long long id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id >= count) {
+        return;
+    }
+    unsigned int rem = static_cast<unsigned int>(id);
+    unsigned int in_flat = 0;
+    for (unsigned int d = 0; d < params.rank; ++d) {
+        unsigned int idx = rem / params.out_strides[d];
+        rem %= params.out_strides[d];
+        in_flat += idx * params.in_strides[d];
+    }
+    out[id] = a[in_flat];
+}
+
+__global__ void transpose_add_grad_kernel(float* target_grad, const float* out_grad,
+                                          TransposeParams params, long long count) {
+    long long id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (id >= count) {
+        return;
+    }
+    unsigned int rem = static_cast<unsigned int>(id);
+    unsigned int in_flat = 0;
+    for (unsigned int d = 0; d < params.rank; ++d) {
+        unsigned int idx = rem / params.out_strides[d];
+        rem %= params.out_strides[d];
+        in_flat += idx * params.in_strides[d];
+    }
+    atomicAdd(&target_grad[in_flat], out_grad[id]);
+}
+
 __global__ void gelu_kernel(const float* x, float* out, long long count) {
     long long id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id < count) {

@@ -40,6 +40,7 @@ if(LLM_CPP_ENABLE_METAL AND APPLE)
     enable_language(OBJCXX)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(METAL_FRAMEWORK Metal REQUIRED)
+    find_library(METAL_PERFORMANCE_SHADERS_FRAMEWORK MetalPerformanceShaders REQUIRED)
     list(APPEND LLM_CPP_SOURCES src/backend/metal/MetalBackend.mm)
     list(APPEND LLM_CPP_SOURCES src/kernels/metal/MetalKernels.mm)
     set(LLM_CPP_ENABLE_METAL_COMPILED 1)
@@ -53,6 +54,7 @@ if(LLM_CPP_ENABLE_CUDA)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
+        find_package(CUDAToolkit REQUIRED)
         # CUDA 开启：真实 kernel + 委派实现（对应 Metal 的 MetalKernels.mm + MetalBackend.mm）。
         list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_ops.cu)
         list(APPEND LLM_CPP_SOURCES src/kernels/cuda/cuda_device_kernels.cu)
@@ -85,6 +87,7 @@ if(APPLE)
     target_compile_definitions(llm_train_cpp PUBLIC LLM_CPP_USE_BLAS=1)
 endif()
 if(LLM_CPP_ENABLE_CUDA_COMPILED)
+    target_link_libraries(llm_train_cpp PUBLIC CUDA::cublas)
     target_compile_options(llm_train_cpp PRIVATE
         $<$<COMPILE_LANG_AND_ID:CUDA,NVIDIA>:-Xcompiler=/utf-8>
     )
@@ -108,7 +111,11 @@ if(LLM_CPP_ENABLE_METAL_COMPILED)
     target_compile_definitions(llm_train_cpp PRIVATE
         LLM_CPP_METALLIB_PATH="${LLM_CPP_METALLIB}"
     )
-    target_link_libraries(llm_train_cpp PUBLIC ${FOUNDATION_FRAMEWORK} ${METAL_FRAMEWORK})
+    target_link_libraries(llm_train_cpp PUBLIC
+        ${FOUNDATION_FRAMEWORK}
+        ${METAL_FRAMEWORK}
+        ${METAL_PERFORMANCE_SHADERS_FRAMEWORK}
+    )
 endif()
 
 include(FetchContent)
