@@ -31,8 +31,8 @@ void copy_params(GPTModel& dst, GPTModel& src) {
 class MetalTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!metal_backend_available()) {
-            GTEST_SKIP() << metal_backend_status();
+        if (!backend::available(DeviceType::Metal)) {
+            GTEST_SKIP() << backend::status(DeviceType::Metal);
         }
     }
 };
@@ -40,7 +40,8 @@ protected:
 } // namespace
 
 TEST_F(MetalTest, Availability) {
-    EXPECT_EQ(BackendRegistry::get(Device::parse("metal")).name(), "metalBackend");
+    EXPECT_TRUE(backend::available(DeviceType::Metal));
+    EXPECT_FALSE(backend::status(DeviceType::Metal).empty());
 }
 
 TEST_F(MetalTest, Elementwise) {

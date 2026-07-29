@@ -23,8 +23,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("emb must be divisible by heads");
         }
 
-        Device device = Device::parse(backend);
-        BackendRegistry::get(device);
+        Device device = select_device_from_arg_or_env(backend);
 
         std::vector<int64_t> ids(static_cast<size_t>((steps + 2) * batch * context + 1));
         for (size_t i = 0; i < ids.size(); ++i) {

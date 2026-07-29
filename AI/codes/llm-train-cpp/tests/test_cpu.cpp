@@ -16,27 +16,28 @@ TEST(TensorBasics, ShapeDtypeDevice) {
     EXPECT_EQ(x.device().type, DeviceType::CPU);
 }
 
-TEST(BackendPlaceholders, RegistryAndSelect) {
-    EXPECT_EQ(BackendRegistry::get(Device::parse("cpu")).name(), "CPUBackend");
+TEST(BackendPlaceholders, AvailabilityAndSelect) {
     EXPECT_EQ(select_device_from_arg_or_env("").type, DeviceType::CPU);
-    EXPECT_EQ(select_device_from_arg_or_env("metal").type, DeviceType::Metal);
-
-    bool cuda_failed = false;
-    try {
-        BackendRegistry::get(Device::parse("cuda"));
-    } catch (const std::runtime_error& err) {
-        cuda_failed = std::string(err.what()).find("CUDA backend is unavailable") != std::string::npos ||
-                      std::string(err.what()).find("CUDA backend compiled") != std::string::npos;
+    if (backend::available(DeviceType::Metal)) {
+        EXPECT_EQ(select_device_from_arg_or_env("metal").type, DeviceType::Metal);
+    } else {
+        EXPECT_THROW(select_device_from_arg_or_env("metal"), std::runtime_error);
     }
-    if (!cuda_backend_available()) EXPECT_TRUE(cuda_failed) << "cuda unavailable path";
 
-    bool metal_failed = false;
-    try {
-        BackendRegistry::get(Device::parse("metal"));
-    } catch (const std::runtime_error& err) {
-        metal_failed = std::string(err.what()).find("Metal backend is unavailable") != std::string::npos;
+    if (backend::available(DeviceType::CUDA)) {
+        EXPECT_FALSE(backend::status(DeviceType::CUDA).empty());
+    } else {
+        EXPECT_TRUE(backend::status(DeviceType::CUDA).find("CUDA backend is unavailable") != std::string::npos ||
+                    backend::status(DeviceType::CUDA).find("CUDA backend compiled") != std::string::npos)
+            << "cuda unavailable path";
     }
-    if (!metal_backend_available()) EXPECT_TRUE(metal_failed) << "metal unavailable path";
+
+    if (backend::available(DeviceType::Metal)) {
+        EXPECT_FALSE(backend::status(DeviceType::Metal).empty());
+    } else {
+        EXPECT_TRUE(backend::status(DeviceType::Metal).find("Metal backend is unavailable") != std::string::npos)
+            << "metal unavailable path";
+    }
 }
 
 TEST(OpsAndAutograd, MatmulBackward) {

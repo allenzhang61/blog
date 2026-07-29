@@ -6,30 +6,24 @@
 
 namespace llm {
 
-// 计算后端的公共接口。
-// CPU、CUDA、Metal 后端都通过这个抽象暴露自己的设备类型和名称。
-class Backend {
-public:
-    // 使用虚析构函数，保证通过 Backend* 释放派生类时行为正确。
-    virtual ~Backend();
+namespace backend {
 
-    // 返回后端对应的设备类型，例如 CPU、CUDA 或 Metal。
-    virtual DeviceType type() const = 0;
+// 查询给定后端当前是否可用。
+bool available(DeviceType type);
 
-    // 返回便于日志展示的人类可读名称。
-    virtual std::string name() const = 0;
-};
+// 返回给定后端的状态说明。
+std::string status(DeviceType type);
 
-// 查询 CUDA 后端当前是否可用。
+// 请求的后端不可用时抛出错误；CPU 恒可用。
+void require_available(DeviceType type);
+
+} // namespace backend
+
+// 下面这 4 个函数是 CUDA / Metal 的底层 bridge，供 backend:: 实现复用。
+// CPU 不需要单独 bridge，因为始终可用。
 bool cuda_backend_available();
-
-// 查询 Metal 后端当前是否可用。
 bool metal_backend_available();
-
-// 返回 CUDA 后端状态说明，用于打印错误或诊断信息。
 std::string cuda_backend_status();
-
-// 返回 Metal 后端状态说明，用于打印错误或诊断信息。
 std::string metal_backend_status();
 
 } // namespace llm

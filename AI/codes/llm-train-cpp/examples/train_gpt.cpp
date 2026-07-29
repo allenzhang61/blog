@@ -40,7 +40,6 @@ int main(int argc, char** argv) {
         int max_steps = argc > 3 ? std::stoi(argv[3]) : 0;
         bool profile_steps = argc > 4 ? std::stoi(argv[4]) != 0 : false;
         Device device = select_device_from_arg_or_env(backend_arg);
-        BackendRegistry::get(device);
 
         const bool small = (profile_arg == "small");
 

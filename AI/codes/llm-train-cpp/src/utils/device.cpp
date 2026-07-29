@@ -1,4 +1,5 @@
 #include "llm/device.hpp"
+#include "llm/backend/Backend.hpp"
 
 #include <cstdlib>
 #include <stdexcept>
@@ -44,15 +45,19 @@ std::string Device::str() const {
     return to_string(type) + ":" + std::to_string(index);
 }
 
-Device select_device_from_arg_or_env(const std::string& arg, const char* env_name) {
+Device select_device_from_arg_or_env(const std::string& arg) {
+    Device device;
     if (!arg.empty()) {
-        return Device::parse(arg);
+        device = Device::parse(arg);
+    } else {
+        const char* value = std::getenv("LLM_CPP_BACKEND");
+        if (value == nullptr || std::string(value).empty()) {
+            return {};
+        }
+        device = Device::parse(value);
     }
-    const char* value = std::getenv(env_name);
-    if (value == nullptr || std::string(value).empty()) {
-        return {};
-    }
-    return Device::parse(value);
+    backend::require_available(device.type);
+    return device;
 }
 
 } // namespace llm

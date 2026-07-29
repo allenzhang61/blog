@@ -14,10 +14,6 @@ set(LLM_CPP_SOURCES
     src/tensor/tensor.cpp
     src/ops/ops.cpp
     src/backend/Backend.cpp
-    src/backend/BackendRegistry.cpp
-    src/backend/cpu/CPUBackend.cpp
-    src/backend/metal/MetalDeviceBackend.cpp
-    src/backend/cuda/CUDADeviceBackend.cpp
     src/kernels/cpu/elementwise.cpp
     src/kernels/cpu/matmul.cpp
     src/kernels/cpu/softmax.cpp

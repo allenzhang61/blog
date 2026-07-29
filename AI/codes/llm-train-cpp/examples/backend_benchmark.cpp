@@ -15,8 +15,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("usage: backend_benchmark <cpu|metal|cuda> [matrix_size] [iterations]");
         }
 
-        Device device = Device::parse(backend);
-        BackendRegistry::get(device);
+        Device device = select_device_from_arg_or_env(backend);
 
         std::vector<double> a(static_cast<size_t>(n * n));
         std::vector<double> b(static_cast<size_t>(n * n));

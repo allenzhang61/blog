@@ -10,8 +10,7 @@ int main(int argc, char** argv) {
         int64_t iterations = argc > 2 ? std::stoll(argv[2]) : 100;
         if (n <= 0 || iterations <= 0) throw std::runtime_error("usage: metal_benchmark [matrix_size] [iterations]");
 
-        Device device = Device::parse("metal");
-        BackendRegistry::get(device);
+        Device device = select_device_from_arg_or_env("metal");
 
         std::vector<double> a(static_cast<size_t>(n * n));
         std::vector<double> b(static_cast<size_t>(n * n));

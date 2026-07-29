@@ -33,8 +33,8 @@ Tensor cuda_tensor(const Tensor& cpu, bool requires_grad = false) {
 class CudaTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!cuda_backend_available()) {
-            GTEST_SKIP() << cuda_backend_status();
+        if (!backend::available(DeviceType::CUDA)) {
+            GTEST_SKIP() << backend::status(DeviceType::CUDA);
         }
     }
 };
@@ -42,7 +42,8 @@ protected:
 } // namespace
 
 TEST_F(CudaTest, Availability) {
-    EXPECT_EQ(BackendRegistry::get(Device::parse("cuda")).name(), "cudaBackend");
+    EXPECT_TRUE(backend::available(DeviceType::CUDA));
+    EXPECT_FALSE(backend::status(DeviceType::CUDA).empty());
 }
 
 TEST_F(CudaTest, ElementwiseForward) {
