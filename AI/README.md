@@ -155,7 +155,6 @@
     - [vllm lora](chapter-14/14-010.md)
   - Tensor/Pipeline/Data/Expert Parallel
   - llama.cpp
-    - 
 - 运筹学/Operations Research
   - [线性规划](chapter-10/10-001.ipynb)
   - [混合整数线性规划](chapter-10/10-002.ipynb)
