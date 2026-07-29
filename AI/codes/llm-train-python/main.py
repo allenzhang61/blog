@@ -4,12 +4,13 @@ from pathlib import Path
 import torch
 
 from model.GPTModel import GPTModel
-from tool.data_loader import create_dataloader_v1
 
 # 两档配置：
 #   normal：GPT-2 124M 完整配置（12 层），跑完整训练并绘制 loss 曲线。
 #   small ：小配置（3 层），逐 step 打印 loss，用于快速冒烟和与 C++ 版逐 step 对齐。
-# 默认跑 normal，显式传入命令行参数 small 才跑小配置：`python main.py small`。
+# 默认自动选择设备并跑 normal。
+# 兼容旧用法：`python main.py small`。
+# 新用法：`python main.py <cpu|cuda|metal|auto> <small|normal> [aligned|demo] [max_steps] [log_interval]`。
 GPT_CONFIG_124M = {
     'vocab_size': 50257,
     'context_length': 256,
@@ -30,11 +31,68 @@ SMALL_CONFIG = {
     'qkv_bias': False,
 }
 
-profile = sys.argv[1] if len(sys.argv) > 1 else 'normal'
+def select_device(device_arg):
+    """Select a PyTorch device.
+
+    `metal` is the user-facing name; PyTorch exposes it as `mps`.
+    """
+    name = (device_arg or "auto").lower()
+    if name == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    if name == "cpu":
+        return torch.device("cpu")
+    if name == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("Requested CUDA device, but torch.cuda.is_available() is False")
+        return torch.device("cuda")
+    if name in ("metal", "mps"):
+        if not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
+            raise RuntimeError("Requested Metal/MPS device, but torch.backends.mps.is_available() is False")
+        return torch.device("mps")
+    raise RuntimeError(f"Unknown device: {device_arg}")
+
+
+def parse_args(argv):
+    profiles = {"small", "normal"}
+    devices = {"cpu", "cuda", "metal", "mps", "auto"}
+    modes = {"aligned", "demo"}
+    profile_arg = "normal"
+    device_arg = "auto"
+    mode_arg = "aligned"
+    max_steps_arg = 0
+    log_interval_arg = 1
+    numeric_args = []
+    for arg in argv:
+        value = arg.lower()
+        if value in profiles:
+            profile_arg = value
+        elif value in devices:
+            device_arg = value
+        elif value in modes:
+            mode_arg = value
+        elif value.isdigit():
+            numeric_args.append(int(value))
+        else:
+            raise RuntimeError(
+                "Usage: python main.py [cpu|cuda|metal|auto] [small|normal] [aligned|demo] [max_steps] [log_interval]"
+            )
+    if len(numeric_args) > 0:
+        max_steps_arg = numeric_args[0]
+    if len(numeric_args) > 1:
+        log_interval_arg = numeric_args[1]
+    return device_arg, profile_arg, mode_arg, max_steps_arg, log_interval_arg
+
+
+device_arg, profile, mode, max_steps, log_interval = parse_args(sys.argv[1:])
 is_small = (profile == 'small')
 
 torch.manual_seed(123)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = select_device(device_arg)
+print(f"llm-train-python device={device} profile={profile} mode={mode}")
 
 BASE_DIR = Path(__file__).resolve().parent
 file_path = BASE_DIR / "train_data" / "the-verdict.txt"
@@ -87,10 +145,75 @@ def run_small():
     print(f"main small final train_loss: {last_loss:.5f}")
 
 
+def maybe_synchronize():
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    elif device.type == "mps" and hasattr(torch, "mps"):
+        torch.mps.synchronize()
+
+
+def run_aligned(profile_name):
+    """与 C++ train_gpt 对齐的纯训练模式。
+
+    使用 tiktoken 导出的 token id，不 shuffle，drop_rate=0，drop_last=True；
+    不做 eval / sample / plot，便于和 C++ CPU/Metal/CUDA benchmark 对比。
+    """
+    from torch.utils.data import DataLoader, TensorDataset
+
+    cfg = dict(SMALL_CONFIG if profile_name == "small" else GPT_CONFIG_124M)
+    cfg['drop_rate'] = 0.0
+    ids_name = "the_verdict_train_ids_small.txt" if profile_name == "small" else "the_verdict_train_ids.txt"
+    ids_path = BASE_DIR / ids_name
+    with open(ids_path, "r") as f:
+        token_ids = [int(line) for line in f if line.strip()]
+
+    ctx = cfg['context_length']
+    inputs, targets = [], []
+    for i in range(0, len(token_ids) - ctx, ctx):
+        inputs.append(token_ids[i:i + ctx])
+        targets.append(token_ids[i + 1:i + ctx + 1])
+    dataset = TensorDataset(torch.tensor(inputs), torch.tensor(targets))
+    train_loader = DataLoader(dataset, batch_size=2, shuffle=False, drop_last=True)
+
+    model = GPTModel(cfg).to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=4e-4, weight_decay=0.1)
+    num_epochs = 30 if profile_name == "small" else 10
+    global_step = -1
+    last_loss = None
+    stop = False
+    model.train()
+    for epoch in range(num_epochs):
+        for input_batch, target_batch in train_loader:
+            input_batch, target_batch = input_batch.to(device), target_batch.to(device)
+            optimizer.zero_grad()
+            logits = model(input_batch)
+            loss = torch.nn.functional.cross_entropy(
+                logits.flatten(0, 1), target_batch.flatten(0, 1)
+            )
+            loss.backward()
+            optimizer.step()
+            global_step += 1
+            last_loss = loss
+            should_log = log_interval > 0 and (global_step % log_interval == 0)
+            if should_log:
+                maybe_synchronize()
+                print(f"[step {global_step}] epoch={epoch} train_loss={loss.item():.5f}")
+            if max_steps > 0 and global_step + 1 >= max_steps:
+                stop = True
+                break
+        if stop:
+            break
+
+    maybe_synchronize()
+    final_loss = last_loss.item() if last_loss is not None else float("nan")
+    print(f"main {device} {profile_name} aligned final train_loss: {final_loss:.5f}")
+
+
 def run_normal():
     """完整配置：跑完整训练并绘制 loss 曲线。"""
     import matplotlib.pyplot as plt
     import tiktoken
+    from tool.data_loader import create_dataloader_v1
     from train.train import train_model_simple
 
     cfg = GPT_CONFIG_124M
@@ -145,7 +268,9 @@ def run_normal():
     plot_losses(epochs_tensor, tokens_seen, train_losses, val_losses)
 
 
-if is_small:
+if mode == "aligned":
+    run_aligned(profile)
+elif is_small:
     run_small()
 else:
     run_normal()
