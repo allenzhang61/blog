@@ -10,6 +10,7 @@ __global__ void add_kernel(const float* a, const float* b, float* out, unsigned 
                            long long count) {
     long long id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id < count) {
+        // b_size == 1 时把 b[0] 当标量广播到所有位置；否则按 b_size 周期重复读取 b，支持简单广播。
         out[id] = a[id] + b[(b_size == 1) ? 0 : id % b_size];
     }
 }
@@ -63,6 +64,7 @@ __global__ void log_kernel(const float* a, float* out, long long count) {
     }
 }
 
+// 按索引取数
 __global__ void gather_kernel(const float* a, const unsigned int* index, float* out,
                               long long count) {
     long long id = blockIdx.x * blockDim.x + threadIdx.x;
@@ -121,6 +123,7 @@ __global__ void matmul_kernel(const float* a, const float* b, float* out, unsign
     }
     float acc = 0.0f;
     for (unsigned int p = 0; p < k; ++p) {
+        // a[row][p] * b[p][col] 累加到 acc[row][col]
         acc += a[row * k + p] * b[p * n + col];
     }
     out[row * n + col] = acc;
