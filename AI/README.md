@@ -156,6 +156,10 @@
     - [vllm lora](chapter-14/14-010.md)
   - Tensor/Pipeline/Data/Expert Parallel
   - llama.cpp
+- 模型评测
+  - [评测指标](chapter-19/19-001.md)
+  - [评测工具](chapter-19/19-002.md)
+  - [评测对象](chapter-19/19-003.md)
 - 运筹学/Operations Research
   - [线性规划](chapter-10/10-001.ipynb)
   - [混合整数线性规划](chapter-10/10-002.ipynb)
@@ -227,8 +231,6 @@
     - RAG
   - 数据与评测
     - 数据清洗与标注
-    - F1、BLEU、ROUGE
-    - Recall@K、MRR、NDCG
 - 计算机视觉
   - ResNet
   - Vision Transformer
