@@ -147,7 +147,30 @@ python main.py --device mps
 
 本示例实现的是简洁 Llama-like decoder-only Transformer。若权重 key 或形状不匹配，脚本会输出缺失 key 或 shape mismatch 信息。不同模型家族可能需要调整权重映射和模型结构。
 
-## 代码路径
+## 代码结构
+
+目录结构参考 `AI/codes/llm-train-python/` 拆分：
+
+```text
+AI/codes/llm-inference-python/
+├── main.py                 # 命令行入口
+├── model/                  # 自实现 LLM 模型结构
+│   ├── LLMConfig.py
+│   ├── RMSNorm.py
+│   ├── RotaryEmbedding.py
+│   ├── SelfAttention.py
+│   ├── MLP.py
+│   ├── DecoderLayer.py
+│   └── SimpleLLM.py
+├── tool/                   # 依赖、下载、tokenizer、权重、运行设备
+│   ├── model_files.py
+│   ├── model_loader.py
+│   ├── runtime.py
+│   ├── tokenizer.py
+│   └── weights.py
+└── generate/
+    └── generate.py         # 逐 token 生成和采样
+```
 
 主要流程：
 
