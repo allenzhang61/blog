@@ -12,7 +12,7 @@ from tool.runtime import select_device, select_dtype
 from tool.tokenizer import load_tokenizer
 
 
-DEFAULT_PROMPT = "巴黎的首都是"
+DEFAULT_PROMPT = "法国的首都是"
 DEFAULT_MODEL = "deepseek-r1:8b"
 
 
