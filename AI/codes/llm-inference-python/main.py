@@ -47,6 +47,13 @@ def parse_args(argv=None):
     parser.add_argument("--temperature", type=float, default=0.7, help="采样温度；默认：0.7。")
     parser.add_argument("--greedy", action="store_true", help="使用贪心解码，忽略 temperature。")
     parser.add_argument(
+        "--no-kv-cache",
+        dest="use_kv_cache",
+        action="store_false",
+        help="关闭 KV Cache，每步重新前向整个序列（用于对比基线）。",
+    )
+    parser.set_defaults(use_kv_cache=True)
+    parser.add_argument(
         "--device",
         default="auto",
         choices=["auto", "cpu", "cuda", "mps"],
