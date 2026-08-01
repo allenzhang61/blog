@@ -24,19 +24,18 @@ python -m pip install -r requirements.txt
 依赖说明：
 
 - `torch`：执行 CUDA 张量计算和模型推理
-- `transformers`：加载 Qwen3.5 模型、processor 和 chat template
+- `transformers`：加载 Qwen3.5 CausalLM 模型、tokenizer 和 chat template
 - `accelerate`：支持低内存加载和 device map
 - `huggingface_hub`：下载和缓存 Hugging Face 模型文件
 - `safetensors`：读取 safetensors 权重
-- `pillow`、`torchvision`：满足 Qwen3.5 multimodal processor 的依赖
 - `causal-conv1d`、`flash-linear-attention`：启用 Qwen3.5 linear attention fast path
 
-> 注意：`Qwen/Qwen3.5-4B` 需要较新的 Transformers 版本。若 PyPI 版本暂不支持 `AutoModelForMultimodalLM`，可安装 Transformers main 分支。
+> 注意：`Qwen/Qwen3.5-4B` 需要较新的 Transformers 版本。若 PyPI 版本暂不支持 `AutoModelForCausalLM` 加载该模型，可安装 Transformers main 分支。
 > 在 Linux/WSL2 上安装 `causal-conv1d` 时需要匹配 PyTorch CUDA 版本的 `nvcc`。例如 PyTorch `cu128` 对应 CUDA Toolkit 12.8。
 
 ## 默认运行
 
-首次运行会从 Hugging Face 下载配置、processor、tokenizer 和权重文件。4B FP16 权重需要数 GB 磁盘空间，首次下载会比较慢。
+首次运行会从 Hugging Face 下载配置、tokenizer 和权重文件。4B FP16 权重需要数 GB 磁盘空间，首次下载会比较慢。
 
 ```bash
 python main.py
@@ -170,8 +169,7 @@ python main.py \
 
 ```text
 AI/codes/llm-inference-python/
-├── main.py                 # Qwen3.5-4B 命令行入口
-├── model/                  # 早期自实现 LLM 结构，当前入口不再使用
-├── tool/                   # 早期工具模块，当前入口不再使用
-└── generate/               # 早期生成模块，当前入口不再使用
+├── main.py                 # Qwen3.5-4B 命令行入口，含 profiling 与 fast-decode
+├── requirements.txt        # 运行依赖
+└── doc/                    # 实验记录与性能分析
 ```
