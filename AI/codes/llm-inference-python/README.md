@@ -68,11 +68,86 @@ python main.py --cache-dir /data/huggingface-cache
 python main.py --greedy
 ```
 
+关闭 thinking 模板：
+
+```bash
+python main.py --disable-thinking
+```
+
+使用手写增量 decode fast path：
+
+```bash
+python main.py --fast-decode
+```
+
 限制生成 token 数：
 
 ```bash
 python main.py --max-new-tokens 64
 ```
+
+## 推理分阶段 profiling
+
+输出手写 generate loop 的分阶段耗时 JSON：
+
+```bash
+python main.py \
+  --prompt '介绍一下 TCP 三次握手' \
+  --device cuda \
+  --dtype float16 \
+  --max-new-tokens 64 \
+  --greedy \
+  --cache-dir /home/zyl/hf-cache \
+  --profile-timing
+```
+
+JSON 会输出到 stderr，重点字段包括：
+
+- `tokenize_s`
+- `input_to_device_s`
+- `prefill_s`
+- `decode_model`
+- `sample`
+- `cpu_gap_before_decode_model`
+- `text_decode_s`
+- `per_token`
+
+启用 PyTorch profiler，并生成 TensorBoard trace：
+
+```bash
+python main.py \
+  --prompt '介绍一下 TCP 三次握手' \
+  --device cuda \
+  --dtype float16 \
+  --max-new-tokens 64 \
+  --greedy \
+  --cache-dir /home/zyl/hf-cache \
+  --profile-timing \
+  --torch-profiler /tmp/qwen-profiler
+```
+
+查看 trace：
+
+```bash
+tensorboard --logdir /tmp/qwen-profiler
+```
+
+配合 Nsight Systems 看 CPU/CUDA 时间线：
+
+```bash
+nsys profile -o qwen-nsys \
+  python main.py \
+    --prompt '介绍一下 TCP 三次握手' \
+    --device cuda \
+    --dtype float16 \
+    --max-new-tokens 64 \
+    --greedy \
+    --cache-dir /home/zyl/hf-cache \
+    --profile-timing \
+    --nvtx
+```
+
+`--profile-timing` 当前使用动态 KV cache，不支持 `--static-cache`。
 
 ## RTX 3080 运行建议
 

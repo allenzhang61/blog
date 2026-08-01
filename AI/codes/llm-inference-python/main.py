@@ -2,6 +2,8 @@
 """Qwen3.5-4B 本地 CUDA 推理入口。"""
 
 import argparse
+import contextlib
+import json
 import sys
 import time
 
@@ -23,6 +25,21 @@ def parse_args(argv=None):
     parser.add_argument("--temperature", type=float, default=0.7, help="采样温度；默认：0.7。")
     parser.add_argument("--greedy", action="store_true", help="使用贪心解码，忽略 temperature。")
     parser.add_argument(
+        "--disable-thinking",
+        action="store_true",
+        help="调用 Qwen chat template 的 enable_thinking=False，生成空 think 段后直接回答。",
+    )
+    parser.add_argument(
+        "--fast-decode",
+        action="store_true",
+        help="使用手写增量 decode loop，绕过 Transformers 通用 generate。当前使用动态 KV cache。",
+    )
+    parser.add_argument(
+        "--static-cache",
+        action="store_true",
+        help="使用 static KV cache；适合常驻进程预热后提速，单次 CLI 可能包含编译开销。",
+    )
+    parser.add_argument(
         "--device",
         default="cuda",
         choices=["cuda", "cpu"],
@@ -33,6 +50,22 @@ def parse_args(argv=None):
         default="float16",
         choices=["float16", "bfloat16", "float32"],
         help="模型 dtype；RTX 3080 默认建议 float16。",
+    )
+    parser.add_argument(
+        "--profile-timing",
+        action="store_true",
+        help="使用手写 generate loop 输出分阶段耗时 JSON。",
+    )
+    parser.add_argument(
+        "--torch-profiler",
+        default=None,
+        metavar="DIR",
+        help="启用 PyTorch profiler，并把 TensorBoard trace 写入指定目录。",
+    )
+    parser.add_argument(
+        "--nvtx",
+        action="store_true",
+        help="添加 NVTX range，配合 nsys profile 查看 CPU/CUDA 时间线。",
     )
     return parser.parse_args(argv)
 
@@ -60,21 +93,275 @@ def resolve_torch_dtype(torch, dtype_name):
     }[dtype_name]
 
 
-def build_inputs(processor, prompt):
+def build_inputs(tokenizer, prompt, disable_thinking):
     """按 Qwen chat template 构造纯文本输入。"""
     messages = [
         {
             "role": "user",
-            "content": [{"type": "text", "text": prompt}],
+            "content": prompt,
         }
     ]
-    return processor.apply_chat_template(
+    text = tokenizer.apply_chat_template(
         messages,
-        tokenize=True,
         add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
+        tokenize=False,
+        enable_thinking=not disable_thinking,
     )
+    return tokenizer(text, return_tensors="pt")
+
+
+def cuda_sync(torch):
+    """同步 CUDA，保证计时包含 GPU 异步执行时间。"""
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
+@contextlib.contextmanager
+def nvtx_range(torch, enabled, name):
+    """按需添加 NVTX range，供 Nsight Systems 展示阶段边界。"""
+    if enabled and torch.cuda.is_available():
+        torch.cuda.nvtx.range_push(name)
+        try:
+            yield
+        finally:
+            torch.cuda.nvtx.range_pop()
+    else:
+        yield
+
+
+def sample_next_token(torch, logits, args):
+    """从最后一步 logits 采样下一个 token。"""
+    if args.greedy or args.temperature <= 0:
+        return torch.argmax(logits, dim=-1, keepdim=True)
+    probs = torch.softmax(logits / args.temperature, dim=-1)
+    return torch.multinomial(probs, num_samples=1)
+
+
+def summarize_seconds(values):
+    """汇总秒级列表，保留原始样本，便于后续分析抖动。"""
+    if not values:
+        return {
+            "total_s": 0.0,
+            "avg_s": 0.0,
+            "min_s": 0.0,
+            "max_s": 0.0,
+            "samples_s": [],
+        }
+    total = sum(values)
+    return {
+        "total_s": round(total, 6),
+        "avg_s": round(total / len(values), 6),
+        "min_s": round(min(values), 6),
+        "max_s": round(max(values), 6),
+        "samples_s": [round(value, 6) for value in values],
+    }
+
+
+def profiled_generate(torch, model, inputs, args):
+    """手写增量解码，拆分 prefill、decode、采样和 CPU gap。"""
+    if args.static_cache:
+        raise RuntimeError("--profile-timing 暂不支持 --static-cache，请使用默认动态 KV cache。")
+
+    input_ids = inputs["input_ids"]
+    attention_mask = inputs.get("attention_mask")
+    eos_id = getattr(model.generation_config, "eos_token_id", None)
+    if isinstance(eos_id, list):
+        eos_ids = {int(item) for item in eos_id}
+    elif eos_id is None:
+        eos_ids = set()
+    else:
+        eos_ids = {int(eos_id)}
+
+    generated_chunks = [input_ids]
+    token_records = []
+    sample_times = []
+    decode_model_times = []
+    cpu_gap_times = []
+
+    with nvtx_range(torch, args.nvtx, "prefill"):
+        cuda_sync(torch)
+        start = time.perf_counter()
+        outputs = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            use_cache=True,
+        )
+        cuda_sync(torch)
+        prefill_s = time.perf_counter() - start
+
+    past = outputs.past_key_values
+
+    with nvtx_range(torch, args.nvtx, "sample_from_prefill"):
+        cuda_sync(torch)
+        start = time.perf_counter()
+        next_id = sample_next_token(torch, outputs.logits[:, -1, :], args)
+        cuda_sync(torch)
+        sample_s = time.perf_counter() - start
+    sample_times.append(sample_s)
+    generated_chunks.append(next_id)
+    token_records.append(
+        {
+            "token_index": 0,
+            "source": "prefill_logits",
+            "decode_model_s": 0.0,
+            "sample_s": round(sample_s, 6),
+            "cpu_gap_before_model_s": 0.0,
+            "token_id": int(next_id.item()),
+        }
+    )
+
+    last_gpu_done = time.perf_counter()
+    if eos_ids and int(next_id.item()) in eos_ids:
+        generated = torch.cat(generated_chunks, dim=-1)
+        return generated, build_timing_report(
+            input_ids.shape[-1],
+            len(token_records),
+            prefill_s,
+            decode_model_times,
+            sample_times,
+            cpu_gap_times,
+            token_records,
+        )
+
+    for token_index in range(1, args.max_new_tokens):
+        before_model = time.perf_counter()
+        cpu_gap_s = before_model - last_gpu_done
+        cpu_gap_times.append(cpu_gap_s)
+        with nvtx_range(torch, args.nvtx, f"decode_model_token_{token_index}"):
+            cuda_sync(torch)
+            start = time.perf_counter()
+            outputs = model(input_ids=next_id, past_key_values=past, use_cache=True)
+            cuda_sync(torch)
+            decode_model_s = time.perf_counter() - start
+        past = outputs.past_key_values
+        decode_model_times.append(decode_model_s)
+
+        with nvtx_range(torch, args.nvtx, f"sample_token_{token_index}"):
+            cuda_sync(torch)
+            start = time.perf_counter()
+            next_id = sample_next_token(torch, outputs.logits[:, -1, :], args)
+            cuda_sync(torch)
+            sample_s = time.perf_counter() - start
+        sample_times.append(sample_s)
+        generated_chunks.append(next_id)
+        token_records.append(
+            {
+                "token_index": token_index,
+                "source": "decode",
+                "decode_model_s": round(decode_model_s, 6),
+                "sample_s": round(sample_s, 6),
+                "cpu_gap_before_model_s": round(cpu_gap_s, 6),
+                "token_id": int(next_id.item()),
+            }
+        )
+        last_gpu_done = time.perf_counter()
+        if eos_ids and int(next_id.item()) in eos_ids:
+            break
+
+    with nvtx_range(torch, args.nvtx, "concat_generated_tokens"):
+        cuda_sync(torch)
+        start = time.perf_counter()
+        generated = torch.cat(generated_chunks, dim=-1)
+        cuda_sync(torch)
+        concat_s = time.perf_counter() - start
+
+    report = build_timing_report(
+        input_ids.shape[-1],
+        len(token_records),
+        prefill_s,
+        decode_model_times,
+        sample_times,
+        cpu_gap_times,
+        token_records,
+    )
+    report["concat_generated_tokens_s"] = round(concat_s, 6)
+    return generated, report
+
+
+def fast_generate(torch, model, inputs, args):
+    """低开销增量解码：避开 Transformers 通用 generate，减少 Python 侧通用逻辑。"""
+    if args.static_cache:
+        raise RuntimeError("--fast-decode 暂不支持 --static-cache，请使用默认动态 KV cache。")
+
+    input_ids = inputs["input_ids"]
+    attention_mask = inputs.get("attention_mask")
+    eos_id = getattr(model.generation_config, "eos_token_id", None)
+    if isinstance(eos_id, list):
+        eos_ids = {int(item) for item in eos_id}
+    elif eos_id is None:
+        eos_ids = set()
+    else:
+        eos_ids = {int(eos_id)}
+
+    outputs = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=True)
+    past = outputs.past_key_values
+    next_id = sample_next_token(torch, outputs.logits[:, -1, :], args)
+    generated_chunks = [input_ids, next_id]
+
+    if eos_ids and int(next_id.item()) in eos_ids:
+        return torch.cat(generated_chunks, dim=-1)
+
+    for _ in range(args.max_new_tokens - 1):
+        outputs = model(input_ids=next_id, past_key_values=past, use_cache=True)
+        past = outputs.past_key_values
+        next_id = sample_next_token(torch, outputs.logits[:, -1, :], args)
+        generated_chunks.append(next_id)
+        if eos_ids and int(next_id.item()) in eos_ids:
+            break
+    return torch.cat(generated_chunks, dim=-1)
+
+
+def build_timing_report(
+    input_tokens,
+    generated_tokens,
+    prefill_s,
+    decode_model_times,
+    sample_times,
+    cpu_gap_times,
+    token_records,
+):
+    """构造 profiling JSON。"""
+    decode_summary = summarize_seconds(decode_model_times)
+    sample_summary = summarize_seconds(sample_times)
+    cpu_gap_summary = summarize_seconds(cpu_gap_times)
+    decode_total_s = decode_summary["total_s"] + sample_summary["total_s"]
+    return {
+        "input_tokens": input_tokens,
+        "generated_tokens": generated_tokens,
+        "prefill_s": round(prefill_s, 6),
+        "decode_model": decode_summary,
+        "sample": sample_summary,
+        "cpu_gap_before_decode_model": cpu_gap_summary,
+        "decode_total_s": round(decode_total_s, 6),
+        "tokens_per_second_decode_model_only": (
+            round(max(generated_tokens - 1, 0) / decode_summary["total_s"], 3)
+            if decode_summary["total_s"] > 0
+            else None
+        ),
+        "tokens_per_second_decode_with_sampling": (
+            round(generated_tokens / decode_total_s, 3) if decode_total_s > 0 else None
+        ),
+        "per_token": token_records,
+    }
+
+
+@contextlib.contextmanager
+def maybe_torch_profiler(torch, profiler_dir):
+    """按需启用 PyTorch profiler，并输出 TensorBoard trace。"""
+    if not profiler_dir:
+        yield None
+        return
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    if torch.cuda.is_available():
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+    with torch.profiler.profile(
+        activities=activities,
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=True,
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(profiler_dir),
+    ) as profiler:
+        yield profiler
 
 
 def main(argv=None):
@@ -83,7 +370,7 @@ def main(argv=None):
     prompt = resolve_prompt(args)
     try:
         import torch
-        from transformers import AutoModelForMultimodalLM, AutoProcessor
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         if args.device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("指定了 --device cuda，但当前环境 torch.cuda.is_available() 为 False。")
@@ -93,12 +380,12 @@ def main(argv=None):
 
         log(f"开始加载 {MODEL_ID} ...")
         load_start = time.perf_counter()
-        processor = AutoProcessor.from_pretrained(
+        tokenizer = AutoTokenizer.from_pretrained(
             MODEL_ID,
             revision=args.revision,
             cache_dir=args.cache_dir,
         )
-        model = AutoModelForMultimodalLM.from_pretrained(
+        model = AutoModelForCausalLM.from_pretrained(
             MODEL_ID,
             revision=args.revision,
             cache_dir=args.cache_dir,
@@ -110,24 +397,64 @@ def main(argv=None):
         load_elapsed = time.perf_counter() - load_start
         log(f"模型加载完成，耗时 {load_elapsed:.2f}s，device={args.device}，dtype={dtype}")
 
-        inputs = build_inputs(processor, prompt).to(model.device)
+        with nvtx_range(torch, args.nvtx, "tokenize"):
+            tokenize_start = time.perf_counter()
+            inputs = build_inputs(tokenizer, prompt, args.disable_thinking)
+            tokenize_elapsed = time.perf_counter() - tokenize_start
+
+        with nvtx_range(torch, args.nvtx, "input_to_device"):
+            cuda_sync(torch)
+            input_to_device_start = time.perf_counter()
+            inputs = inputs.to(model.device)
+            cuda_sync(torch)
+            input_to_device_elapsed = time.perf_counter() - input_to_device_start
+
         generate_kwargs = {
             "max_new_tokens": args.max_new_tokens,
             "do_sample": not args.greedy,
+            "use_cache": True,
         }
+        if args.static_cache:
+            generate_kwargs["cache_implementation"] = "static"
         if not args.greedy:
             generate_kwargs["temperature"] = args.temperature
 
         log("开始推理...")
         infer_start = time.perf_counter()
-        with torch.inference_mode():
-            generated = model.generate(**inputs, **generate_kwargs)
+        timing_report = None
+        with torch.inference_mode(), maybe_torch_profiler(torch, args.torch_profiler) as profiler:
+            with nvtx_range(torch, args.nvtx, "generate"):
+                if args.profile_timing:
+                    generated, timing_report = profiled_generate(torch, model, inputs, args)
+                elif args.fast_decode:
+                    generated = fast_generate(torch, model, inputs, args)
+                else:
+                    generated = model.generate(**inputs, **generate_kwargs)
+            if profiler is not None:
+                profiler.step()
         infer_elapsed = time.perf_counter() - infer_start
         log(f"推理完成，耗时 {infer_elapsed:.2f}s，max_new_tokens={args.max_new_tokens}")
 
         input_len = inputs["input_ids"].shape[-1]
         output_ids = generated[:, input_len:]
-        print(processor.batch_decode(output_ids, skip_special_tokens=True)[0])
+        with nvtx_range(torch, args.nvtx, "text_decode"):
+            text_decode_start = time.perf_counter()
+            output_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+            text_decode_elapsed = time.perf_counter() - text_decode_start
+
+        if timing_report is not None:
+            timing_report["tokenize_s"] = round(tokenize_elapsed, 6)
+            timing_report["input_to_device_s"] = round(input_to_device_elapsed, 6)
+            timing_report["infer_wall_s"] = round(infer_elapsed, 6)
+            timing_report["text_decode_s"] = round(text_decode_elapsed, 6)
+            timing_report["torch_profiler_dir"] = args.torch_profiler
+            timing_report["nvtx_enabled"] = args.nvtx
+            log("PROFILE_TIMING_JSON:")
+            log(json.dumps(timing_report, ensure_ascii=False, indent=2))
+        if args.torch_profiler:
+            log(f"PyTorch profiler trace 已写入：{args.torch_profiler}")
+
+        print(output_text)
         return 0
     except Exception as exc:
         print(f"推理失败：{exc}", file=sys.stderr)

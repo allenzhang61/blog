@@ -1,5 +1,7 @@
 ## 目录
 
+### 数学基础
+
 - 概率论与数理统计
   - [分布函数](chapter-01/01-001.ipynb)
   - [chapter1 概率论的基本概念](chapter-01/01-005.md)
@@ -10,6 +12,14 @@
   - [条件期望](chapter-01/01-003.md)
   - [全期望公式](chapter-01/01-004.md)
 - 代数
+- 运筹学/Operations Research
+  - [线性规划](chapter-10/10-001.ipynb)
+  - [混合整数线性规划](chapter-10/10-002.ipynb)
+- 最优化/Optimization
+
+
+### 算法
+
 - 机器学习
   - 线性回归，逻辑回归
     - [线性回归](chapter-05/05-002.md)
@@ -53,117 +63,6 @@
   - BERT
     - [BERT](chapter-04/04-002.ipynb)
   - LNN 液态神经网络
-- LLM
-  - 处理文本数据
-    - [介绍](chapter-03/03-001.md)
-    - [tokenizer](chapter-03/03-002.ipynb)
-    - [滑动采样](chapter-03/03-003.ipynb)
-    - [构建词嵌入层](chapter-03/03-004.ipynb)
-    - 位置编码//todo
-  - 注意力机制
-    - [简化计算过程](chapter-03/03-012.ipynb)
-    - [逐步计算注意力权重](chapter-03/03-013.ipynb)
-    - [实现一个简洁的自注意力机制 Python 类](chapter-03/03-014.ipynb)
-    - QKV 通俗理解 //todo
-  - 时间序列基础模型
-    - [time series model - introduce](chapter-03/03-027.md)
-    - [time series model - code](chapter-03/03-028.ipynb)
-  - [nanoGPT + unpc data](chapter-03/03-029.md)
-  - 实现一个用于文本生成的GPT模型
-    - [实现 dummy 框架](chapter-03/03-007.ipynb)
-    - [快捷连接示例](chapter-03/03-009.ipynb)
-    - [实现正式LLM架构](chapter-03/03-005.ipynb)
-  - [在无标记数据集上进行预训练](chapter-03/03-006.ipynb)
-  - [从 OpenAI 加载预训练权重](chapter-03/03-008.ipynb)
-  - [用于分类任务的微调](chapter-03/03-010.ipynb)
-  - [指令遵循微调](chapter-03/03-011.ipynb)
-  - todo
-    - [kv cache](chapter-03/03-026.md)
-    - masked attention
-    - 从 transformer 到 GPT、BERT、ViT
-    - 现代 LLM 训练与后训练
-      - 数据清洗、去重、混合比例
-      - Scaling Law
-      - LoRA、QLoRA、PEFT
-        - [lora](chapter-03/03-030.md)
-      - SFT
-      - Reward Model
-      - RLHF、DPO、GRPO
-      - 模型测评、幻觉、安全对齐
-    - RAG
-      - [RAG](chapter-03/03-025.md)
-      - [Chroma 向量数据库介绍](chapter-03/03-021.md)
-      - [HNSW算法介绍](chapter-03/03-022.md)
-        - [ANN 算法介绍](chapter-03/03-023.md)
-      - [Embedding](chapter-03/03-024.md)
-      - Chunking
-      - 稀疏检索 BM25
-      - Dense Retrieval
-      - Hybrid Search
-      - Reranker
-      - RAG 测评
-      - Agentic RAG
-    - 生成模型
-      - AutoEncoder、VAE
-      - GAN
-      - Diffusion
-      - Stable Diffusion
-      - Flow Matching
-      - Diffusion Transformer
-      - 图像、视频、音频生成
-    - 分布式训练
-      - DDP
-      - FSDP
-      - Tensor Parallel
-      - Pipeline Parallel
-      - ZeRO
-      - 混合精度训练
-      - Gradient Checkpointing
-      - 多机多卡容错与 Checkpoint
-    - 多模态与语音
-      - CLIP、Vision Encoder
-      - VLM、图文理解
-      - ASR、Whisper
-      - TTS
-      - 音频 Transformer
-      - 视频理解
-      - 机器人与 Vision-Language-Action
-- build your own llm
-  - train
-    - [python version](chapter-18/18-001.md)
-    - cpp version
-- 模型推理与性能优化
-  - [开源推理服务器总结](chapter-14/14-011.md)
-  - [mac studio 上可运行选项性能对比](chapter-14/14-012.md)
-  - [pixel 9 上可运行选项性能对比](chapter-14/14-013.md)
-  - [CUDA 机器上可运行选项性能对比](chapter-14/14-014.md)
-  - [推理的流程和架构](chapter-14/14-001.md)
-  - FP16、BF16、FP8、INT8、INT4
-  - Quantization、Pruning、Distillation
-  - FlashAttention
-  - KV Cache、PagedAttention
-  - Continuous Batching
-  - Speculative Decoding
-  - vLLM、SGLang、TensorRT-LLM
-    - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-14/14-002.md)
-    - [vLLM 用法 Hello World](chapter-14/14-003.md)
-    - [压测并调优 vllm+qwen 3.5 9B](chapter-14/14-004.md)
-    - [vllm 性能调优](chapter-14/14-005.md)
-    - [vllm 内存管理机制](chapter-14/14-006.md)
-    - [vllm 调用链](chapter-14/14-007.md)
-    - [vllm parallel 介绍](chapter-14/14-008.md)
-    - [vllm 类图](chapter-14/14-009.md)
-    - [vllm lora](chapter-14/14-010.md)
-  - Tensor/Pipeline/Data/Expert Parallel
-  - llama.cpp
-- 模型评测
-  - [评测指标](chapter-19/19-001.md)
-  - [评测工具](chapter-19/19-002.md)
-  - [评测对象](chapter-19/19-003.md)
-- 运筹学/Operations Research
-  - [线性规划](chapter-10/10-001.ipynb)
-  - [混合整数线性规划](chapter-10/10-002.ipynb)
-- 最优化/Optimization
 - 强化学习
   - 监督学习算法的上限（upper bound）就是人类的表现；强化学习，它在环境里面自己探索，有非常大的潜力，它可以获得超越人类的能力的表现
   - 标准强化学习：比如 TD-Gammon 玩 Backgammon 游戏的过程，其实就是设计特征，然后训练价值函数的过程。标准强化学习先设计很多特征，这些特征可以描述现在整个状态。 得到这些特征后，我们就可以通过训练一个分类网络或者分别训练一个价值估计函数来采取动作。
@@ -231,28 +130,128 @@
     - RAG
   - 数据与评测
     - 数据清洗与标注
-- 计算机视觉
-  - ResNet
-  - Vision Transformer
-  - 目标检测：YOLO、Faster R-CNN
-  - 图像分割：U-Net、SAM
-  - 自监督学习：DINO
-  - 视觉语言模型：CLIP、VLM
-  - Diffusion、DiT
-  - pytorch 计算机视觉实战
-    - [基础](chapter-16/16-001.md)
-    - [分类交叉熵 & 二元交叉熵](chapter-16/16-002.md)
-    - [梯度下降](chapter-16/16-003.md)
-    - [张量](chapter-16/16-004.md)
-    - [构建神经网络](chapter-16/16-005.md)
-    - [构建深度网络](chapter-16/16-006.md)
+
+![](/static/images/2606/p001.png)
+
+### LLM
+
+#### 训练
+
+- LLM
+  - 处理文本数据
+    - [介绍](chapter-03/03-001.md)
+    - [tokenizer](chapter-03/03-002.ipynb)
+    - [滑动采样](chapter-03/03-003.ipynb)
+    - [构建词嵌入层](chapter-03/03-004.ipynb)
+    - 位置编码//todo
+  - 注意力机制
+    - [简化计算过程](chapter-03/03-012.ipynb)
+    - [逐步计算注意力权重](chapter-03/03-013.ipynb)
+    - [实现一个简洁的自注意力机制 Python 类](chapter-03/03-014.ipynb)
+    - QKV 通俗理解 //todo
+  - 时间序列基础模型
+    - [time series model - introduce](chapter-03/03-027.md)
+    - [time series model - code](chapter-03/03-028.ipynb)
+  - [nanoGPT + unpc data](chapter-03/03-029.md)
+  - 实现一个用于文本生成的GPT模型
+    - [实现 dummy 框架](chapter-03/03-007.ipynb)
+    - [快捷连接示例](chapter-03/03-009.ipynb)
+    - [实现正式LLM架构](chapter-03/03-005.ipynb)
+  - [在无标记数据集上进行预训练](chapter-03/03-006.ipynb)
+  - [从 OpenAI 加载预训练权重](chapter-03/03-008.ipynb)
+  - [用于分类任务的微调](chapter-03/03-010.ipynb)
+  - [指令遵循微调](chapter-03/03-011.ipynb)
+- 分布式训练
+  - DDP
+  - FSDP
+  - Tensor Parallel
+  - Pipeline Parallel
+  - ZeRO
+  - 混合精度训练
+  - Gradient Checkpointing
+  - 多机多卡容错与 Checkpoint
+- 现代 LLM 训练与后训练
+  - 数据清洗、去重、混合比例
+  - Scaling Law
+  - SFT
+  - Reward Model
+  - RLHF、DPO、GRPO
+- masked attention
+- 从 transformer 到 GPT、BERT、ViT
+- build your own llm
+  - train
+    - [python version](chapter-18/18-001.md)
+    - cpp version
+    - [cpp](./cpp/)
+
+
+
+![](/static/images/2606/p002.png)
+
+#### 训练微调
+
+- LoRA、QLoRA、PEFT
+  - [lora](chapter-03/03-030.md)
+
+#### 推理
+
+- 模型推理与性能优化
+  - [开源推理服务器总结](chapter-14/14-011.md)
+  - [mac studio 上可运行选项性能对比](chapter-14/14-012.md)
+  - [pixel 9 上可运行选项性能对比](chapter-14/14-013.md)
+  - [CUDA 机器上可运行选项性能对比](chapter-14/14-014.md)
+  - [推理的流程和架构](chapter-14/14-001.md)
+  - FP16、BF16、FP8、INT8、INT4
+  - Quantization、Pruning、Distillation
+  - FlashAttention
+  - KV Cache、PagedAttention
+  - Continuous Batching
+  - Speculative Decoding
+  - vLLM、SGLang、TensorRT-LLM
+    - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-14/14-002.md)
+    - [vLLM 用法 Hello World](chapter-14/14-003.md)
+    - [压测并调优 vllm+qwen 3.5 9B](chapter-14/14-004.md)
+    - [vllm 性能调优](chapter-14/14-005.md)
+    - [vllm 内存管理机制](chapter-14/14-006.md)
+    - [vllm 调用链](chapter-14/14-007.md)
+    - [vllm parallel 介绍](chapter-14/14-008.md)
+    - [vllm 类图](chapter-14/14-009.md)
+    - [vllm lora](chapter-14/14-010.md)
+  - Tensor/Pipeline/Data/Expert Parallel
+  - llama.cpp
+- [kv cache](chapter-03/03-026.md)
+
+
+#### 评测
+
+- 模型评测
+  - [评测指标](chapter-19/19-001.md)
+  - [评测工具](chapter-19/19-002.md)
+  - [评测对象](chapter-19/19-003.md)
+
+#### 向量数据库
+
+- RAG
+  - [RAG](chapter-03/03-025.md)
+  - [Chroma 向量数据库介绍](chapter-03/03-021.md)
+  - [HNSW算法介绍](chapter-03/03-022.md)
+    - [ANN 算法介绍](chapter-03/03-023.md)
+  - [Embedding](chapter-03/03-024.md)
+  - Chunking
+  - 稀疏检索 BM25
+  - Dense Retrieval
+  - Hybrid Search
+  - Reranker
+  - RAG 测评
+  - Agentic RAG
+
+### python & cuda
+
 - python
   - pytorch
   - numpy
     - [np.max](chapter-06/06-001.ipynb)
 - huggingface-transformers
-- competitions
-    - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
 - cuda
   - [hello world](chapter-15/15-001.md)
   - [hello world 2](chapter-15/15-003.md)
@@ -275,20 +274,55 @@
   - 分布式训练与 NCCL
   - LLM 训练优化
   - LLM 推理优化
-- 实践
-  - [cpp](./cpp/)
-  - arc-agi-3
-    - [人是如何认识世界的](chapter-13/13-003.md)
-    - [通用模型流程设计](chapter-13/13-004.md)
-    - [World Models](chapter-13/13-001.md)
-    - [Dreamer](chapter-13/13-002.md)
-    - [PlaNet](chapter-13/13-006.md)
-    - [MuZero](chapter-13/13-005.md)
-    
-![](/static/images/2606/p001.png)
 
-![](/static/images/2606/p002.png)
 
+
+#### AGI
+
+- arc-agi-3
+  - [人是如何认识世界的](chapter-13/13-003.md)
+  - [通用模型流程设计](chapter-13/13-004.md)
+  - [World Models](chapter-13/13-001.md)
+  - [Dreamer](chapter-13/13-002.md)
+  - [PlaNet](chapter-13/13-006.md)
+  - [MuZero](chapter-13/13-005.md)
+- competitions
+  - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
+
+
+## 低优
+
+- 计算机视觉
+  - ResNet
+  - Vision Transformer
+  - 目标检测：YOLO、Faster R-CNN
+  - 图像分割：U-Net、SAM
+  - 自监督学习：DINO
+  - 视觉语言模型：CLIP、VLM
+  - Diffusion、DiT
+  - pytorch 计算机视觉实战
+    - [基础](chapter-16/16-001.md)
+    - [分类交叉熵 & 二元交叉熵](chapter-16/16-002.md)
+    - [梯度下降](chapter-16/16-003.md)
+    - [张量](chapter-16/16-004.md)
+    - [构建神经网络](chapter-16/16-005.md)
+    - [构建深度网络](chapter-16/16-006.md)
+- 生成模型
+  - AutoEncoder、VAE
+  - GAN
+  - Diffusion
+  - Stable Diffusion
+  - Flow Matching
+  - Diffusion Transformer
+  - 图像、视频、音频生成
+- 多模态与语音
+  - CLIP、Vision Encoder
+  - VLM、图文理解
+  - ASR、Whisper
+  - TTS
+  - 音频 Transformer
+  - 视频理解
+  - 机器人与 Vision-Language-Action
 
 ## 资料
 
