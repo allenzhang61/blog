@@ -112,6 +112,7 @@
 - 遍历目录时优先用 `find '目录名' ...`
 - 不要假设路径可以不转义直接拼接
 - 如果需要在 CUDA 设备上跑 `AI/codes/llm-train-cpp/`，远端 Windows 机器上的项目源码和构建目录放到 D 盘中，不要放到 C 盘临时目录。
+- 在 `lxa@192.168.1.110` 上执行 Linux/CUDA 相关任务时，默认进入 WSL2 发行版 `Ubuntu-D`，命令形如 `ssh lxa@192.168.1.110 'wsl -d Ubuntu-D -- <command>'`。该发行版安装在 D 盘，优先把项目、模型缓存和虚拟环境放在 WSL 的 Linux 文件系统内，不要默认使用原生 Windows Python 或 C 盘临时目录。
 
 ## 更新内容时的默认工作流
 

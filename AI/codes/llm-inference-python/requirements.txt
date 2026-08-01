@@ -2,3 +2,8 @@ torch
 huggingface_hub
 safetensors
 transformers
+accelerate
+pillow
+torchvision
+causal-conv1d
+flash-linear-attention
