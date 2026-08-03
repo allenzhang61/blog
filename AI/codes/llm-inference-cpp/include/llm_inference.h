@@ -114,6 +114,7 @@ bool has_tensor(const ModelWeights & weights, const std::string & name);
 void dump_tensors(const ModelWeights & weights);
 
 float tensor_value(const TensorRef & ref, size_t index);
+float dot_row(const TensorRef & weight, int row, const std::vector<float> & x);
 void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y);
 void embedding_lookup(const TensorRef & emb, int token_id, std::vector<float> & y);
 void rms_norm(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y, float eps, bool one_plus);
@@ -123,6 +124,19 @@ float softplus(float x);
 void l2_norm_inplace(float * x, int dim, float eps = 1e-6f);
 void gated_rms_norm_head(const TensorRef & weight, const float * x, const float * gate, float * y, int dim, float eps);
 void add_inplace(std::vector<float> & x, const std::vector<float> & y);
+bool cuda_cublas_enabled();
+bool cuda_fused_mlp_enabled();
+bool cuda_rmsnorm_mlp_enabled();
+bool cuda_mlp_layer(const TensorRef & gate_w, const TensorRef & up_w, const TensorRef & down_w, const std::vector<float> & x, std::vector<float> & out);
+bool cuda_rmsnorm_mlp_layer(
+    const TensorRef & norm_w,
+    const TensorRef & gate_w,
+    const TensorRef & up_w,
+    const TensorRef & down_w,
+    const std::vector<float> & x,
+    float eps,
+    bool one_plus,
+    std::vector<float> & out);
 
 std::unordered_map<int, std::string> load_vocab_reverse(const fs::path & model_dir, double & elapsed);
 std::string detokenize(const std::vector<int> & ids, const std::unordered_map<int, std::string> & vocab);

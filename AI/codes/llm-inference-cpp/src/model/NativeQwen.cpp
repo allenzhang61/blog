@@ -159,8 +159,18 @@ private:
             add_inplace(x, mixer_out);
 
             residual = x;
-            rms_norm(t(prefix + "post_attention_layernorm.weight"), x, normed, config_.rms_norm_eps, true);
-            mlp_layer(prefix, normed, mixer_out);
+            if (!cuda_rmsnorm_mlp_enabled() || !cuda_rmsnorm_mlp_layer(
+                    t(prefix + "post_attention_layernorm.weight"),
+                    t(prefix + "mlp.gate_proj.weight"),
+                    t(prefix + "mlp.up_proj.weight"),
+                    t(prefix + "mlp.down_proj.weight"),
+                    x,
+                    config_.rms_norm_eps,
+                    true,
+                    mixer_out)) {
+                rms_norm(t(prefix + "post_attention_layernorm.weight"), x, normed, config_.rms_norm_eps, true);
+                mlp_layer(prefix, normed, mixer_out);
+            }
             x = residual;
             add_inplace(x, mixer_out);
         }
@@ -172,16 +182,23 @@ private:
     }
 
     void mlp_layer(const std::string & prefix, const std::vector<float> & x, std::vector<float> & out) const {
+        const TensorRef gate_w = t(prefix + "mlp.gate_proj.weight");
+        const TensorRef up_w = t(prefix + "mlp.up_proj.weight");
+        const TensorRef down_w = t(prefix + "mlp.down_proj.weight");
+        if (cuda_mlp_layer(gate_w, up_w, down_w, x, out)) {
+            return;
+        }
+
         std::vector<float> gate;
         std::vector<float> up;
         std::vector<float> prod;
-        matvec(t(prefix + "mlp.gate_proj.weight"), x, gate);
-        matvec(t(prefix + "mlp.up_proj.weight"), x, up);
+        matvec(gate_w, x, gate);
+        matvec(up_w, x, up);
         prod.resize(gate.size());
         for (size_t i = 0; i < gate.size(); ++i) {
             prod[i] = silu(gate[i]) * up[i];
         }
-        matvec(t(prefix + "mlp.down_proj.weight"), prod, out);
+        matvec(down_w, prod, out);
     }
 
     void linear_attention_layer(
@@ -413,32 +430,15 @@ private:
         }
 
         const auto start = Clock::now();
-        int best_id = 0;
-        float best = -std::numeric_limits<float>::infinity();
+        std::vector<float> logits;
+        matvec(emb, hidden, logits);
 
-#pragma omp parallel
-        {
-            int local_id = 0;
-            float local_best = -std::numeric_limits<float>::infinity();
-#pragma omp for schedule(static)
-            for (int token = 0; token < vocab; ++token) {
-                double sum = 0.0;
-                const size_t base = static_cast<size_t>(token) * hidden_size;
-                for (int i = 0; i < hidden_size; ++i) {
-                    sum += static_cast<double>(tensor_value(emb, base + static_cast<size_t>(i))) * hidden[i];
-                }
-                const float score = static_cast<float>(sum);
-                if (score > local_best) {
-                    local_best = score;
-                    local_id = token;
-                }
-            }
-#pragma omp critical
-            {
-                if (local_best > best) {
-                    best = local_best;
-                    best_id = local_id;
-                }
+        int best_id = 0;
+        float best = logits[0];
+        for (int token = 1; token < vocab; ++token) {
+            if (logits[token] > best) {
+                best = logits[token];
+                best_id = token;
             }
         }
         timing.logits_s += elapsed_s(start);

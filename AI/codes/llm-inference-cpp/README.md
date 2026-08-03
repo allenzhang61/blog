@@ -113,3 +113,67 @@ Python / Transformers 同样参数的前 2 个 token 也是：
 ```
 
 这说明当前 C++ 版的 prefill、greedy logits、一次 decode cache 路径已经和 Python 结果对齐。
+
+## 性能进展
+
+为了向 Python CUDA 版本靠近，已经做了两轮优化：
+
+1. CPU 手写快路径：去掉 matvec 内层循环中的 dtype 字符串判断和函数调用，按 BF16/F16/F32 直接扫指针。
+2. CUDA/cuBLAS matvec：使用 CUDA 12.8 + cuBLAS，把 BF16/F32 权重缓存到 GPU VRAM，用 `cublasGemmEx` 执行大矩阵向量乘。
+
+远端 `Ubuntu-D` 中已安装：
+
+```text
+cmake
+build-essential
+libopenblas-dev
+cuda-nvcc-12-8
+cuda-cudart-dev-12-8
+libcublas-dev-12-8
+```
+
+构建 CUDA 版：
+
+```bash
+cmake -S . -B build-cuda128 \
+  -DLLM_INFERENCE_ENABLE_CUDA=ON \
+  -DLLM_INFERENCE_ENABLE_CBLAS=OFF \
+  -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc
+cmake --build build-cuda128 -j
+```
+
+运行 CUDA 版：
+
+```bash
+LD_LIBRARY_PATH=/usr/local/cuda-12.8/targets/x86_64-linux/lib:$LD_LIBRARY_PATH \
+LLM_INFERENCE_CUDA_WEIGHT_CACHE_GB=10 \
+OMP_NUM_THREADS=4 \
+./build-cuda128/llm-inference-cpp \
+  --model-dir /home/zyl/hf-cache/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a \
+  --max-new-tokens 64 \
+  --greedy \
+  --profile-timing \
+  --warmup-runs 1
+```
+
+当前 64-token 对比：
+
+| 版本 | generated ids 是否对齐 | infer wall | prefill | decode |
+|------|------------------------|------------|---------|--------|
+| Python / Transformers CUDA，预热后 | 是 | 2.56s | 0.051s | 2.50s |
+| C++ 原生 CPU，优化前 | 是 | 136.29s | 87.94s | 47.50s |
+| C++ 原生 CPU，dtype 快路径 | 是 | 52.62s | 32.07s | 20.00s |
+| C++ 原生 CUDA/cuBLAS matvec，预热后 | 是 | 16.53s | 2.96s | 13.55s |
+| C++ 原生 CUDA/cuBLAS matvec + fused MLP，预热后 | 是 | 15.07s | 2.68s | 12.37s |
+
+CUDA matvec + fused MLP 已经把 MLP 子层中的 `gate_proj/up_proj -> SiLU * up -> down_proj` 中间激活留在 GPU，并用 CUDA kernel 融合了激活乘法和 BF16 转换。但还没有完全对齐 Python。另有 `LLM_INFERENCE_CUDA_FUSE_RMSNORM_MLP=1` 可实验性融合 `post_attention_layernorm + MLP`，本轮 64-token 实测为 15.29s，慢于默认路径，所以默认关闭。
+
+剩余主要瓶颈是：
+
+- 每个 token 仍有大量小粒度 cuBLAS 调用。
+- RMSNorm、RoPE、attention softmax、linear attention recurrent state 等仍在 CPU 上做。
+- 每层 hidden state 在 CPU/GPU 间往返。
+- prefill 仍按 token 逐个执行，没有像 Python/Transformers 那样批量处理 15 token。
+
+要继续逼近 Python，需要把整层 forward 搬到 GPU：至少融合 RMSNorm + projection、MLP gate/up、linear attention 的 conv/recurrent 更新，并让 hidden/KV/recurrent state 常驻 GPU。
