@@ -39,11 +39,31 @@ cmake -S . -B build
 cmake --build build -j
 ```
 
-如果环境里没有 `cmake`，这个项目当前只有一个源文件，也可以直接用：
+如果环境里没有 `cmake`，也可以直接用：
 
 ```bash
 mkdir -p build
-g++ -std=c++17 -O3 -march=native -fopenmp -Wall -Wextra -Wpedantic src/main.cpp -o build/llm-inference-cpp
+g++ -std=c++17 -O3 -march=native -fopenmp -Wall -Wextra -Wpedantic \
+  -Iinclude \
+  src/core/*.cpp \
+  src/model/*.cpp \
+  src/main.cpp \
+  -o build/llm-inference-cpp
+```
+
+## 代码结构
+
+```text
+include/llm_inference.h       公共结构、函数声明
+src/main.cpp                  CLI 流程编排
+src/core/cli.cpp              参数解析
+src/core/common.cpp           常量、日志、计时
+src/core/config.cpp           config.json 解析
+src/core/safetensors.cpp      safetensors mmap 和 tensor metadata
+src/core/tensor_ops.cpp       BF16/F16/F32 读取、matvec、norm、激活函数
+src/core/tokenizer.cpp        默认 prompt ids、vocab 反查、detokenize
+src/core/profile.cpp          JSON timing 和 tensor dump
+src/model/NativeQwen.cpp      Qwen3.5 forward、linear/full attention、KV/recurrent cache
 ```
 
 ## 运行

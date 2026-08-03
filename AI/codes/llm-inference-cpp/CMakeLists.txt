@@ -7,8 +7,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(llm-inference-cpp
+    src/core/cli.cpp
+    src/core/common.cpp
+    src/core/config.cpp
+    src/core/profile.cpp
+    src/core/safetensors.cpp
+    src/core/tensor_ops.cpp
+    src/core/tokenizer.cpp
     src/main.cpp
+    src/model/NativeQwen.cpp
 )
+
+target_include_directories(llm-inference-cpp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
