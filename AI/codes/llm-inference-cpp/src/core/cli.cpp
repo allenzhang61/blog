@@ -1,4 +1,4 @@
-#include "llm_inference.h"
+#include "cli.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -7,7 +7,7 @@
 
 namespace llm_inference {
 
-[[noreturn]] void usage(const char * argv0, int code) {
+[[noreturn]] static void usage(const char * argv0, int code) {
     std::cerr
         << "用法:\n"
         << "  " << argv0 << " --model-dir DIR [--prompt TEXT] [options]\n\n"
@@ -26,7 +26,7 @@ namespace llm_inference {
     std::exit(code);
 }
 
-int parse_int(const char * value, const std::string & name) {
+static int parse_int(const char * value, const std::string & name) {
     try {
         return std::stoi(value);
     } catch (...) {
@@ -34,7 +34,7 @@ int parse_int(const char * value, const std::string & name) {
     }
 }
 
-float parse_float(const char * value, const std::string & name) {
+static float parse_float(const char * value, const std::string & name) {
     try {
         return std::stof(value);
     } catch (...) {
@@ -42,7 +42,7 @@ float parse_float(const char * value, const std::string & name) {
     }
 }
 
-std::vector<int> parse_input_ids(const std::string & text) {
+static std::vector<int> parse_input_ids(const std::string & text) {
     std::vector<int> ids;
     std::stringstream ss(text);
     std::string item;

@@ -1,4 +1,4 @@
-#include "llm_inference.h"
+#include "tokenizer.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -8,7 +8,7 @@
 
 namespace llm_inference {
 
-std::string json_unescape_string(const std::string & s) {
+static std::string json_unescape_string(const std::string & s) {
     std::string out;
     for (size_t i = 0; i < s.size(); ++i) {
         if (s[i] != '\\' || i + 1 >= s.size()) {
@@ -51,7 +51,7 @@ std::unordered_map<int, std::string> load_vocab_reverse(const fs::path & model_d
     return vocab;
 }
 
-std::unordered_map<uint32_t, uint8_t> bytes_to_unicode_inverse() {
+static std::unordered_map<uint32_t, uint8_t> bytes_to_unicode_inverse() {
     std::vector<int> bs;
     for (int i = static_cast<int>('!'); i <= static_cast<int>('~'); ++i) bs.push_back(i);
     for (int i = 0xA1; i <= 0xAC; ++i) bs.push_back(i);
@@ -72,7 +72,7 @@ std::unordered_map<uint32_t, uint8_t> bytes_to_unicode_inverse() {
     return inv;
 }
 
-bool next_utf8_codepoint(const std::string & s, size_t & i, uint32_t & cp) {
+static bool next_utf8_codepoint(const std::string & s, size_t & i, uint32_t & cp) {
     if (i >= s.size()) {
         return false;
     }
@@ -102,7 +102,7 @@ bool next_utf8_codepoint(const std::string & s, size_t & i, uint32_t & cp) {
     return true;
 }
 
-std::string decode_piece(const std::string & piece) {
+static std::string decode_piece(const std::string & piece) {
     static const auto inv = bytes_to_unicode_inverse();
     std::string bytes;
     size_t i = 0;

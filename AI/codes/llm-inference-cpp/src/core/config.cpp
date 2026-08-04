@@ -1,4 +1,4 @@
-#include "llm_inference.h"
+#include "config.h"
 
 #include <fstream>
 #include <regex>
@@ -17,7 +17,7 @@ std::string read_text_file(const fs::path & path) {
     return ss.str();
 }
 
-int json_int(const std::string & json, const std::string & key, int default_value = 0) {
+static int json_int(const std::string & json, const std::string & key, int default_value = 0) {
     const std::regex pattern("\"" + key + "\"\\s*:\\s*(-?[0-9]+)");
     std::smatch match;
     if (std::regex_search(json, match, pattern)) {
@@ -26,7 +26,7 @@ int json_int(const std::string & json, const std::string & key, int default_valu
     return default_value;
 }
 
-float json_float(const std::string & json, const std::string & key, float default_value = 0.0f) {
+static float json_float(const std::string & json, const std::string & key, float default_value = 0.0f) {
     const std::regex pattern("\"" + key + "\"\\s*:\\s*(-?[0-9]+(?:\\.[0-9]+)?(?:e-?[0-9]+)?)");
     std::smatch match;
     if (std::regex_search(json, match, pattern)) {
@@ -35,7 +35,7 @@ float json_float(const std::string & json, const std::string & key, float defaul
     return default_value;
 }
 
-std::vector<std::string> parse_layer_types(const std::string & json) {
+static std::vector<std::string> parse_layer_types(const std::string & json) {
     std::vector<std::string> values;
     const std::regex block("\"layer_types\"\\s*:\\s*\\[([^\\]]+)\\]");
     std::smatch match;

@@ -1,4 +1,4 @@
-#include "llm_inference.h"
+#include "safetensors.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -48,7 +48,7 @@ void MappedFile::close() {
     size = 0;
 }
 
-MappedFile mmap_file(const fs::path & path) {
+static MappedFile mmap_file(const fs::path & path) {
     MappedFile file;
     file.path = path;
     file.fd = ::open(path.c_str(), O_RDONLY);
@@ -73,7 +73,7 @@ MappedFile mmap_file(const fs::path & path) {
     return file;
 }
 
-uint64_t read_u64_le(const uint8_t * data) {
+static uint64_t read_u64_le(const uint8_t * data) {
     uint64_t value = 0;
     for (int i = 0; i < 8; ++i) {
         value |= static_cast<uint64_t>(data[i]) << (8 * i);
@@ -81,7 +81,7 @@ uint64_t read_u64_le(const uint8_t * data) {
     return value;
 }
 
-std::vector<int64_t> parse_i64_array(const std::string & text) {
+static std::vector<int64_t> parse_i64_array(const std::string & text) {
     std::vector<int64_t> values;
     const std::regex number("-?[0-9]+");
     for (auto it = std::sregex_iterator(text.begin(), text.end(), number); it != std::sregex_iterator(); ++it) {
@@ -90,7 +90,7 @@ std::vector<int64_t> parse_i64_array(const std::string & text) {
     return values;
 }
 
-void parse_safetensors_header(ModelWeights & weights, size_t file_index) {
+static void parse_safetensors_header(ModelWeights & weights, size_t file_index) {
     const MappedFile & file = weights.files[file_index];
     const uint64_t header_len = read_u64_le(file.data);
     if (8 + header_len > file.size) {
@@ -119,7 +119,7 @@ void parse_safetensors_header(ModelWeights & weights, size_t file_index) {
     }
 }
 
-std::vector<fs::path> find_safetensors_files(const fs::path & model_dir) {
+static std::vector<fs::path> find_safetensors_files(const fs::path & model_dir) {
     std::vector<fs::path> files;
     for (const auto & entry : fs::directory_iterator(model_dir)) {
         if (entry.is_regular_file() && entry.path().extension() == ".safetensors") {

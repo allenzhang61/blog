@@ -1,130 +1,57 @@
 #pragma once
 
-#include <chrono>
+#include "config.h"
+#include "safetensors.h"
+
+#include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <map>
-#include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace llm_inference {
 
-namespace fs = std::filesystem;
-using Clock = std::chrono::steady_clock;
+// 将 BF16 原始 bit 表示转换为 float。
+float bf16_to_float(uint16_t value);
 
-extern const char * MODEL_ID;
-extern const char * DEFAULT_PROMPT;
-extern const std::vector<int> DEFAULT_PROMPT_IDS;
+// 将 IEEE FP16 原始 bit 表示转换为 float。
+float f16_to_float(uint16_t h);
 
-struct Args {
-    std::string model_dir;
-    std::string prompt;
-    std::vector<int> input_ids;
-    int max_new_tokens = 1;
-    int warmup_runs = 0;
-    float temperature = 0.7f;
-    bool greedy = false;
-    bool disable_thinking = false;
-    bool profile_timing = false;
-    bool dump_tensors = false;
-};
-
-struct ModelConfig {
-    int hidden_size = 0;
-    int intermediate_size = 0;
-    int num_hidden_layers = 0;
-    int num_attention_heads = 0;
-    int num_key_value_heads = 0;
-    int vocab_size = 0;
-    int head_dim = 0;
-    int linear_num_value_heads = 0;
-    int linear_num_key_heads = 0;
-    int linear_key_head_dim = 0;
-    int linear_value_head_dim = 0;
-    int linear_conv_kernel_dim = 4;
-    int eos_token_id = -1;
-    float rms_norm_eps = 1e-6f;
-    float rope_theta = 10000000.0f;
-    float partial_rotary_factor = 0.25f;
-    std::vector<std::string> layer_types;
-};
-
-struct MappedFile {
-    fs::path path;
-    int fd = -1;
-    size_t size = 0;
-    const uint8_t * data = nullptr;
-
-    MappedFile() = default;
-    MappedFile(const MappedFile &) = delete;
-    MappedFile & operator=(const MappedFile &) = delete;
-    MappedFile(MappedFile && other) noexcept;
-    MappedFile & operator=(MappedFile && other) noexcept;
-    ~MappedFile();
-    void close();
-};
-
-struct TensorInfo {
-    std::string name;
-    std::string dtype;
-    std::vector<int64_t> shape;
-    size_t data_begin = 0;
-    size_t data_end = 0;
-    size_t file_index = 0;
-};
-
-struct TensorRef {
-    const TensorInfo * info = nullptr;
-    const uint8_t * data = nullptr;
-};
-
-struct ModelWeights {
-    std::vector<MappedFile> files;
-    std::map<std::string, TensorInfo> tensors;
-};
-
-struct Timing {
-    double load_config_s = 0.0;
-    double load_weights_s = 0.0;
-    double load_vocab_s = 0.0;
-    double validate_s = 0.0;
-    double prefill_s = 0.0;
-    double decode_total_s = 0.0;
-    double logits_s = 0.0;
-    double warmup_s = 0.0;
-    double infer_wall_s = 0.0;
-    int input_tokens = 0;
-    int generated_tokens = 0;
-    std::vector<int> generated_ids;
-};
-
-double elapsed_s(Clock::time_point start);
-void log(const std::string & message);
-Args parse_args(int argc, char ** argv);
-std::string read_text_file(const fs::path & path);
-std::string json_escape(const std::string & value);
-std::string shape_to_string(const std::vector<int64_t> & shape);
-std::string profile_json(const ModelConfig & config, const ModelWeights & weights, const Timing & timing, const Args & args);
-
-ModelConfig load_config(const fs::path & model_dir);
-ModelWeights load_weights_mmap(const fs::path & model_dir);
-TensorRef tensor_ref(const ModelWeights & weights, const std::string & name);
-bool has_tensor(const ModelWeights & weights, const std::string & name);
-void dump_tensors(const ModelWeights & weights);
-
+// 读取 tensor 中指定线性下标的标量值，并按 dtype 转为 float。
 float tensor_value(const TensorRef & ref, size_t index);
+
+// 计算 weight 指定行与向量 x 的点积。
 float dot_row(const TensorRef & weight, int row, const std::vector<float> & x);
+
+// CPU/可选加速路径矩阵向量乘，输出 y。
 void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y);
+
+// CUDA 路径计算 emb * hidden 后的 argmax token id。
 bool cuda_argmax_matvec(const TensorRef & weight, const std::vector<float> & x, int & best_id);
+
+// 获取复用的 CUDA hidden buffer，slot 用于 current/next 双缓冲。
 void * cuda_token_hidden_buffer(int slot, int hidden_size);
+
+// 获取存放生成 token ids 的 CUDA buffer。
 void * cuda_generated_token_buffer(int count);
+
+// 在设备端执行单 token embedding lookup，结果写入 device_out。
 bool cuda_embedding_lookup_device(const TensorRef & emb, int token_id, void * device_out);
+
+// 在设备端读取 token id 并执行 embedding lookup。
 bool cuda_embedding_lookup_device_token(const TensorRef & emb, const void * device_token_id, void * device_out);
+
+// 对设备端 hidden 做 final RMSNorm 和 logits argmax，结果回写主机 best_id。
 bool cuda_final_norm_argmax_device(const TensorRef & norm_w, const TensorRef & emb, const void * device_hidden, int hidden_size, float eps, bool one_plus, int & best_id);
+
+// 对设备端 hidden 做 final RMSNorm 和 logits argmax，结果保留在设备端 token buffer。
 bool cuda_final_norm_argmax_to_device(const TensorRef & norm_w, const TensorRef & emb, const void * device_hidden, int hidden_size, float eps, bool one_plus, void * device_token_out);
+
+// 将设备端生成 token ids 拷贝回主机 vector。
 bool cuda_copy_generated_tokens_to_host(const void * device_tokens, int count, std::vector<int> & out);
+
+// 同步当前 CUDA device，失败时返回 false。
 bool cuda_synchronize_device();
+
+// CUDA 批量 prefill 路径，返回最后一个 token 的设备端 hidden。
 const void * cuda_prefill_batch(
     const ModelConfig & config,
     const ModelWeights & weights,
@@ -133,22 +60,56 @@ const void * cuda_prefill_batch(
     std::vector<void *> & full_states,
     const std::vector<int> & full_max_seq_lens,
     int & seq_len);
+
+// CPU embedding lookup，按 token id 取出 embedding 行。
 void embedding_lookup(const TensorRef & emb, int token_id, std::vector<float> & y);
+
+// CPU RMSNorm；one_plus 为 true 时使用 (1 + weight) 口径。
 void rms_norm(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y, float eps, bool one_plus);
+
+// sigmoid 激活函数。
 float sigmoid(float x);
+
+// SiLU 激活函数。
 float silu(float x);
+
+// softplus 激活函数。
 float softplus(float x);
+
+// 原地 L2 normalize。
 void l2_norm_inplace(float * x, int dim, float eps = 1e-6f);
+
+// 对单个 head 做 gated RMSNorm。
 void gated_rms_norm_head(const TensorRef & weight, const float * x, const float * gate, float * y, int dim, float eps);
+
+// x += y。
 void add_inplace(std::vector<float> & x, const std::vector<float> & y);
+
+// 当前构建/环境是否可用 CUDA cuBLAS matvec。
 bool cuda_cublas_enabled();
+
+// 当前构建/环境是否可用 fused MLP CUDA 路径。
 bool cuda_fused_mlp_enabled();
+
+// 当前构建/环境是否可用 attention projection CUDA 路径。
 bool cuda_project_attention_enabled();
+
+// 当前构建/环境是否可用整层 fused CUDA 路径。
 bool cuda_full_layer_enabled();
+
+// 当前构建/环境是否可用 RMSNorm + MLP fused CUDA 路径。
 bool cuda_rmsnorm_mlp_enabled();
+
+// 释放 linear attention 的 CUDA cache/state。
 void cuda_free_linear_attention_state(void * state);
+
+// 释放 full attention 的 CUDA KV cache/state。
 void cuda_free_full_attention_state(void * state);
+
+// CUDA fused MLP：gate/up/down 三个投影和 SiLU 乘法。
 bool cuda_mlp_layer(const TensorRef & gate_w, const TensorRef & up_w, const TensorRef & down_w, const std::vector<float> & x, std::vector<float> & out);
+
+// CUDA linear attention core，输入已完成各 projection。
 bool cuda_linear_attention_layer(
     const TensorRef & conv_w,
     const TensorRef & a_log,
@@ -167,6 +128,8 @@ bool cuda_linear_attention_layer(
     int kernel,
     float eps,
     std::vector<float> & out);
+
+// CUDA linear attention，包含输入 projection 和 attention core。
 bool cuda_linear_attention_project_layer(
     const TensorRef & in_proj_qkv_w,
     const TensorRef & in_proj_z_w,
@@ -186,6 +149,8 @@ bool cuda_linear_attention_project_layer(
     int kernel,
     float eps,
     std::vector<float> & out);
+
+// CUDA RMSNorm + linear attention projection fused 路径。
 bool cuda_rmsnorm_linear_attention_project_layer(
     const TensorRef & input_norm_w,
     const TensorRef & in_proj_qkv_w,
@@ -207,6 +172,8 @@ bool cuda_rmsnorm_linear_attention_project_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out);
+
+// CUDA linear attention + post RMSNorm + MLP 的整层主机输入/输出路径。
 bool cuda_linear_attention_full_layer(
     const TensorRef & input_norm_w,
     const TensorRef & in_proj_qkv_w,
@@ -232,6 +199,8 @@ bool cuda_linear_attention_full_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out);
+
+// CUDA linear attention + post RMSNorm + MLP 的整层设备输入/输出路径。
 bool cuda_linear_attention_full_layer_device(
     const TensorRef & input_norm_w,
     const TensorRef & in_proj_qkv_w,
@@ -258,6 +227,8 @@ bool cuda_linear_attention_full_layer_device(
     int kernel,
     float eps,
     bool one_plus);
+
+// CUDA full attention core，输入已完成 q/k/v projection。
 bool cuda_full_attention_layer(
     const TensorRef & q_norm_w,
     const TensorRef & k_norm_w,
@@ -275,6 +246,8 @@ bool cuda_full_attention_layer(
     float partial_rotary_factor,
     float eps,
     std::vector<float> & out);
+
+// CUDA full attention，包含 q/k/v projection 和 attention core。
 bool cuda_full_attention_project_layer(
     const TensorRef & q_proj_w,
     const TensorRef & k_proj_w,
@@ -293,6 +266,8 @@ bool cuda_full_attention_project_layer(
     float partial_rotary_factor,
     float eps,
     std::vector<float> & out);
+
+// CUDA RMSNorm + full attention projection fused 路径。
 bool cuda_rmsnorm_full_attention_project_layer(
     const TensorRef & input_norm_w,
     const TensorRef & q_proj_w,
@@ -313,6 +288,8 @@ bool cuda_rmsnorm_full_attention_project_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out);
+
+// CUDA full attention + post RMSNorm + MLP 的整层主机输入/输出路径。
 bool cuda_full_attention_full_layer(
     const TensorRef & input_norm_w,
     const TensorRef & q_proj_w,
@@ -337,6 +314,8 @@ bool cuda_full_attention_full_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out);
+
+// CUDA full attention + post RMSNorm + MLP 的整层设备输入/输出路径。
 bool cuda_full_attention_full_layer_device(
     const TensorRef & input_norm_w,
     const TensorRef & q_proj_w,
@@ -362,6 +341,8 @@ bool cuda_full_attention_full_layer_device(
     float partial_rotary_factor,
     float eps,
     bool one_plus);
+
+// CUDA RMSNorm + MLP fused 路径。
 bool cuda_rmsnorm_mlp_layer(
     const TensorRef & norm_w,
     const TensorRef & gate_w,
@@ -371,12 +352,5 @@ bool cuda_rmsnorm_mlp_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out);
-
-std::unordered_map<int, std::string> load_vocab_reverse(const fs::path & model_dir, double & elapsed);
-std::string detokenize(const std::vector<int> & ids, const std::unordered_map<int, std::string> & vocab);
-std::vector<int> resolve_input_ids(const Args & args);
-
-void validate_qwen_tensors(const ModelWeights & weights, const ModelConfig & config);
-std::vector<int> run_generation(const ModelConfig & config, const ModelWeights & weights, const Args & args, const std::vector<int> & input_ids, Timing & timing);
 
 } // namespace llm_inference

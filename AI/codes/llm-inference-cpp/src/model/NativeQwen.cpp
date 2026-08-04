@@ -1,4 +1,4 @@
-#include "llm_inference.h"
+#include "NativeQwen.h"
 
 #include <algorithm>
 #include <array>
@@ -10,72 +10,51 @@
 namespace llm_inference {
 
 
-struct LinearLayerState {
-    std::vector<float> conv_state;
-    std::vector<float> recurrent_state;
-    void * cuda_state = nullptr;
+LinearLayerState::LinearLayerState(LinearLayerState && other) noexcept
+    : conv_state(std::move(other.conv_state)),
+      recurrent_state(std::move(other.recurrent_state)),
+      cuda_state(other.cuda_state) {
+    other.cuda_state = nullptr;
+}
 
-    LinearLayerState() = default;
-    LinearLayerState(const LinearLayerState &) = delete;
-    LinearLayerState & operator=(const LinearLayerState &) = delete;
-    LinearLayerState(LinearLayerState && other) noexcept
-        : conv_state(std::move(other.conv_state)),
-          recurrent_state(std::move(other.recurrent_state)),
-          cuda_state(other.cuda_state) {
-        other.cuda_state = nullptr;
-    }
-    LinearLayerState & operator=(LinearLayerState && other) noexcept {
-        if (this != &other) {
-            cuda_free_linear_attention_state(cuda_state);
-            conv_state = std::move(other.conv_state);
-            recurrent_state = std::move(other.recurrent_state);
-            cuda_state = other.cuda_state;
-            other.cuda_state = nullptr;
-        }
-        return *this;
-    }
-    ~LinearLayerState() {
+LinearLayerState & LinearLayerState::operator=(LinearLayerState && other) noexcept {
+    if (this != &other) {
         cuda_free_linear_attention_state(cuda_state);
-    }
-};
-
-struct FullAttentionState {
-    std::vector<float> key_cache;
-    std::vector<float> value_cache;
-    int max_seq_len = 0;
-    void * cuda_state = nullptr;
-
-    FullAttentionState() = default;
-    FullAttentionState(const FullAttentionState &) = delete;
-    FullAttentionState & operator=(const FullAttentionState &) = delete;
-    FullAttentionState(FullAttentionState && other) noexcept
-        : key_cache(std::move(other.key_cache)),
-          value_cache(std::move(other.value_cache)),
-          max_seq_len(other.max_seq_len),
-          cuda_state(other.cuda_state) {
+        conv_state = std::move(other.conv_state);
+        recurrent_state = std::move(other.recurrent_state);
+        cuda_state = other.cuda_state;
         other.cuda_state = nullptr;
     }
-    FullAttentionState & operator=(FullAttentionState && other) noexcept {
-        if (this != &other) {
-            cuda_free_full_attention_state(cuda_state);
-            key_cache = std::move(other.key_cache);
-            value_cache = std::move(other.value_cache);
-            max_seq_len = other.max_seq_len;
-            cuda_state = other.cuda_state;
-            other.cuda_state = nullptr;
-        }
-        return *this;
-    }
-    ~FullAttentionState() {
-        cuda_free_full_attention_state(cuda_state);
-    }
-};
+    return *this;
+}
 
-struct RunState {
-    int seq_len = 0;
-    std::vector<LinearLayerState> linear;
-    std::vector<FullAttentionState> full;
-};
+LinearLayerState::~LinearLayerState() {
+    cuda_free_linear_attention_state(cuda_state);
+}
+
+FullAttentionState::FullAttentionState(FullAttentionState && other) noexcept
+    : key_cache(std::move(other.key_cache)),
+      value_cache(std::move(other.value_cache)),
+      max_seq_len(other.max_seq_len),
+      cuda_state(other.cuda_state) {
+    other.cuda_state = nullptr;
+}
+
+FullAttentionState & FullAttentionState::operator=(FullAttentionState && other) noexcept {
+    if (this != &other) {
+        cuda_free_full_attention_state(cuda_state);
+        key_cache = std::move(other.key_cache);
+        value_cache = std::move(other.value_cache);
+        max_seq_len = other.max_seq_len;
+        cuda_state = other.cuda_state;
+        other.cuda_state = nullptr;
+    }
+    return *this;
+}
+
+FullAttentionState::~FullAttentionState() {
+    cuda_free_full_attention_state(cuda_state);
+}
 
 void validate_qwen_tensors(const ModelWeights & weights, const ModelConfig & config) {
     const std::string root = "model.language_model.";
@@ -161,14 +140,10 @@ RunState make_run_state(const ModelConfig & config, int max_seq_len) {
     return state;
 }
 
-namespace {
+NativeQwen::NativeQwen(const ModelConfig & config, const ModelWeights & weights)
+    : config_(config), weights_(weights) {}
 
-class NativeQwen {
-public:
-    NativeQwen(const ModelConfig & config, const ModelWeights & weights)
-        : config_(config), weights_(weights) {}
-
-    int generate_next(const std::vector<int> & prompt_ids, RunState & state, Timing & timing) const {
+int NativeQwen::generate_next(const std::vector<int> & prompt_ids, RunState & state, Timing & timing) const {
         int next = 0;
         if (generate_next_device(prompt_ids, state, timing, next)) {
             return next;
@@ -182,7 +157,7 @@ public:
         return argmax_logits(hidden, timing);
     }
 
-    int decode_one(int token, RunState & state, Timing & timing) const {
+int NativeQwen::decode_one(int token, RunState & state, Timing & timing) const {
         int next = 0;
         if (decode_one_device(token, state, timing, next)) {
             return next;
@@ -194,7 +169,7 @@ public:
         return next;
     }
 
-    bool generate_sequence_device(
+bool NativeQwen::generate_sequence_device(
         const std::vector<int> & prompt_ids,
         RunState & state,
         int max_new_tokens,
@@ -279,12 +254,11 @@ public:
         return true;
     }
 
-private:
-    TensorRef t(const std::string & name) const {
+TensorRef NativeQwen::t(const std::string & name) const {
         return tensor_ref(weights_, name);
     }
 
-    bool generate_next_device(const std::vector<int> & prompt_ids, RunState & state, Timing & timing, int & next) const {
+bool NativeQwen::generate_next_device(const std::vector<int> & prompt_ids, RunState & state, Timing & timing, int & next) const {
         const auto prefill_start = Clock::now();
         const void * hidden = nullptr;
         for (int token : prompt_ids) {
@@ -297,7 +271,7 @@ private:
         return argmax_logits_device(hidden, timing, next);
     }
 
-    bool decode_one_device(int token, RunState & state, Timing & timing, int & next) const {
+bool NativeQwen::decode_one_device(int token, RunState & state, Timing & timing, int & next) const {
         const auto decode_start = Clock::now();
         const void * hidden = forward_token_device(token, state);
         if (!hidden) {
@@ -310,7 +284,7 @@ private:
         return true;
     }
 
-    const void * forward_token_device(int token, RunState & state) const {
+const void * NativeQwen::forward_token_device(int token, RunState & state) const {
         const int hidden_size = config_.hidden_size;
         void * current = cuda_token_hidden_buffer(0, hidden_size);
         void * next = cuda_token_hidden_buffer(1, hidden_size);
@@ -320,7 +294,7 @@ private:
         return forward_token_device_layers(current, next, state);
     }
 
-    const void * forward_token_device_from_device(const void * device_token, RunState & state) const {
+const void * NativeQwen::forward_token_device_from_device(const void * device_token, RunState & state) const {
         const int hidden_size = config_.hidden_size;
         void * current = cuda_token_hidden_buffer(0, hidden_size);
         void * next = cuda_token_hidden_buffer(1, hidden_size);
@@ -330,7 +304,7 @@ private:
         return forward_token_device_layers(current, next, state);
     }
 
-    const void * forward_token_device_layers(void * current, void * next, RunState & state) const {
+const void * NativeQwen::forward_token_device_layers(void * current, void * next, RunState & state) const {
         const int hidden_size = config_.hidden_size;
         const int pos = state.seq_len;
 
@@ -401,7 +375,7 @@ private:
         return current;
     }
 
-    std::vector<float> forward_token(int token, RunState & state) const {
+std::vector<float> NativeQwen::forward_token(int token, RunState & state) const {
         std::vector<float> x;
         embedding_lookup(t("model.language_model.embed_tokens.weight"), token, x);
         const int pos = state.seq_len;
@@ -552,7 +526,7 @@ private:
         return normed;
     }
 
-    void mlp_layer(const std::string & prefix, const std::vector<float> & x, std::vector<float> & out) const {
+void NativeQwen::mlp_layer(const std::string & prefix, const std::vector<float> & x, std::vector<float> & out) const {
         const TensorRef gate_w = t(prefix + "mlp.gate_proj.weight");
         const TensorRef up_w = t(prefix + "mlp.up_proj.weight");
         const TensorRef down_w = t(prefix + "mlp.down_proj.weight");
@@ -572,7 +546,7 @@ private:
         matvec(down_w, prod, out);
     }
 
-    void linear_attention_layer(
+void NativeQwen::linear_attention_layer(
         const std::string & prefix,
         const std::vector<float> & x,
         LinearLayerState & state,
@@ -733,7 +707,7 @@ private:
         matvec(t(prefix + "linear_attn.out_proj.weight"), gated, out);
     }
 
-    void apply_rope(float * vec, int pos) const {
+void NativeQwen::apply_rope(float * vec, int pos) const {
         const int rotary_dim = static_cast<int>(config_.head_dim * config_.partial_rotary_factor);
         const int half = rotary_dim / 2;
         for (int i = 0; i < half; ++i) {
@@ -748,7 +722,7 @@ private:
         }
     }
 
-    void full_attention_layer(
+void NativeQwen::full_attention_layer(
         const std::string & prefix,
         const std::vector<float> & x,
         FullAttentionState & state,
@@ -876,7 +850,7 @@ private:
         matvec(t(prefix + "self_attn.o_proj.weight"), attn, out);
     }
 
-    int argmax_logits(const std::vector<float> & hidden, Timing & timing) const {
+int NativeQwen::argmax_logits(const std::vector<float> & hidden, Timing & timing) const {
         const TensorRef emb = t("model.language_model.embed_tokens.weight");
         const int vocab = static_cast<int>(emb.info->shape[0]);
         const int hidden_size = static_cast<int>(emb.info->shape[1]);
@@ -905,7 +879,7 @@ private:
         return best_id;
     }
 
-    bool argmax_logits_device(const void * device_hidden, Timing & timing, int & best_id) const {
+bool NativeQwen::argmax_logits_device(const void * device_hidden, Timing & timing, int & best_id) const {
         const TensorRef emb = t("model.language_model.embed_tokens.weight");
         const int hidden_size = static_cast<int>(emb.info->shape[1]);
         const auto start = Clock::now();
@@ -923,12 +897,6 @@ private:
         return true;
     }
 
-    const ModelConfig & config_;
-    const ModelWeights & weights_;
-
-};
-
-} // namespace
 
 std::vector<int> run_generation(
     const ModelConfig & config,
