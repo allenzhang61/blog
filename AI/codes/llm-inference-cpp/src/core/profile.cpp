@@ -86,12 +86,14 @@ std::string profile_json(
     out << "  \"cuda_cublas_enabled\": " << (cuda_cublas_enabled() ? "true" : "false") << ",\n";
     out << "  \"cuda_fused_mlp_enabled\": " << (cuda_fused_mlp_enabled() ? "true" : "false") << ",\n";
     out << "  \"cuda_project_attention_enabled\": " << (cuda_project_attention_enabled() ? "true" : "false") << ",\n";
+    out << "  \"cuda_full_layer_enabled\": " << (cuda_full_layer_enabled() ? "true" : "false") << ",\n";
     out << "  \"cuda_rmsnorm_mlp_enabled\": " << (cuda_rmsnorm_mlp_enabled() ? "true" : "false") << ",\n";
     out << "  \"status\": \""
-        << (cuda_project_attention_enabled() ? "native_cuda_project_attention_fused_mlp_forward_done" :
+        << (cuda_full_layer_enabled() ? "native_cuda_full_layer_forward_done" :
+            (cuda_project_attention_enabled() ? "native_cuda_project_attention_fused_mlp_forward_done" :
             (cuda_fused_mlp_enabled() ? "native_cuda_matvec_fused_mlp_forward_done" :
             (cuda_cublas_enabled() ? "native_cuda_matvec_forward_done" : "native_cpu_forward_done"))
-        )
+        ))
         << "\"\n";
     out << "}";
     return out.str();

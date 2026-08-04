@@ -114,12 +114,18 @@ Python / Transformers 同样参数的前 2 个 token 也是：
 
 这说明当前 C++ 版的 prefill、greedy logits、一次 decode cache 路径已经和 Python 结果对齐。
 
-## 性能进展
+## 性能进展与 llama.cpp 对齐
 
-为了向 Python CUDA 版本靠近，已经做了两轮优化：
+为了向 llama.cpp BF16 口径靠近，已经做了这些优化：
 
 1. CPU 手写快路径：去掉 matvec 内层循环中的 dtype 字符串判断和函数调用，按 BF16/F16/F32 直接扫指针。
 2. CUDA/cuBLAS matvec：使用 CUDA 12.8 + cuBLAS，把 BF16/F32 权重缓存到 GPU VRAM，用 `cublasGemmEx` 执行大矩阵向量乘。
+3. fused MLP：`gate_proj/up_proj -> SiLU * up -> down_proj` 中间激活留在 GPU。
+4. project attention：linear attention 和 full attention 的 projection、attention core、state/cache、out projection 留在 GPU。
+5. concat projection：把同层多路 projection 合并为一次大 matvec，减少 cuBLAS launch 次数。
+6. GPU argmax：logits matvec + argmax 在 GPU 上完成，只拷回 token id。
+7. full layer pipeline：linear/full attention 层的 input RMSNorm、attention、residual、post RMSNorm、MLP、residual 在 GPU 中串起来，每层只拷回最终 hidden。
+8. device hidden + batch prefill：decode 阶段 hidden 在层间常驻 GPU；prefill 阶段把 15 个 prompt token 合成 `[T, hidden]` batch path，projection / MLP 从 GEMV 改为 batched GEMM，linear/full attention 增加 batch prefill CUDA kernel。
 
 远端 `Ubuntu-D` 中已安装：
 
@@ -136,6 +142,7 @@ libcublas-dev-12-8
 
 ```bash
 cmake -S . -B build-cuda128 \
+  -DCMAKE_BUILD_TYPE=Release \
   -DLLM_INFERENCE_ENABLE_CUDA=ON \
   -DLLM_INFERENCE_ENABLE_CBLAS=OFF \
   -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
@@ -157,29 +164,38 @@ OMP_NUM_THREADS=4 \
   --warmup-runs 1
 ```
 
-当前 64-token 对比：
+当前 64-token 对比，对齐 `../llm-inference-python/doc/5.md` 中 llama.cpp BF16 的测试口径：
 
-| 版本 | generated ids 是否对齐 | infer wall | prefill | decode |
-|------|------------------------|------------|---------|--------|
-| Python / Transformers CUDA，预热后 | 是 | 2.56s | 0.051s | 2.50s |
-| C++ 原生 CPU，优化前 | 是 | 136.29s | 87.94s | 47.50s |
-| C++ 原生 CPU，dtype 快路径 | 是 | 52.62s | 32.07s | 20.00s |
-| C++ 原生 CUDA/cuBLAS matvec，预热后 | 是 | 16.53s | 2.96s | 13.55s |
-| C++ 原生 CUDA/cuBLAS matvec + fused MLP，预热后 | 是 | 15.07s | 2.68s | 12.37s |
-| C++ 原生 CUDA project attention + fused MLP，预热后 | 是 | 1.97s | 0.354s | 1.598s |
+| 版本 | 模型格式 | generated ids 是否对齐 | prefill | decode | decode/token | decode speed | infer wall |
+|------|----------|------------------------|---------|--------|--------------|--------------|------------|
+| llama.cpp CUDA backend | GGUF BF16 | 基准 | 0.0183s | 0.8049s | 12.58ms | 79.5 tok/s | llama-bench 未按同口径拆 |
+| Python / Transformers CUDA，预热后 | safetensors FP16 | 是 | 0.0510s | 2.5016s 含 sample | 39.61ms | 25.58 tok/s | 2.56s |
+| C++ CUDA project attention + fused MLP | safetensors BF16 | 是 | 0.3540s | 1.5981s | 25.37ms | 39.42 tok/s | 1.9681s |
+| C++ CUDA concat projection + project attention + fused MLP | safetensors BF16 | 是 | 0.3238s | 1.4411s | 22.87ms | 43.72 tok/s | 1.7787s |
+| C++ CUDA full layer pipeline | safetensors BF16 | 是 | 0.2737s | 1.1981s | 19.02ms | 52.58 tok/s | 1.4852s |
+| C++ CUDA device hidden + batch prefill | safetensors BF16 | 是 | 0.0243-0.0248s | 0.9311-0.9342s | 14.55-14.60ms | 68.5-68.7 tok/s | 0.9647-0.9677s |
 
-CUDA project attention + fused MLP 已经把这些路径搬到 GPU：
+C++ 版已经超过 Python / Transformers CUDA，但还没有超过 llama.cpp BF16。当前最优 C++ decode 是约 0.932s，llama.cpp 是约 0.801s，还差约 1.16 倍；prefill 已经从旧路径约 0.199s 降到约 0.024s，接近 llama.cpp 的 0.016-0.018s。
+
+CUDA concat projection + project attention + fused MLP 已经把这些路径搬到 GPU：
 
 - MLP 子层：`gate_proj/up_proj -> SiLU * up -> down_proj` 中间激活留在 GPU。
 - Linear attention：`in_proj_qkv/z/b/a -> conv1d -> recurrent state -> gated RMSNorm -> out_proj` 留在 GPU，conv/recurrent state 常驻 VRAM。
 - Full attention：`q/k/v projection -> q/k RMSNorm -> RoPE -> KV cache -> softmax attention -> o_proj` 留在 GPU，KV cache 常驻 VRAM。
 - Logits：embedding matvec + argmax 在 GPU 上完成，只拷回 token id。
+- 同层 projection 合并：linear attention 的 `qkv/z/b/a`、full attention 的 `q/k/v`、MLP 的 `gate/up` 合并为更大的 cuBLAS matvec。
+- 整层 pipeline：attention 输出不再回 CPU 后再进入 MLP，而是在 GPU 内完成 residual、post RMSNorm、MLP 和第二次 residual。
+- 层间 device hidden：decode 阶段不再每层把 hidden 拷回 CPU，整段 greedy 生成也把 token id 留在 GPU，最后一次性拷回 generated ids。
+- batch prefill：prefill 不再对 15 个 prompt token 顺序执行 15 次完整 forward，而是一次性处理 `[T, hidden]`，并在层内批量更新 linear attention recurrent state / full attention KV cache。
 
-64-token 正式推理已经从 Python / Transformers CUDA 的 2.56s 降到 1.97s，并且 generated ids 对齐。
+64-token 正式推理已经从 Python / Transformers CUDA 的 2.56s 降到约 0.965s，并且 generated ids 对齐。
 
-剩余可继续优化的点：
+为了继续追 llama.cpp，剩余关键点不是 Python/C++ 调度，而是 GEMV backend：
 
-- `input_layernorm`、`post_attention_layernorm` 和 residual add 仍在 CPU 上。
-- 每层 mixer/MLP 输出仍会回 CPU 做 residual。
-- prefill 仍按 token 逐个执行，没有像 Transformers 那样批量处理 15 token。
+- 当前主要矩阵乘仍是 cuBLAS `m x k` by `k x 1` 的 GEMV/GEMM 形态，batch=1 时对 RTX 3080 的内存带宽利用不如 llama.cpp 的专用 CUDA kernel。这是当前最大差距。
+- 每 token 仍有大量小 GEMV，尽管已经合并了一部分 projection。
+- prefill 已改成 batch path，但 batch path 里 linear/full attention projection 还没有完全复用 decode 的 concat projection 布局，仍有继续融合空间。
+- decode 已让 hidden 在层间常驻 GPU，剩余差距主要来自 batch=1 GEMV backend、kernel launch 数量、权重/KV layout 和专用 fused kernel。
 - 另有 `LLM_INFERENCE_CUDA_FUSE_RMSNORM_MLP=1` 可实验性融合 `post_attention_layernorm + MLP`，本轮 64-token 实测为 15.29s，慢于默认路径，所以默认关闭。
+- 另有 `LLM_INFERENCE_CUDA_CONVERT_BF16_TO_F16=1` 可实验性把 2D BF16 权重入 VRAM 时转成 FP16；8-token 对齐，但 warmup 从约 8s 增加到约 68s，正式推理几乎无收益，所以默认关闭。
+- 另有 `LLM_INFERENCE_CUDA_CUSTOM_BF16_GEMV=1` 可实验性启用原生 one-block-per-row BF16 GEMV；8-token 对齐，但从约 0.51s 退到约 0.61s，慢于 cuBLAS，所以默认关闭。

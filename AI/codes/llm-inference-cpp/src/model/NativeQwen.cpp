@@ -169,6 +169,10 @@ public:
         : config_(config), weights_(weights) {}
 
     int generate_next(const std::vector<int> & prompt_ids, RunState & state, Timing & timing) const {
+        int next = 0;
+        if (generate_next_device(prompt_ids, state, timing, next)) {
+            return next;
+        }
         std::vector<float> hidden;
         const auto prefill_start = Clock::now();
         for (int token : prompt_ids) {
@@ -179,16 +183,222 @@ public:
     }
 
     int decode_one(int token, RunState & state, Timing & timing) const {
+        int next = 0;
+        if (decode_one_device(token, state, timing, next)) {
+            return next;
+        }
         const auto decode_start = Clock::now();
         std::vector<float> hidden = forward_token(token, state);
-        const int next = argmax_logits(hidden, timing);
+        next = argmax_logits(hidden, timing);
         timing.decode_total_s += elapsed_s(decode_start);
         return next;
+    }
+
+    bool generate_sequence_device(
+        const std::vector<int> & prompt_ids,
+        RunState & state,
+        int max_new_tokens,
+        int eos_token_id,
+        Timing & timing,
+        std::vector<int> & generated) const {
+        void * generated_device = cuda_generated_token_buffer(max_new_tokens);
+        if (!generated_device) {
+            return false;
+        }
+
+        const auto prefill_start = Clock::now();
+        const void * hidden = nullptr;
+        {
+            std::vector<void *> linear_cuda_states(state.linear.size(), nullptr);
+            std::vector<void *> full_cuda_states(state.full.size(), nullptr);
+            std::vector<int> full_max_seq_lens(state.full.size(), 0);
+            for (size_t i = 0; i < state.linear.size(); ++i) {
+                linear_cuda_states[i] = state.linear[i].cuda_state;
+            }
+            for (size_t i = 0; i < state.full.size(); ++i) {
+                full_cuda_states[i] = state.full[i].cuda_state;
+                full_max_seq_lens[i] = state.full[i].max_seq_len;
+            }
+            hidden = cuda_prefill_batch(config_, weights_, prompt_ids, linear_cuda_states, full_cuda_states, full_max_seq_lens, state.seq_len);
+            if (hidden) {
+                for (size_t i = 0; i < state.linear.size(); ++i) {
+                    state.linear[i].cuda_state = linear_cuda_states[i];
+                }
+                for (size_t i = 0; i < state.full.size(); ++i) {
+                    state.full[i].cuda_state = full_cuda_states[i];
+                }
+            } else {
+                for (int token : prompt_ids) {
+                    hidden = forward_token_device(token, state);
+                    if (!hidden) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if (!cuda_synchronize_device()) {
+            return false;
+        }
+        timing.prefill_s = elapsed_s(prefill_start);
+
+        const TensorRef emb = t("model.language_model.embed_tokens.weight");
+        const TensorRef norm = t("model.language_model.norm.weight");
+        const int hidden_size = static_cast<int>(emb.info->shape[1]);
+        const auto decode_start = Clock::now();
+        for (int i = 0; i < max_new_tokens; ++i) {
+            int * token_slot = static_cast<int *>(generated_device) + i;
+            if (!cuda_final_norm_argmax_to_device(
+                    norm,
+                    emb,
+                    hidden,
+                    hidden_size,
+                    config_.rms_norm_eps,
+                    true,
+                    token_slot)) {
+                return false;
+            }
+            if (i + 1 < max_new_tokens) {
+                hidden = forward_token_device_from_device(token_slot, state);
+                if (!hidden) {
+                    return false;
+                }
+            }
+        }
+        if (!cuda_copy_generated_tokens_to_host(generated_device, max_new_tokens, generated)) {
+            return false;
+        }
+        timing.decode_total_s += elapsed_s(decode_start);
+        if (eos_token_id >= 0) {
+            const auto eos = std::find(generated.begin(), generated.end(), eos_token_id);
+            if (eos != generated.end()) {
+                generated.resize(static_cast<size_t>(std::distance(generated.begin(), eos)) + 1);
+            }
+        }
+        timing.generated_tokens += static_cast<int>(generated.size());
+        timing.generated_ids.insert(timing.generated_ids.end(), generated.begin(), generated.end());
+        return true;
     }
 
 private:
     TensorRef t(const std::string & name) const {
         return tensor_ref(weights_, name);
+    }
+
+    bool generate_next_device(const std::vector<int> & prompt_ids, RunState & state, Timing & timing, int & next) const {
+        const auto prefill_start = Clock::now();
+        const void * hidden = nullptr;
+        for (int token : prompt_ids) {
+            hidden = forward_token_device(token, state);
+            if (!hidden) {
+                return false;
+            }
+        }
+        timing.prefill_s = elapsed_s(prefill_start);
+        return argmax_logits_device(hidden, timing, next);
+    }
+
+    bool decode_one_device(int token, RunState & state, Timing & timing, int & next) const {
+        const auto decode_start = Clock::now();
+        const void * hidden = forward_token_device(token, state);
+        if (!hidden) {
+            return false;
+        }
+        if (!argmax_logits_device(hidden, timing, next)) {
+            return false;
+        }
+        timing.decode_total_s += elapsed_s(decode_start);
+        return true;
+    }
+
+    const void * forward_token_device(int token, RunState & state) const {
+        const int hidden_size = config_.hidden_size;
+        void * current = cuda_token_hidden_buffer(0, hidden_size);
+        void * next = cuda_token_hidden_buffer(1, hidden_size);
+        if (!current || !next || !cuda_embedding_lookup_device(t("model.language_model.embed_tokens.weight"), token, current)) {
+            return nullptr;
+        }
+        return forward_token_device_layers(current, next, state);
+    }
+
+    const void * forward_token_device_from_device(const void * device_token, RunState & state) const {
+        const int hidden_size = config_.hidden_size;
+        void * current = cuda_token_hidden_buffer(0, hidden_size);
+        void * next = cuda_token_hidden_buffer(1, hidden_size);
+        if (!current || !next || !cuda_embedding_lookup_device_token(t("model.language_model.embed_tokens.weight"), device_token, current)) {
+            return nullptr;
+        }
+        return forward_token_device_layers(current, next, state);
+    }
+
+    const void * forward_token_device_layers(void * current, void * next, RunState & state) const {
+        const int hidden_size = config_.hidden_size;
+        const int pos = state.seq_len;
+
+        for (int layer = 0; layer < config_.num_hidden_layers; ++layer) {
+            const std::string prefix = "model.language_model.layers." + std::to_string(layer) + ".";
+            bool ok = false;
+            if (config_.layer_types[layer] == "linear_attention") {
+                ok = cuda_linear_attention_full_layer_device(
+                    t(prefix + "input_layernorm.weight"),
+                    t(prefix + "linear_attn.in_proj_qkv.weight"),
+                    t(prefix + "linear_attn.in_proj_z.weight"),
+                    t(prefix + "linear_attn.in_proj_b.weight"),
+                    t(prefix + "linear_attn.in_proj_a.weight"),
+                    t(prefix + "linear_attn.conv1d.weight"),
+                    t(prefix + "linear_attn.A_log"),
+                    t(prefix + "linear_attn.dt_bias"),
+                    t(prefix + "linear_attn.norm.weight"),
+                    t(prefix + "linear_attn.out_proj.weight"),
+                    t(prefix + "post_attention_layernorm.weight"),
+                    t(prefix + "mlp.gate_proj.weight"),
+                    t(prefix + "mlp.up_proj.weight"),
+                    t(prefix + "mlp.down_proj.weight"),
+                    current,
+                    next,
+                    hidden_size,
+                    state.linear[layer].cuda_state,
+                    config_.linear_num_key_heads,
+                    config_.linear_num_value_heads,
+                    config_.linear_key_head_dim,
+                    config_.linear_value_head_dim,
+                    config_.linear_conv_kernel_dim,
+                    config_.rms_norm_eps,
+                    true);
+            } else {
+                ok = cuda_full_attention_full_layer_device(
+                    t(prefix + "input_layernorm.weight"),
+                    t(prefix + "self_attn.q_proj.weight"),
+                    t(prefix + "self_attn.k_proj.weight"),
+                    t(prefix + "self_attn.v_proj.weight"),
+                    t(prefix + "self_attn.q_norm.weight"),
+                    t(prefix + "self_attn.k_norm.weight"),
+                    t(prefix + "self_attn.o_proj.weight"),
+                    t(prefix + "post_attention_layernorm.weight"),
+                    t(prefix + "mlp.gate_proj.weight"),
+                    t(prefix + "mlp.up_proj.weight"),
+                    t(prefix + "mlp.down_proj.weight"),
+                    current,
+                    next,
+                    hidden_size,
+                    state.full[layer].cuda_state,
+                    config_.num_attention_heads,
+                    config_.num_key_value_heads,
+                    config_.head_dim,
+                    state.full[layer].max_seq_len,
+                    pos,
+                    config_.rope_theta,
+                    config_.partial_rotary_factor,
+                    config_.rms_norm_eps,
+                    true);
+            }
+            if (!ok) {
+                throw std::runtime_error("CUDA device full-layer path 失败，layer=" + std::to_string(layer));
+            }
+            std::swap(current, next);
+        }
+
+        state.seq_len += 1;
+        return current;
     }
 
     std::vector<float> forward_token(int token, RunState & state) const {
@@ -198,15 +408,123 @@ private:
 
         for (int layer = 0; layer < config_.num_hidden_layers; ++layer) {
             const std::string prefix = "model.language_model.layers." + std::to_string(layer) + ".";
+            if (config_.layer_types[layer] == "linear_attention") {
+                std::vector<float> layer_out;
+                if (cuda_linear_attention_full_layer(
+                        t(prefix + "input_layernorm.weight"),
+                        t(prefix + "linear_attn.in_proj_qkv.weight"),
+                        t(prefix + "linear_attn.in_proj_z.weight"),
+                        t(prefix + "linear_attn.in_proj_b.weight"),
+                        t(prefix + "linear_attn.in_proj_a.weight"),
+                        t(prefix + "linear_attn.conv1d.weight"),
+                        t(prefix + "linear_attn.A_log"),
+                        t(prefix + "linear_attn.dt_bias"),
+                        t(prefix + "linear_attn.norm.weight"),
+                        t(prefix + "linear_attn.out_proj.weight"),
+                        t(prefix + "post_attention_layernorm.weight"),
+                        t(prefix + "mlp.gate_proj.weight"),
+                        t(prefix + "mlp.up_proj.weight"),
+                        t(prefix + "mlp.down_proj.weight"),
+                        x,
+                        state.linear[layer].cuda_state,
+                        config_.linear_num_key_heads,
+                        config_.linear_num_value_heads,
+                        config_.linear_key_head_dim,
+                        config_.linear_value_head_dim,
+                        config_.linear_conv_kernel_dim,
+                        config_.rms_norm_eps,
+                        true,
+                        layer_out)) {
+                    x = std::move(layer_out);
+                    continue;
+                }
+            } else {
+                std::vector<float> layer_out;
+                if (cuda_full_attention_full_layer(
+                        t(prefix + "input_layernorm.weight"),
+                        t(prefix + "self_attn.q_proj.weight"),
+                        t(prefix + "self_attn.k_proj.weight"),
+                        t(prefix + "self_attn.v_proj.weight"),
+                        t(prefix + "self_attn.q_norm.weight"),
+                        t(prefix + "self_attn.k_norm.weight"),
+                        t(prefix + "self_attn.o_proj.weight"),
+                        t(prefix + "post_attention_layernorm.weight"),
+                        t(prefix + "mlp.gate_proj.weight"),
+                        t(prefix + "mlp.up_proj.weight"),
+                        t(prefix + "mlp.down_proj.weight"),
+                        x,
+                        state.full[layer].cuda_state,
+                        config_.num_attention_heads,
+                        config_.num_key_value_heads,
+                        config_.head_dim,
+                        state.full[layer].max_seq_len,
+                        pos,
+                        config_.rope_theta,
+                        config_.partial_rotary_factor,
+                        config_.rms_norm_eps,
+                        true,
+                        layer_out)) {
+                    x = std::move(layer_out);
+                    continue;
+                }
+            }
+
             std::vector<float> residual = x;
             std::vector<float> normed;
-            rms_norm(t(prefix + "input_layernorm.weight"), x, normed, config_.rms_norm_eps, true);
 
             std::vector<float> mixer_out;
+            bool mixer_done = false;
             if (config_.layer_types[layer] == "linear_attention") {
-                linear_attention_layer(prefix, normed, state.linear[layer], mixer_out);
+                mixer_done = cuda_rmsnorm_linear_attention_project_layer(
+                    t(prefix + "input_layernorm.weight"),
+                    t(prefix + "linear_attn.in_proj_qkv.weight"),
+                    t(prefix + "linear_attn.in_proj_z.weight"),
+                    t(prefix + "linear_attn.in_proj_b.weight"),
+                    t(prefix + "linear_attn.in_proj_a.weight"),
+                    t(prefix + "linear_attn.conv1d.weight"),
+                    t(prefix + "linear_attn.A_log"),
+                    t(prefix + "linear_attn.dt_bias"),
+                    t(prefix + "linear_attn.norm.weight"),
+                    t(prefix + "linear_attn.out_proj.weight"),
+                    x,
+                    state.linear[layer].cuda_state,
+                    config_.linear_num_key_heads,
+                    config_.linear_num_value_heads,
+                    config_.linear_key_head_dim,
+                    config_.linear_value_head_dim,
+                    config_.linear_conv_kernel_dim,
+                    config_.rms_norm_eps,
+                    true,
+                    mixer_out);
             } else {
-                full_attention_layer(prefix, normed, state.full[layer], pos, mixer_out);
+                mixer_done = cuda_rmsnorm_full_attention_project_layer(
+                    t(prefix + "input_layernorm.weight"),
+                    t(prefix + "self_attn.q_proj.weight"),
+                    t(prefix + "self_attn.k_proj.weight"),
+                    t(prefix + "self_attn.v_proj.weight"),
+                    t(prefix + "self_attn.q_norm.weight"),
+                    t(prefix + "self_attn.k_norm.weight"),
+                    t(prefix + "self_attn.o_proj.weight"),
+                    x,
+                    state.full[layer].cuda_state,
+                    config_.num_attention_heads,
+                    config_.num_key_value_heads,
+                    config_.head_dim,
+                    state.full[layer].max_seq_len,
+                    pos,
+                    config_.rope_theta,
+                    config_.partial_rotary_factor,
+                    config_.rms_norm_eps,
+                    true,
+                    mixer_out);
+            }
+            if (!mixer_done) {
+                rms_norm(t(prefix + "input_layernorm.weight"), x, normed, config_.rms_norm_eps, true);
+                if (config_.layer_types[layer] == "linear_attention") {
+                    linear_attention_layer(prefix, normed, state.linear[layer], mixer_out);
+                } else {
+                    full_attention_layer(prefix, normed, state.full[layer], pos, mixer_out);
+                }
             }
             x = residual;
             add_inplace(x, mixer_out);
@@ -587,6 +905,24 @@ private:
         return best_id;
     }
 
+    bool argmax_logits_device(const void * device_hidden, Timing & timing, int & best_id) const {
+        const TensorRef emb = t("model.language_model.embed_tokens.weight");
+        const int hidden_size = static_cast<int>(emb.info->shape[1]);
+        const auto start = Clock::now();
+        if (!cuda_final_norm_argmax_device(
+                t("model.language_model.norm.weight"),
+                emb,
+                device_hidden,
+                hidden_size,
+                config_.rms_norm_eps,
+                true,
+                best_id)) {
+            return false;
+        }
+        timing.logits_s += elapsed_s(start);
+        return true;
+    }
+
     const ModelConfig & config_;
     const ModelWeights & weights_;
 
@@ -603,6 +939,9 @@ std::vector<int> run_generation(
     NativeQwen model(config, weights);
     RunState state = make_run_state(config, timing.input_tokens + args.max_new_tokens + 4);
     std::vector<int> generated;
+    if (args.greedy && model.generate_sequence_device(input_ids, state, args.max_new_tokens, config.eos_token_id, timing, generated)) {
+        return generated;
+    }
     int next = model.generate_next(input_ids, state, timing);
     for (int i = 0; i < args.max_new_tokens; ++i) {
         generated.push_back(next);
