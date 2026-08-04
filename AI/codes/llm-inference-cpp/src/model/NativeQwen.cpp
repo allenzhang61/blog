@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace llm_inference {
 
@@ -12,11 +13,62 @@ namespace llm_inference {
 struct LinearLayerState {
     std::vector<float> conv_state;
     std::vector<float> recurrent_state;
+    void * cuda_state = nullptr;
+
+    LinearLayerState() = default;
+    LinearLayerState(const LinearLayerState &) = delete;
+    LinearLayerState & operator=(const LinearLayerState &) = delete;
+    LinearLayerState(LinearLayerState && other) noexcept
+        : conv_state(std::move(other.conv_state)),
+          recurrent_state(std::move(other.recurrent_state)),
+          cuda_state(other.cuda_state) {
+        other.cuda_state = nullptr;
+    }
+    LinearLayerState & operator=(LinearLayerState && other) noexcept {
+        if (this != &other) {
+            cuda_free_linear_attention_state(cuda_state);
+            conv_state = std::move(other.conv_state);
+            recurrent_state = std::move(other.recurrent_state);
+            cuda_state = other.cuda_state;
+            other.cuda_state = nullptr;
+        }
+        return *this;
+    }
+    ~LinearLayerState() {
+        cuda_free_linear_attention_state(cuda_state);
+    }
 };
 
 struct FullAttentionState {
     std::vector<float> key_cache;
     std::vector<float> value_cache;
+    int max_seq_len = 0;
+    void * cuda_state = nullptr;
+
+    FullAttentionState() = default;
+    FullAttentionState(const FullAttentionState &) = delete;
+    FullAttentionState & operator=(const FullAttentionState &) = delete;
+    FullAttentionState(FullAttentionState && other) noexcept
+        : key_cache(std::move(other.key_cache)),
+          value_cache(std::move(other.value_cache)),
+          max_seq_len(other.max_seq_len),
+          cuda_state(other.cuda_state) {
+        other.cuda_state = nullptr;
+    }
+    FullAttentionState & operator=(FullAttentionState && other) noexcept {
+        if (this != &other) {
+            cuda_free_full_attention_state(cuda_state);
+            key_cache = std::move(other.key_cache);
+            value_cache = std::move(other.value_cache);
+            max_seq_len = other.max_seq_len;
+            cuda_state = other.cuda_state;
+            other.cuda_state = nullptr;
+        }
+        return *this;
+    }
+    ~FullAttentionState() {
+        cuda_free_full_attention_state(cuda_state);
+    }
 };
 
 struct RunState {
@@ -97,6 +149,7 @@ RunState make_run_state(const ModelConfig & config, int max_seq_len) {
                     config.linear_value_head_dim,
                 0.0f);
         } else {
+            state.full[layer].max_seq_len = max_seq_len;
             state.full[layer].key_cache.assign(
                 static_cast<size_t>(max_seq_len) * config.num_key_value_heads * config.head_dim,
                 0.0f);
@@ -215,6 +268,28 @@ private:
         const int conv_dim = key_total * 2 + value_total;
         const int kernel = config_.linear_conv_kernel_dim;
 
+        if (cuda_linear_attention_project_layer(
+                t(prefix + "linear_attn.in_proj_qkv.weight"),
+                t(prefix + "linear_attn.in_proj_z.weight"),
+                t(prefix + "linear_attn.in_proj_b.weight"),
+                t(prefix + "linear_attn.in_proj_a.weight"),
+                t(prefix + "linear_attn.conv1d.weight"),
+                t(prefix + "linear_attn.A_log"),
+                t(prefix + "linear_attn.dt_bias"),
+                t(prefix + "linear_attn.norm.weight"),
+                t(prefix + "linear_attn.out_proj.weight"),
+                x,
+                state.cuda_state,
+                key_heads,
+                value_heads,
+                k_dim,
+                v_dim,
+                kernel,
+                config_.rms_norm_eps,
+                out)) {
+            return;
+        }
+
         std::vector<float> mixed;
         std::vector<float> z;
         std::vector<float> b;
@@ -223,6 +298,27 @@ private:
         matvec(t(prefix + "linear_attn.in_proj_z.weight"), x, z);
         matvec(t(prefix + "linear_attn.in_proj_b.weight"), x, b);
         matvec(t(prefix + "linear_attn.in_proj_a.weight"), x, a);
+
+        if (cuda_linear_attention_layer(
+                t(prefix + "linear_attn.conv1d.weight"),
+                t(prefix + "linear_attn.A_log"),
+                t(prefix + "linear_attn.dt_bias"),
+                t(prefix + "linear_attn.norm.weight"),
+                t(prefix + "linear_attn.out_proj.weight"),
+                mixed,
+                z,
+                b,
+                a,
+                state.cuda_state,
+                key_heads,
+                value_heads,
+                k_dim,
+                v_dim,
+                kernel,
+                config_.rms_norm_eps,
+                out)) {
+            return;
+        }
 
         const TensorRef conv_w = t(prefix + "linear_attn.conv1d.weight");
         std::vector<float> conv_out(conv_dim);
@@ -346,12 +442,53 @@ private:
         const int q_total = n_heads * head_dim;
         const int kv_total = kv_heads * head_dim;
 
+        if (cuda_full_attention_project_layer(
+                t(prefix + "self_attn.q_proj.weight"),
+                t(prefix + "self_attn.k_proj.weight"),
+                t(prefix + "self_attn.v_proj.weight"),
+                t(prefix + "self_attn.q_norm.weight"),
+                t(prefix + "self_attn.k_norm.weight"),
+                t(prefix + "self_attn.o_proj.weight"),
+                x,
+                state.cuda_state,
+                n_heads,
+                kv_heads,
+                head_dim,
+                state.max_seq_len,
+                pos,
+                config_.rope_theta,
+                config_.partial_rotary_factor,
+                config_.rms_norm_eps,
+                out)) {
+            return;
+        }
+
         std::vector<float> q_and_gate;
         std::vector<float> k;
         std::vector<float> v;
         matvec(t(prefix + "self_attn.q_proj.weight"), x, q_and_gate);
         matvec(t(prefix + "self_attn.k_proj.weight"), x, k);
         matvec(t(prefix + "self_attn.v_proj.weight"), x, v);
+
+        if (cuda_full_attention_layer(
+                t(prefix + "self_attn.q_norm.weight"),
+                t(prefix + "self_attn.k_norm.weight"),
+                t(prefix + "self_attn.o_proj.weight"),
+                q_and_gate,
+                k,
+                v,
+                state.cuda_state,
+                n_heads,
+                kv_heads,
+                head_dim,
+                state.max_seq_len,
+                pos,
+                config_.rope_theta,
+                config_.partial_rotary_factor,
+                config_.rms_norm_eps,
+                out)) {
+            return;
+        }
 
         std::vector<float> q(q_total);
         std::vector<float> gate(q_total);
@@ -430,10 +567,15 @@ private:
         }
 
         const auto start = Clock::now();
+        int best_id = 0;
+        if (cuda_argmax_matvec(emb, hidden, best_id)) {
+            timing.logits_s += elapsed_s(start);
+            return best_id;
+        }
+
         std::vector<float> logits;
         matvec(emb, hidden, logits);
 
-        int best_id = 0;
         float best = logits[0];
         for (int token = 1; token < vocab; ++token) {
             if (logits[token] > best) {

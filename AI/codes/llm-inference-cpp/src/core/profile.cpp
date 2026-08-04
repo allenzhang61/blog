@@ -85,10 +85,13 @@ std::string profile_json(
     out << "  \"infer_wall_s\": " << timing.infer_wall_s << ",\n";
     out << "  \"cuda_cublas_enabled\": " << (cuda_cublas_enabled() ? "true" : "false") << ",\n";
     out << "  \"cuda_fused_mlp_enabled\": " << (cuda_fused_mlp_enabled() ? "true" : "false") << ",\n";
+    out << "  \"cuda_project_attention_enabled\": " << (cuda_project_attention_enabled() ? "true" : "false") << ",\n";
     out << "  \"cuda_rmsnorm_mlp_enabled\": " << (cuda_rmsnorm_mlp_enabled() ? "true" : "false") << ",\n";
     out << "  \"status\": \""
-        << (cuda_fused_mlp_enabled() ? "native_cuda_matvec_fused_mlp_forward_done" :
+        << (cuda_project_attention_enabled() ? "native_cuda_project_attention_fused_mlp_forward_done" :
+            (cuda_fused_mlp_enabled() ? "native_cuda_matvec_fused_mlp_forward_done" :
             (cuda_cublas_enabled() ? "native_cuda_matvec_forward_done" : "native_cpu_forward_done"))
+        )
         << "\"\n";
     out << "}";
     return out.str();

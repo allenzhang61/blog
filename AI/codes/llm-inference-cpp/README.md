@@ -166,14 +166,20 @@ OMP_NUM_THREADS=4 \
 | C++ 原生 CPU，dtype 快路径 | 是 | 52.62s | 32.07s | 20.00s |
 | C++ 原生 CUDA/cuBLAS matvec，预热后 | 是 | 16.53s | 2.96s | 13.55s |
 | C++ 原生 CUDA/cuBLAS matvec + fused MLP，预热后 | 是 | 15.07s | 2.68s | 12.37s |
+| C++ 原生 CUDA project attention + fused MLP，预热后 | 是 | 1.97s | 0.354s | 1.598s |
 
-CUDA matvec + fused MLP 已经把 MLP 子层中的 `gate_proj/up_proj -> SiLU * up -> down_proj` 中间激活留在 GPU，并用 CUDA kernel 融合了激活乘法和 BF16 转换。但还没有完全对齐 Python。另有 `LLM_INFERENCE_CUDA_FUSE_RMSNORM_MLP=1` 可实验性融合 `post_attention_layernorm + MLP`，本轮 64-token 实测为 15.29s，慢于默认路径，所以默认关闭。
+CUDA project attention + fused MLP 已经把这些路径搬到 GPU：
 
-剩余主要瓶颈是：
+- MLP 子层：`gate_proj/up_proj -> SiLU * up -> down_proj` 中间激活留在 GPU。
+- Linear attention：`in_proj_qkv/z/b/a -> conv1d -> recurrent state -> gated RMSNorm -> out_proj` 留在 GPU，conv/recurrent state 常驻 VRAM。
+- Full attention：`q/k/v projection -> q/k RMSNorm -> RoPE -> KV cache -> softmax attention -> o_proj` 留在 GPU，KV cache 常驻 VRAM。
+- Logits：embedding matvec + argmax 在 GPU 上完成，只拷回 token id。
 
-- 每个 token 仍有大量小粒度 cuBLAS 调用。
-- RMSNorm、RoPE、attention softmax、linear attention recurrent state 等仍在 CPU 上做。
-- 每层 hidden state 在 CPU/GPU 间往返。
-- prefill 仍按 token 逐个执行，没有像 Python/Transformers 那样批量处理 15 token。
+64-token 正式推理已经从 Python / Transformers CUDA 的 2.56s 降到 1.97s，并且 generated ids 对齐。
 
-要继续逼近 Python，需要把整层 forward 搬到 GPU：至少融合 RMSNorm + projection、MLP gate/up、linear attention 的 conv/recurrent 更新，并让 hidden/KV/recurrent state 常驻 GPU。
+剩余可继续优化的点：
+
+- `input_layernorm`、`post_attention_layernorm` 和 residual add 仍在 CPU 上。
+- 每层 mixer/MLP 输出仍会回 CPU 做 residual。
+- prefill 仍按 token 逐个执行，没有像 Transformers 那样批量处理 15 token。
+- 另有 `LLM_INFERENCE_CUDA_FUSE_RMSNORM_MLP=1` 可实验性融合 `post_attention_layernorm + MLP`，本轮 64-token 实测为 15.29s，慢于默认路径，所以默认关闭。

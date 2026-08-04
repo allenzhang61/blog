@@ -116,6 +116,7 @@ void dump_tensors(const ModelWeights & weights);
 float tensor_value(const TensorRef & ref, size_t index);
 float dot_row(const TensorRef & weight, int row, const std::vector<float> & x);
 void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y);
+bool cuda_argmax_matvec(const TensorRef & weight, const std::vector<float> & x, int & best_id);
 void embedding_lookup(const TensorRef & emb, int token_id, std::vector<float> & y);
 void rms_norm(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y, float eps, bool one_plus);
 float sigmoid(float x);
@@ -126,8 +127,83 @@ void gated_rms_norm_head(const TensorRef & weight, const float * x, const float 
 void add_inplace(std::vector<float> & x, const std::vector<float> & y);
 bool cuda_cublas_enabled();
 bool cuda_fused_mlp_enabled();
+bool cuda_project_attention_enabled();
 bool cuda_rmsnorm_mlp_enabled();
+void cuda_free_linear_attention_state(void * state);
+void cuda_free_full_attention_state(void * state);
 bool cuda_mlp_layer(const TensorRef & gate_w, const TensorRef & up_w, const TensorRef & down_w, const std::vector<float> & x, std::vector<float> & out);
+bool cuda_linear_attention_layer(
+    const TensorRef & conv_w,
+    const TensorRef & a_log,
+    const TensorRef & dt_bias,
+    const TensorRef & norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & mixed,
+    const std::vector<float> & z,
+    const std::vector<float> & b,
+    const std::vector<float> & a,
+    void *& state,
+    int key_heads,
+    int value_heads,
+    int k_dim,
+    int v_dim,
+    int kernel,
+    float eps,
+    std::vector<float> & out);
+bool cuda_linear_attention_project_layer(
+    const TensorRef & in_proj_qkv_w,
+    const TensorRef & in_proj_z_w,
+    const TensorRef & in_proj_b_w,
+    const TensorRef & in_proj_a_w,
+    const TensorRef & conv_w,
+    const TensorRef & a_log,
+    const TensorRef & dt_bias,
+    const TensorRef & norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & x,
+    void *& state,
+    int key_heads,
+    int value_heads,
+    int k_dim,
+    int v_dim,
+    int kernel,
+    float eps,
+    std::vector<float> & out);
+bool cuda_full_attention_layer(
+    const TensorRef & q_norm_w,
+    const TensorRef & k_norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & q_and_gate,
+    const std::vector<float> & k,
+    const std::vector<float> & v,
+    void *& state,
+    int n_heads,
+    int kv_heads,
+    int head_dim,
+    int max_seq_len,
+    int pos,
+    float rope_theta,
+    float partial_rotary_factor,
+    float eps,
+    std::vector<float> & out);
+bool cuda_full_attention_project_layer(
+    const TensorRef & q_proj_w,
+    const TensorRef & k_proj_w,
+    const TensorRef & v_proj_w,
+    const TensorRef & q_norm_w,
+    const TensorRef & k_norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & x,
+    void *& state,
+    int n_heads,
+    int kv_heads,
+    int head_dim,
+    int max_seq_len,
+    int pos,
+    float rope_theta,
+    float partial_rotary_factor,
+    float eps,
+    std::vector<float> & out);
 bool cuda_rmsnorm_mlp_layer(
     const TensorRef & norm_w,
     const TensorRef & gate_w,

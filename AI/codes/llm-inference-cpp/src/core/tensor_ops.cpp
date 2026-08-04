@@ -101,6 +101,12 @@ struct CudaWeightCache {
     size_t norm_input_bytes = 0;
     uint16_t * norm_bf16_buffer = nullptr;
     size_t norm_bf16_bytes = 0;
+    float * argmax_block_values = nullptr;
+    size_t argmax_block_values_bytes = 0;
+    int * argmax_block_indices = nullptr;
+    size_t argmax_block_indices_bytes = 0;
+    float * argmax_best_value = nullptr;
+    int * argmax_best_index = nullptr;
     std::unordered_map<std::string, DeviceWeight> items;
     CudaWeightCache() {
         check_cublas(cublasCreate(&handle), "cublasCreate 失败");
@@ -133,8 +139,113 @@ struct CudaWeightCache {
         if (norm_bf16_buffer) {
             cudaFree(norm_bf16_buffer);
         }
+        if (argmax_block_values) {
+            cudaFree(argmax_block_values);
+        }
+        if (argmax_block_indices) {
+            cudaFree(argmax_block_indices);
+        }
+        if (argmax_best_value) {
+            cudaFree(argmax_best_value);
+        }
+        if (argmax_best_index) {
+            cudaFree(argmax_best_index);
+        }
         if (handle) {
             cublasDestroy(handle);
+        }
+    }
+};
+
+struct CudaLinearAttentionState {
+    int key_heads = 0;
+    int value_heads = 0;
+    int k_dim = 0;
+    int v_dim = 0;
+    int kernel = 0;
+    float * conv_state = nullptr;
+    float * recurrent_state = nullptr;
+    float * mixed = nullptr;
+    float * z = nullptr;
+    float * b = nullptr;
+    float * a = nullptr;
+    float * conv_out = nullptr;
+    float * gated = nullptr;
+    uint16_t * gated_bf16 = nullptr;
+
+    ~CudaLinearAttentionState() {
+        if (conv_state) {
+            cudaFree(conv_state);
+        }
+        if (recurrent_state) {
+            cudaFree(recurrent_state);
+        }
+        if (mixed) {
+            cudaFree(mixed);
+        }
+        if (z) {
+            cudaFree(z);
+        }
+        if (b) {
+            cudaFree(b);
+        }
+        if (a) {
+            cudaFree(a);
+        }
+        if (conv_out) {
+            cudaFree(conv_out);
+        }
+        if (gated) {
+            cudaFree(gated);
+        }
+        if (gated_bf16) {
+            cudaFree(gated_bf16);
+        }
+    }
+};
+
+struct CudaFullAttentionState {
+    int n_heads = 0;
+    int kv_heads = 0;
+    int head_dim = 0;
+    int max_seq_len = 0;
+    float * q_and_gate = nullptr;
+    float * k = nullptr;
+    float * v = nullptr;
+    float * q = nullptr;
+    float * gate = nullptr;
+    float * key_cache = nullptr;
+    float * value_cache = nullptr;
+    float * attn = nullptr;
+    uint16_t * attn_bf16 = nullptr;
+
+    ~CudaFullAttentionState() {
+        if (q_and_gate) {
+            cudaFree(q_and_gate);
+        }
+        if (k) {
+            cudaFree(k);
+        }
+        if (v) {
+            cudaFree(v);
+        }
+        if (q) {
+            cudaFree(q);
+        }
+        if (gate) {
+            cudaFree(gate);
+        }
+        if (key_cache) {
+            cudaFree(key_cache);
+        }
+        if (value_cache) {
+            cudaFree(value_cache);
+        }
+        if (attn) {
+            cudaFree(attn);
+        }
+        if (attn_bf16) {
+            cudaFree(attn_bf16);
         }
     }
 };
@@ -173,6 +284,17 @@ void ensure_float_buffer(float *& ptr, size_t & current_bytes, size_t required_b
 }
 
 void ensure_u16_buffer(uint16_t *& ptr, size_t & current_bytes, size_t required_bytes, const std::string & name) {
+    if (current_bytes >= required_bytes) {
+        return;
+    }
+    if (ptr) {
+        cudaFree(ptr);
+    }
+    check_cuda(cudaMalloc(&ptr, required_bytes), "cudaMalloc " + name + " 失败");
+    current_bytes = required_bytes;
+}
+
+void ensure_int_buffer(int *& ptr, size_t & current_bytes, size_t required_bytes, const std::string & name) {
     if (current_bytes >= required_bytes) {
         return;
     }
@@ -323,6 +445,86 @@ bool cuda_mlp_from_device_bf16(
     out.assign(static_cast<size_t>(hidden_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.out_buffer, hidden_float_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy mlp out 失败");
     return true;
+}
+
+CudaLinearAttentionState * ensure_linear_attention_state(
+    void *& state_handle,
+    int key_heads,
+    int value_heads,
+    int k_dim,
+    int v_dim,
+    int kernel) {
+    auto * state = static_cast<CudaLinearAttentionState *>(state_handle);
+    if (state) {
+        if (state->key_heads != key_heads ||
+            state->value_heads != value_heads ||
+            state->k_dim != k_dim ||
+            state->v_dim != v_dim ||
+            state->kernel != kernel) {
+            throw std::runtime_error("CUDA linear attention state 维度变化，无法复用");
+        }
+        return state;
+    }
+
+    state = new CudaLinearAttentionState();
+    state->key_heads = key_heads;
+    state->value_heads = value_heads;
+    state->k_dim = k_dim;
+    state->v_dim = v_dim;
+    state->kernel = kernel;
+    const int key_total = key_heads * k_dim;
+    const int value_total = value_heads * v_dim;
+    const int conv_dim = key_total * 2 + value_total;
+    check_cuda(cudaMalloc(&state->conv_state, static_cast<size_t>(conv_dim) * kernel * sizeof(float)), "cudaMalloc linear conv state 失败");
+    check_cuda(cudaMalloc(&state->recurrent_state, static_cast<size_t>(value_heads) * k_dim * v_dim * sizeof(float)), "cudaMalloc linear recurrent state 失败");
+    check_cuda(cudaMalloc(&state->mixed, static_cast<size_t>(conv_dim) * sizeof(float)), "cudaMalloc linear mixed 失败");
+    check_cuda(cudaMalloc(&state->z, static_cast<size_t>(value_total) * sizeof(float)), "cudaMalloc linear z 失败");
+    check_cuda(cudaMalloc(&state->b, static_cast<size_t>(value_heads) * sizeof(float)), "cudaMalloc linear b 失败");
+    check_cuda(cudaMalloc(&state->a, static_cast<size_t>(value_heads) * sizeof(float)), "cudaMalloc linear a 失败");
+    check_cuda(cudaMalloc(&state->conv_out, static_cast<size_t>(conv_dim) * sizeof(float)), "cudaMalloc linear conv out 失败");
+    check_cuda(cudaMalloc(&state->gated, static_cast<size_t>(value_total) * sizeof(float)), "cudaMalloc linear gated 失败");
+    check_cuda(cudaMalloc(&state->gated_bf16, static_cast<size_t>(value_total) * sizeof(uint16_t)), "cudaMalloc linear gated bf16 失败");
+    check_cuda(cudaMemset(state->conv_state, 0, static_cast<size_t>(conv_dim) * kernel * sizeof(float)), "cudaMemset linear conv state 失败");
+    check_cuda(cudaMemset(state->recurrent_state, 0, static_cast<size_t>(value_heads) * k_dim * v_dim * sizeof(float)), "cudaMemset linear recurrent state 失败");
+    state_handle = state;
+    return state;
+}
+
+CudaFullAttentionState * ensure_full_attention_state(
+    void *& state_handle,
+    int n_heads,
+    int kv_heads,
+    int head_dim,
+    int max_seq_len) {
+    auto * state = static_cast<CudaFullAttentionState *>(state_handle);
+    if (state) {
+        if (state->n_heads != n_heads ||
+            state->kv_heads != kv_heads ||
+            state->head_dim != head_dim ||
+            state->max_seq_len != max_seq_len) {
+            throw std::runtime_error("CUDA full attention state 维度变化，无法复用");
+        }
+        return state;
+    }
+
+    state = new CudaFullAttentionState();
+    state->n_heads = n_heads;
+    state->kv_heads = kv_heads;
+    state->head_dim = head_dim;
+    state->max_seq_len = max_seq_len;
+    const int q_total = n_heads * head_dim;
+    const int kv_total = kv_heads * head_dim;
+    check_cuda(cudaMalloc(&state->q_and_gate, static_cast<size_t>(q_total) * 2 * sizeof(float)), "cudaMalloc full q_and_gate 失败");
+    check_cuda(cudaMalloc(&state->k, static_cast<size_t>(kv_total) * sizeof(float)), "cudaMalloc full k 失败");
+    check_cuda(cudaMalloc(&state->v, static_cast<size_t>(kv_total) * sizeof(float)), "cudaMalloc full v 失败");
+    check_cuda(cudaMalloc(&state->q, static_cast<size_t>(q_total) * sizeof(float)), "cudaMalloc full q 失败");
+    check_cuda(cudaMalloc(&state->gate, static_cast<size_t>(q_total) * sizeof(float)), "cudaMalloc full gate 失败");
+    check_cuda(cudaMalloc(&state->key_cache, static_cast<size_t>(max_seq_len) * kv_total * sizeof(float)), "cudaMalloc full key cache 失败");
+    check_cuda(cudaMalloc(&state->value_cache, static_cast<size_t>(max_seq_len) * kv_total * sizeof(float)), "cudaMalloc full value cache 失败");
+    check_cuda(cudaMalloc(&state->attn, static_cast<size_t>(q_total) * sizeof(float)), "cudaMalloc full attn 失败");
+    check_cuda(cudaMalloc(&state->attn_bf16, static_cast<size_t>(q_total) * sizeof(uint16_t)), "cudaMalloc full attn bf16 失败");
+    state_handle = state;
+    return state;
 }
 
 bool cuda_matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y) {
@@ -556,6 +758,66 @@ void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<
     }
 }
 
+bool cuda_argmax_matvec(const TensorRef & weight, const std::vector<float> & x, int & best_id) {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    DeviceWeight * device_weight = cached_cuda_weight(weight);
+    if (!device_weight || device_weight->type != CUDA_R_16BF) {
+        return false;
+    }
+    if (weight.info->shape.size() != 2) {
+        return false;
+    }
+    const int out_dim = static_cast<int>(weight.info->shape[0]);
+    const int in_dim = static_cast<int>(weight.info->shape[1]);
+    if (static_cast<int>(x.size()) != in_dim) {
+        return false;
+    }
+
+    auto & cache = cuda_weight_cache();
+    const size_t x_bytes = static_cast<size_t>(in_dim) * sizeof(uint16_t);
+    const size_t y_bytes = static_cast<size_t>(out_dim) * sizeof(float);
+    ensure_cuda_buffers(cache, x_bytes, y_bytes);
+    std::vector<uint16_t> x_bf16 = host_float_to_bf16(x);
+    check_cuda(cudaMemcpy(cache.x_buffer, x_bf16.data(), x_bytes, cudaMemcpyHostToDevice), "cudaMemcpy argmax x 失败");
+    cublas_matvec_to_device(cache, weight, *device_weight, cache.x_buffer, CUDA_R_16BF, cache.y_buffer);
+
+    const int blocks = (out_dim + 255) / 256;
+    ensure_float_buffer(
+        cache.argmax_block_values,
+        cache.argmax_block_values_bytes,
+        static_cast<size_t>(blocks) * sizeof(float),
+        "argmax block values");
+    ensure_int_buffer(
+        cache.argmax_block_indices,
+        cache.argmax_block_indices_bytes,
+        static_cast<size_t>(blocks) * sizeof(int),
+        "argmax block indices");
+    if (!cache.argmax_best_value) {
+        check_cuda(cudaMalloc(&cache.argmax_best_value, sizeof(float)), "cudaMalloc argmax best value 失败");
+    }
+    if (!cache.argmax_best_index) {
+        check_cuda(cudaMalloc(&cache.argmax_best_index, sizeof(int)), "cudaMalloc argmax best index 失败");
+    }
+    launch_argmax_float(
+        cache.y_buffer,
+        out_dim,
+        cache.argmax_block_values,
+        cache.argmax_block_indices,
+        cache.argmax_best_value,
+        cache.argmax_best_index,
+        blocks,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_argmax_float 失败");
+    check_cuda(cudaMemcpy(&best_id, cache.argmax_best_index, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy argmax best id 失败");
+    return true;
+#else
+    (void) weight;
+    (void) x;
+    (void) best_id;
+    return false;
+#endif
+}
+
 void embedding_lookup(const TensorRef & emb, int token_id, std::vector<float> & y) {
     const int vocab = static_cast<int>(emb.info->shape[0]);
     const int hidden = static_cast<int>(emb.info->shape[1]);
@@ -676,6 +938,513 @@ bool cuda_mlp_layer(
 #endif
 }
 
+bool cuda_linear_attention_layer(
+    const TensorRef & conv_w,
+    const TensorRef & a_log,
+    const TensorRef & dt_bias,
+    const TensorRef & norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & mixed,
+    const std::vector<float> & z,
+    const std::vector<float> & b,
+    const std::vector<float> & a,
+    void *& state_handle,
+    int key_heads,
+    int value_heads,
+    int k_dim,
+    int v_dim,
+    int kernel,
+    float eps,
+    std::vector<float> & out) {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    const int key_total = key_heads * k_dim;
+    const int value_total = value_heads * v_dim;
+    const int conv_dim = key_total * 2 + value_total;
+    if (conv_w.info->dtype != "BF16" ||
+        a_log.info->dtype != "F32" ||
+        dt_bias.info->dtype != "BF16" ||
+        norm_w.info->dtype != "F32" ||
+        out_w.info->dtype != "BF16") {
+        return false;
+    }
+    if (static_cast<int>(mixed.size()) != conv_dim ||
+        static_cast<int>(z.size()) != value_total ||
+        static_cast<int>(b.size()) != value_heads ||
+        static_cast<int>(a.size()) != value_heads) {
+        return false;
+    }
+    if (conv_w.info->shape.size() != 3 ||
+        conv_w.info->shape[0] != conv_dim ||
+        conv_w.info->shape[2] != kernel ||
+        a_log.info->shape.size() != 1 ||
+        a_log.info->shape[0] != value_heads ||
+        dt_bias.info->shape.size() != 1 ||
+        dt_bias.info->shape[0] != value_heads ||
+        norm_w.info->shape.size() != 1 ||
+        norm_w.info->shape[0] != v_dim ||
+        out_w.info->shape.size() != 2 ||
+        out_w.info->shape[1] != value_total) {
+        return false;
+    }
+
+    DeviceWeight * conv_device = cached_cuda_weight(conv_w);
+    DeviceWeight * a_log_device = cached_cuda_weight(a_log);
+    DeviceWeight * dt_bias_device = cached_cuda_weight(dt_bias);
+    DeviceWeight * norm_device = cached_cuda_weight(norm_w);
+    DeviceWeight * out_device = cached_cuda_weight(out_w);
+    if (!conv_device || !a_log_device || !dt_bias_device || !norm_device || !out_device) {
+        return false;
+    }
+
+    CudaLinearAttentionState * state =
+        ensure_linear_attention_state(state_handle, key_heads, value_heads, k_dim, v_dim, kernel);
+    check_cuda(cudaMemcpy(state->mixed, mixed.data(), static_cast<size_t>(conv_dim) * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy linear mixed 失败");
+    check_cuda(cudaMemcpy(state->z, z.data(), static_cast<size_t>(value_total) * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy linear z 失败");
+    check_cuda(cudaMemcpy(state->b, b.data(), static_cast<size_t>(value_heads) * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy linear b 失败");
+    check_cuda(cudaMemcpy(state->a, a.data(), static_cast<size_t>(value_heads) * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy linear a 失败");
+
+    launch_linear_attention_conv(
+        state->mixed,
+        static_cast<const uint16_t *>(conv_device->ptr),
+        state->conv_state,
+        state->conv_out,
+        conv_dim,
+        kernel,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_linear_attention_conv 失败");
+    launch_linear_attention_recurrent(
+        state->conv_out,
+        state->z,
+        state->b,
+        state->a,
+        static_cast<const float *>(a_log_device->ptr),
+        static_cast<const uint16_t *>(dt_bias_device->ptr),
+        static_cast<const float *>(norm_device->ptr),
+        state->recurrent_state,
+        state->gated,
+        key_heads,
+        value_heads,
+        k_dim,
+        v_dim,
+        eps,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_linear_attention_recurrent 失败");
+    launch_float_to_bf16(state->gated, state->gated_bf16, value_total, nullptr);
+    check_cuda(cudaGetLastError(), "launch_float_to_bf16 linear gated 失败");
+
+    auto & cache = cuda_weight_cache();
+    const int hidden_dim = static_cast<int>(out_w.info->shape[0]);
+    ensure_float_buffer(cache.out_buffer, cache.out_bytes, static_cast<size_t>(hidden_dim) * sizeof(float), "linear out buffer");
+    cublas_matvec_to_device(cache, out_w, *out_device, state->gated_bf16, CUDA_R_16BF, cache.out_buffer);
+
+    out.assign(static_cast<size_t>(hidden_dim), 0.0f);
+    check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(hidden_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy linear out 失败");
+    return true;
+#else
+    (void) conv_w;
+    (void) a_log;
+    (void) dt_bias;
+    (void) norm_w;
+    (void) out_w;
+    (void) mixed;
+    (void) z;
+    (void) b;
+    (void) a;
+    (void) state_handle;
+    (void) key_heads;
+    (void) value_heads;
+    (void) k_dim;
+    (void) v_dim;
+    (void) kernel;
+    (void) eps;
+    (void) out;
+    return false;
+#endif
+}
+
+bool cuda_linear_attention_project_layer(
+    const TensorRef & in_proj_qkv_w,
+    const TensorRef & in_proj_z_w,
+    const TensorRef & in_proj_b_w,
+    const TensorRef & in_proj_a_w,
+    const TensorRef & conv_w,
+    const TensorRef & a_log,
+    const TensorRef & dt_bias,
+    const TensorRef & norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & x,
+    void *& state_handle,
+    int key_heads,
+    int value_heads,
+    int k_dim,
+    int v_dim,
+    int kernel,
+    float eps,
+    std::vector<float> & out) {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    const int key_total = key_heads * k_dim;
+    const int value_total = value_heads * v_dim;
+    const int conv_dim = key_total * 2 + value_total;
+    if (in_proj_qkv_w.info->dtype != "BF16" ||
+        in_proj_z_w.info->dtype != "BF16" ||
+        in_proj_b_w.info->dtype != "BF16" ||
+        in_proj_a_w.info->dtype != "BF16" ||
+        conv_w.info->dtype != "BF16" ||
+        a_log.info->dtype != "F32" ||
+        dt_bias.info->dtype != "BF16" ||
+        norm_w.info->dtype != "F32" ||
+        out_w.info->dtype != "BF16") {
+        return false;
+    }
+    if (static_cast<int>(x.size()) != in_proj_qkv_w.info->shape[1] ||
+        in_proj_qkv_w.info->shape[0] != conv_dim ||
+        in_proj_z_w.info->shape[0] != value_total ||
+        in_proj_b_w.info->shape[0] != value_heads ||
+        in_proj_a_w.info->shape[0] != value_heads) {
+        return false;
+    }
+
+    DeviceWeight * qkv_device = cached_cuda_weight(in_proj_qkv_w);
+    DeviceWeight * z_device = cached_cuda_weight(in_proj_z_w);
+    DeviceWeight * b_device = cached_cuda_weight(in_proj_b_w);
+    DeviceWeight * a_device = cached_cuda_weight(in_proj_a_w);
+    DeviceWeight * conv_device = cached_cuda_weight(conv_w);
+    DeviceWeight * a_log_device = cached_cuda_weight(a_log);
+    DeviceWeight * dt_bias_device = cached_cuda_weight(dt_bias);
+    DeviceWeight * norm_device = cached_cuda_weight(norm_w);
+    DeviceWeight * out_device = cached_cuda_weight(out_w);
+    if (!qkv_device || !z_device || !b_device || !a_device || !conv_device || !a_log_device || !dt_bias_device || !norm_device || !out_device) {
+        return false;
+    }
+
+    auto & cache = cuda_weight_cache();
+    const int hidden_dim = static_cast<int>(x.size());
+    const size_t x_bytes = static_cast<size_t>(hidden_dim) * sizeof(uint16_t);
+    ensure_cuda_buffers(cache, x_bytes, 1);
+    std::vector<uint16_t> x_bf16 = host_float_to_bf16(x);
+    check_cuda(cudaMemcpy(cache.x_buffer, x_bf16.data(), x_bytes, cudaMemcpyHostToDevice), "cudaMemcpy linear project x 失败");
+
+    CudaLinearAttentionState * state =
+        ensure_linear_attention_state(state_handle, key_heads, value_heads, k_dim, v_dim, kernel);
+    cublas_matvec_to_device(cache, in_proj_qkv_w, *qkv_device, cache.x_buffer, CUDA_R_16BF, state->mixed);
+    cublas_matvec_to_device(cache, in_proj_z_w, *z_device, cache.x_buffer, CUDA_R_16BF, state->z);
+    cublas_matvec_to_device(cache, in_proj_b_w, *b_device, cache.x_buffer, CUDA_R_16BF, state->b);
+    cublas_matvec_to_device(cache, in_proj_a_w, *a_device, cache.x_buffer, CUDA_R_16BF, state->a);
+
+    launch_linear_attention_conv(
+        state->mixed,
+        static_cast<const uint16_t *>(conv_device->ptr),
+        state->conv_state,
+        state->conv_out,
+        conv_dim,
+        kernel,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_linear_attention_conv 失败");
+    launch_linear_attention_recurrent(
+        state->conv_out,
+        state->z,
+        state->b,
+        state->a,
+        static_cast<const float *>(a_log_device->ptr),
+        static_cast<const uint16_t *>(dt_bias_device->ptr),
+        static_cast<const float *>(norm_device->ptr),
+        state->recurrent_state,
+        state->gated,
+        key_heads,
+        value_heads,
+        k_dim,
+        v_dim,
+        eps,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_linear_attention_recurrent 失败");
+    launch_float_to_bf16(state->gated, state->gated_bf16, value_total, nullptr);
+    check_cuda(cudaGetLastError(), "launch_float_to_bf16 linear gated 失败");
+
+    const int out_dim = static_cast<int>(out_w.info->shape[0]);
+    ensure_float_buffer(cache.out_buffer, cache.out_bytes, static_cast<size_t>(out_dim) * sizeof(float), "linear out buffer");
+    cublas_matvec_to_device(cache, out_w, *out_device, state->gated_bf16, CUDA_R_16BF, cache.out_buffer);
+    out.assign(static_cast<size_t>(out_dim), 0.0f);
+    check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(out_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy linear out 失败");
+    return true;
+#else
+    (void) in_proj_qkv_w;
+    (void) in_proj_z_w;
+    (void) in_proj_b_w;
+    (void) in_proj_a_w;
+    (void) conv_w;
+    (void) a_log;
+    (void) dt_bias;
+    (void) norm_w;
+    (void) out_w;
+    (void) x;
+    (void) state_handle;
+    (void) key_heads;
+    (void) value_heads;
+    (void) k_dim;
+    (void) v_dim;
+    (void) kernel;
+    (void) eps;
+    (void) out;
+    return false;
+#endif
+}
+
+bool cuda_full_attention_layer(
+    const TensorRef & q_norm_w,
+    const TensorRef & k_norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & q_and_gate,
+    const std::vector<float> & k,
+    const std::vector<float> & v,
+    void *& state_handle,
+    int n_heads,
+    int kv_heads,
+    int head_dim,
+    int max_seq_len,
+    int pos,
+    float rope_theta,
+    float partial_rotary_factor,
+    float eps,
+    std::vector<float> & out) {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    const int q_total = n_heads * head_dim;
+    const int kv_total = kv_heads * head_dim;
+    if (q_norm_w.info->dtype != "BF16" || k_norm_w.info->dtype != "BF16" || out_w.info->dtype != "BF16") {
+        return false;
+    }
+    if (q_norm_w.info->shape.size() != 1 ||
+        q_norm_w.info->shape[0] != head_dim ||
+        k_norm_w.info->shape.size() != 1 ||
+        k_norm_w.info->shape[0] != head_dim ||
+        out_w.info->shape.size() != 2 ||
+        out_w.info->shape[1] != q_total ||
+        static_cast<int>(q_and_gate.size()) != q_total * 2 ||
+        static_cast<int>(k.size()) != kv_total ||
+        static_cast<int>(v.size()) != kv_total ||
+        pos < 0 ||
+        pos >= max_seq_len) {
+        return false;
+    }
+
+    DeviceWeight * q_norm_device = cached_cuda_weight(q_norm_w);
+    DeviceWeight * k_norm_device = cached_cuda_weight(k_norm_w);
+    DeviceWeight * out_device = cached_cuda_weight(out_w);
+    if (!q_norm_device || !k_norm_device || !out_device) {
+        return false;
+    }
+
+    CudaFullAttentionState * state =
+        ensure_full_attention_state(state_handle, n_heads, kv_heads, head_dim, max_seq_len);
+    check_cuda(cudaMemcpy(state->q_and_gate, q_and_gate.data(), static_cast<size_t>(q_total) * 2 * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy full q_and_gate 失败");
+    check_cuda(cudaMemcpy(state->k, k.data(), static_cast<size_t>(kv_total) * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy full k 失败");
+    check_cuda(cudaMemcpy(state->v, v.data(), static_cast<size_t>(kv_total) * sizeof(float), cudaMemcpyHostToDevice), "cudaMemcpy full v 失败");
+
+    launch_full_attention_q(
+        state->q_and_gate,
+        static_cast<const uint16_t *>(q_norm_device->ptr),
+        state->q,
+        state->gate,
+        n_heads,
+        head_dim,
+        pos,
+        rope_theta,
+        partial_rotary_factor,
+        eps,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_full_attention_q 失败");
+    launch_full_attention_kv(
+        state->k,
+        state->v,
+        static_cast<const uint16_t *>(k_norm_device->ptr),
+        state->key_cache,
+        state->value_cache,
+        kv_heads,
+        head_dim,
+        max_seq_len,
+        pos,
+        rope_theta,
+        partial_rotary_factor,
+        eps,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_full_attention_kv 失败");
+    launch_full_attention_attend(
+        state->q,
+        state->gate,
+        state->key_cache,
+        state->value_cache,
+        state->attn,
+        n_heads,
+        kv_heads,
+        head_dim,
+        max_seq_len,
+        pos,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_full_attention_attend 失败");
+    launch_float_to_bf16(state->attn, state->attn_bf16, q_total, nullptr);
+    check_cuda(cudaGetLastError(), "launch_float_to_bf16 full attn 失败");
+
+    auto & cache = cuda_weight_cache();
+    const int hidden_dim = static_cast<int>(out_w.info->shape[0]);
+    ensure_float_buffer(cache.out_buffer, cache.out_bytes, static_cast<size_t>(hidden_dim) * sizeof(float), "full out buffer");
+    cublas_matvec_to_device(cache, out_w, *out_device, state->attn_bf16, CUDA_R_16BF, cache.out_buffer);
+    out.assign(static_cast<size_t>(hidden_dim), 0.0f);
+    check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(hidden_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy full out 失败");
+    return true;
+#else
+    (void) q_norm_w;
+    (void) k_norm_w;
+    (void) out_w;
+    (void) q_and_gate;
+    (void) k;
+    (void) v;
+    (void) state_handle;
+    (void) n_heads;
+    (void) kv_heads;
+    (void) head_dim;
+    (void) max_seq_len;
+    (void) pos;
+    (void) rope_theta;
+    (void) partial_rotary_factor;
+    (void) eps;
+    (void) out;
+    return false;
+#endif
+}
+
+bool cuda_full_attention_project_layer(
+    const TensorRef & q_proj_w,
+    const TensorRef & k_proj_w,
+    const TensorRef & v_proj_w,
+    const TensorRef & q_norm_w,
+    const TensorRef & k_norm_w,
+    const TensorRef & out_w,
+    const std::vector<float> & x,
+    void *& state_handle,
+    int n_heads,
+    int kv_heads,
+    int head_dim,
+    int max_seq_len,
+    int pos,
+    float rope_theta,
+    float partial_rotary_factor,
+    float eps,
+    std::vector<float> & out) {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    const int q_total = n_heads * head_dim;
+    const int kv_total = kv_heads * head_dim;
+    if (q_proj_w.info->dtype != "BF16" ||
+        k_proj_w.info->dtype != "BF16" ||
+        v_proj_w.info->dtype != "BF16" ||
+        q_norm_w.info->dtype != "BF16" ||
+        k_norm_w.info->dtype != "BF16" ||
+        out_w.info->dtype != "BF16") {
+        return false;
+    }
+    if (static_cast<int>(x.size()) != q_proj_w.info->shape[1] ||
+        q_proj_w.info->shape[0] != q_total * 2 ||
+        k_proj_w.info->shape[0] != kv_total ||
+        v_proj_w.info->shape[0] != kv_total ||
+        out_w.info->shape[1] != q_total ||
+        pos < 0 ||
+        pos >= max_seq_len) {
+        return false;
+    }
+
+    DeviceWeight * q_proj_device = cached_cuda_weight(q_proj_w);
+    DeviceWeight * k_proj_device = cached_cuda_weight(k_proj_w);
+    DeviceWeight * v_proj_device = cached_cuda_weight(v_proj_w);
+    DeviceWeight * q_norm_device = cached_cuda_weight(q_norm_w);
+    DeviceWeight * k_norm_device = cached_cuda_weight(k_norm_w);
+    DeviceWeight * out_device = cached_cuda_weight(out_w);
+    if (!q_proj_device || !k_proj_device || !v_proj_device || !q_norm_device || !k_norm_device || !out_device) {
+        return false;
+    }
+
+    auto & cache = cuda_weight_cache();
+    const int hidden_dim = static_cast<int>(x.size());
+    const size_t x_bytes = static_cast<size_t>(hidden_dim) * sizeof(uint16_t);
+    ensure_cuda_buffers(cache, x_bytes, 1);
+    std::vector<uint16_t> x_bf16 = host_float_to_bf16(x);
+    check_cuda(cudaMemcpy(cache.x_buffer, x_bf16.data(), x_bytes, cudaMemcpyHostToDevice), "cudaMemcpy full project x 失败");
+
+    CudaFullAttentionState * state =
+        ensure_full_attention_state(state_handle, n_heads, kv_heads, head_dim, max_seq_len);
+    cublas_matvec_to_device(cache, q_proj_w, *q_proj_device, cache.x_buffer, CUDA_R_16BF, state->q_and_gate);
+    cublas_matvec_to_device(cache, k_proj_w, *k_proj_device, cache.x_buffer, CUDA_R_16BF, state->k);
+    cublas_matvec_to_device(cache, v_proj_w, *v_proj_device, cache.x_buffer, CUDA_R_16BF, state->v);
+
+    launch_full_attention_q(
+        state->q_and_gate,
+        static_cast<const uint16_t *>(q_norm_device->ptr),
+        state->q,
+        state->gate,
+        n_heads,
+        head_dim,
+        pos,
+        rope_theta,
+        partial_rotary_factor,
+        eps,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_full_attention_q 失败");
+    launch_full_attention_kv(
+        state->k,
+        state->v,
+        static_cast<const uint16_t *>(k_norm_device->ptr),
+        state->key_cache,
+        state->value_cache,
+        kv_heads,
+        head_dim,
+        max_seq_len,
+        pos,
+        rope_theta,
+        partial_rotary_factor,
+        eps,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_full_attention_kv 失败");
+    launch_full_attention_attend(
+        state->q,
+        state->gate,
+        state->key_cache,
+        state->value_cache,
+        state->attn,
+        n_heads,
+        kv_heads,
+        head_dim,
+        max_seq_len,
+        pos,
+        nullptr);
+    check_cuda(cudaGetLastError(), "launch_full_attention_attend 失败");
+    launch_float_to_bf16(state->attn, state->attn_bf16, q_total, nullptr);
+    check_cuda(cudaGetLastError(), "launch_float_to_bf16 full attn 失败");
+
+    const int out_dim = static_cast<int>(out_w.info->shape[0]);
+    ensure_float_buffer(cache.out_buffer, cache.out_bytes, static_cast<size_t>(out_dim) * sizeof(float), "full out buffer");
+    cublas_matvec_to_device(cache, out_w, *out_device, state->attn_bf16, CUDA_R_16BF, cache.out_buffer);
+    out.assign(static_cast<size_t>(out_dim), 0.0f);
+    check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(out_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy full out 失败");
+    return true;
+#else
+    (void) q_proj_w;
+    (void) k_proj_w;
+    (void) v_proj_w;
+    (void) q_norm_w;
+    (void) k_norm_w;
+    (void) out_w;
+    (void) x;
+    (void) state_handle;
+    (void) n_heads;
+    (void) kv_heads;
+    (void) head_dim;
+    (void) max_seq_len;
+    (void) pos;
+    (void) rope_theta;
+    (void) partial_rotary_factor;
+    (void) eps;
+    (void) out;
+    return false;
+#endif
+}
+
 bool cuda_rmsnorm_mlp_layer(
     const TensorRef & norm_w,
     const TensorRef & gate_w,
@@ -755,7 +1524,31 @@ bool cuda_cublas_enabled() {
 #endif
 }
 
+void cuda_free_linear_attention_state(void * state) {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    delete static_cast<CudaLinearAttentionState *>(state);
+#else
+    (void) state;
+#endif
+}
+
+void cuda_free_full_attention_state(void * state) {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    delete static_cast<CudaFullAttentionState *>(state);
+#else
+    (void) state;
+#endif
+}
+
 bool cuda_fused_mlp_enabled() {
+#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool cuda_project_attention_enabled() {
 #ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     return true;
 #else
