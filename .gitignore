@@ -31,6 +31,8 @@ AI/codes/llm-train-cpp/cmake-build-*
 AI/codes/llm-train-cpp/build-*
 AI/codes/llm-train-cpp/default.profraw
 
+AI/codes/llm-inference-cpp/build-mac/
+
 AI/chapter-03/data/*.pt
 AI/chapter-03/data/*.csv
 AI/chapter-03/gpt2/

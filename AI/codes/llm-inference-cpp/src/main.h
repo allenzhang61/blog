@@ -6,4 +6,4 @@
 #include "core/profile.h"
 #include "core/safetensors.h"
 #include "core/tokenizer.h"
-#include "model/NativeQwen.h"
+#include "model/QwenModel.h"

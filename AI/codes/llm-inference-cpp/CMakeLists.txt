@@ -16,9 +16,18 @@ add_executable(llm-inference-cpp
     src/core/profile.cpp
     src/core/safetensors.cpp
     src/core/tensor_ops.cpp
+    src/kernels/cuda/cuda_ops.cpp
     src/core/tokenizer.cpp
+    src/kernels/cpu/dtype.cpp
+    src/kernels/cpu/matvec.cpp
+    src/kernels/cpu/embedding.cpp
+    src/kernels/cpu/rmsnorm.cpp
+    src/kernels/cpu/elementwise.cpp
+    src/tensor/tensor.cpp
+    src/ops/ops.cpp
     src/main.cpp
-    src/model/NativeQwen.cpp
+    src/model/QwenModel.cpp
+    src/model/weights.cpp
 )
 
 find_package(OpenMP)

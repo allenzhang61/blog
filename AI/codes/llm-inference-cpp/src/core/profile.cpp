@@ -1,5 +1,7 @@
 #include "profile.h"
 
+#include "../kernels/cuda/cuda_ops.h"
+
 #include <iomanip>
 #include <iostream>
 #include <sstream>
