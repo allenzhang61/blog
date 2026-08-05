@@ -2,7 +2,6 @@
 
 #include "../kernels/cpu/cpu_ops.h"
 #include "../kernels/cuda/cuda_ops.h"
-#include "../core/tensor_ops.h"
 
 #include <algorithm>
 #include <array>

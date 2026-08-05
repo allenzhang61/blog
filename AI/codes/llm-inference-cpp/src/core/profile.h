@@ -2,7 +2,6 @@
 
 #include "cli.h"
 #include "config.h"
-#include "tensor_ops.h"
 #include "../safetensors/safetensors.h"
 
 #include <cstdint>

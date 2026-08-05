@@ -47,6 +47,9 @@ struct FullAttentionState {
 // CUDA 多级融合（整层 / project / 裸算子）在各 ops 入口内部消化。
 namespace ops {
 
+// 矩阵向量乘分发：优先尝试 CUDA backend，失败后走默认 CPU BLAS。
+void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y);
+
 // 整层融合：input_norm + linear attention + post_norm + MLP（主机输入/输出）。
 // 成功走 CUDA 返回 true；否则返回 false，由调用方走更细粒度路径。
 bool linear_attention_full_layer(

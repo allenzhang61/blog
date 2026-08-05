@@ -153,7 +153,6 @@ libcublas-dev-12-8
 cmake -S . -B build-cuda128 \
   -DCMAKE_BUILD_TYPE=Release \
   -DLLM_INFERENCE_ENABLE_CUDA=ON \
-  -DLLM_INFERENCE_ENABLE_CBLAS=OFF \
   -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
   -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc
 cmake --build build-cuda128 -j

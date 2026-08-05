@@ -10,18 +10,15 @@
 #include <stdexcept>
 #include <unordered_map>
 
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
 #include "../../core/cuda_kernels.h"
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
-#endif
 
 namespace llm_inference {
 
 namespace {
 
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
 
 size_t cuda_weight_cache_limit_bytes() {
     const char * env = std::getenv("LLM_INFERENCE_CUDA_WEIGHT_CACHE_GB");
@@ -1125,11 +1122,9 @@ const uint16_t * cuda_rms_norm_input_to_bf16(
     return cache.norm_bf16_buffer;
 }
 
-#endif
 
 } // namespace
 
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
 
 bool cuda_matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y) {
     DeviceWeight * device_weight = cached_cuda_weight(weight);
@@ -1165,10 +1160,8 @@ bool cuda_matvec(const TensorRef & weight, const std::vector<float> & x, std::ve
     return true;
 }
 
-#endif
 
 bool cuda_argmax_matvec(const TensorRef & weight, const std::vector<float> & x, int & best_id) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     DeviceWeight * device_weight = cached_cuda_weight(weight);
     if (!device_weight || (device_weight->type != CUDA_R_16BF && device_weight->type != CUDA_R_16F)) {
         return false;
@@ -1219,41 +1212,23 @@ bool cuda_argmax_matvec(const TensorRef & weight, const std::vector<float> & x, 
     check_cuda(cudaGetLastError(), "launch_argmax_float 失败");
     check_cuda(cudaMemcpy(&best_id, cache.argmax_best_index, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy argmax best id 失败");
     return true;
-#else
-    (void) weight;
-    (void) x;
-    (void) best_id;
-    return false;
-#endif
 }
 
 void * cuda_token_hidden_buffer(int slot, int hidden_size) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     auto & cache = cuda_weight_cache();
     float *& ptr = slot == 0 ? cache.token_hidden_a : cache.token_hidden_b;
     size_t & bytes = slot == 0 ? cache.token_hidden_a_bytes : cache.token_hidden_b_bytes;
     ensure_float_buffer(ptr, bytes, static_cast<size_t>(hidden_size) * sizeof(float), slot == 0 ? "token hidden a" : "token hidden b");
     return ptr;
-#else
-    (void) slot;
-    (void) hidden_size;
-    return nullptr;
-#endif
 }
 
 void * cuda_generated_token_buffer(int count) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     auto & cache = cuda_weight_cache();
     ensure_int_buffer(cache.generated_token_buffer, cache.generated_token_bytes, static_cast<size_t>(count) * sizeof(int), "generated token buffer");
     return cache.generated_token_buffer;
-#else
-    (void) count;
-    return nullptr;
-#endif
 }
 
 bool cuda_embedding_lookup_device(const TensorRef & emb, int token_id, void * device_out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (emb.info->shape.size() != 2 || !device_out) {
         return false;
     }
@@ -1270,16 +1245,9 @@ bool cuda_embedding_lookup_device(const TensorRef & emb, int token_id, void * de
     launch_lowp_row_to_float(row, static_cast<float *>(device_out), hidden, emb_device->type == CUDA_R_16F ? 1 : 0, nullptr);
     check_cuda(cudaGetLastError(), "launch_lowp_row_to_float embedding 失败");
     return true;
-#else
-    (void) emb;
-    (void) token_id;
-    (void) device_out;
-    return false;
-#endif
 }
 
 bool cuda_embedding_lookup_device_token(const TensorRef & emb, const void * device_token_id, void * device_out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (emb.info->shape.size() != 2 || !device_token_id || !device_out) {
         return false;
     }
@@ -1299,12 +1267,6 @@ bool cuda_embedding_lookup_device_token(const TensorRef & emb, const void * devi
         nullptr);
     check_cuda(cudaGetLastError(), "launch_lowp_embedding_id_to_float 失败");
     return true;
-#else
-    (void) emb;
-    (void) device_token_id;
-    (void) device_out;
-    return false;
-#endif
 }
 
 bool cuda_final_norm_argmax_to_device(
@@ -1315,7 +1277,6 @@ bool cuda_final_norm_argmax_to_device(
     float eps,
     bool one_plus,
     void * device_token_out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (!device_hidden || !device_token_out || norm_w.info->dtype != "BF16" || norm_w.info->shape.size() != 1 || norm_w.info->shape[0] != hidden_size) {
         return false;
     }
@@ -1377,41 +1338,20 @@ bool cuda_final_norm_argmax_to_device(
     launch_copy_int(cache.argmax_best_index, static_cast<int *>(device_token_out), nullptr);
     check_cuda(cudaGetLastError(), "launch_copy_int final token 失败");
     return true;
-#else
-    (void) norm_w;
-    (void) emb;
-    (void) device_hidden;
-    (void) hidden_size;
-    (void) eps;
-    (void) one_plus;
-    (void) device_token_out;
-    return false;
-#endif
 }
 
 bool cuda_copy_generated_tokens_to_host(const void * device_tokens, int count, std::vector<int> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (!device_tokens || count < 0) {
         return false;
     }
     out.assign(static_cast<size_t>(count), 0);
     check_cuda(cudaMemcpy(out.data(), device_tokens, static_cast<size_t>(count) * sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy generated tokens 失败");
     return true;
-#else
-    (void) device_tokens;
-    (void) count;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_synchronize_device() {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     check_cuda(cudaDeviceSynchronize(), "cudaDeviceSynchronize 失败");
     return true;
-#else
-    return false;
-#endif
 }
 
 bool cuda_final_norm_argmax_device(
@@ -1422,7 +1362,6 @@ bool cuda_final_norm_argmax_device(
     float eps,
     bool one_plus,
     int & best_id) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (!device_hidden || norm_w.info->dtype != "BF16" || norm_w.info->shape.size() != 1 || norm_w.info->shape[0] != hidden_size) {
         return false;
     }
@@ -1483,16 +1422,6 @@ bool cuda_final_norm_argmax_device(
     check_cuda(cudaGetLastError(), "launch_argmax_float final 失败");
     check_cuda(cudaMemcpy(&best_id, cache.argmax_best_index, sizeof(int), cudaMemcpyDeviceToHost), "cudaMemcpy final argmax id 失败");
     return true;
-#else
-    (void) norm_w;
-    (void) emb;
-    (void) device_hidden;
-    (void) hidden_size;
-    (void) eps;
-    (void) one_plus;
-    (void) best_id;
-    return false;
-#endif
 }
 
 bool cuda_mlp_layer(
@@ -1501,7 +1430,6 @@ bool cuda_mlp_layer(
     const TensorRef & down_w,
     const std::vector<float> & x,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (gate_w.info->shape.size() != 2 || up_w.info->shape.size() != 2 || down_w.info->shape.size() != 2) {
         return false;
     }
@@ -1530,14 +1458,6 @@ bool cuda_mlp_layer(
     std::vector<uint16_t> x_lowp = host_float_to_lowp(x, gate_up_device->type);
     check_cuda(cudaMemcpy(cache.x_buffer, x_lowp.data(), x_bytes, cudaMemcpyHostToDevice), "cudaMemcpy mlp x 失败");
     return cuda_mlp_from_device_bf16(gate_w, up_w, down_w, static_cast<const uint16_t *>(cache.x_buffer), out);
-#else
-    (void) gate_w;
-    (void) up_w;
-    (void) down_w;
-    (void) x;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_linear_attention_layer(
@@ -1558,7 +1478,6 @@ bool cuda_linear_attention_layer(
     int kernel,
     float eps,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const int key_total = key_heads * k_dim;
     const int value_total = value_heads * v_dim;
     const int conv_dim = key_total * 2 + value_total;
@@ -1642,26 +1561,6 @@ bool cuda_linear_attention_layer(
     out.assign(static_cast<size_t>(hidden_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(hidden_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy linear out 失败");
     return true;
-#else
-    (void) conv_w;
-    (void) a_log;
-    (void) dt_bias;
-    (void) norm_w;
-    (void) out_w;
-    (void) mixed;
-    (void) z;
-    (void) b;
-    (void) a;
-    (void) state_handle;
-    (void) key_heads;
-    (void) value_heads;
-    (void) k_dim;
-    (void) v_dim;
-    (void) kernel;
-    (void) eps;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_linear_attention_project_layer(
@@ -1683,7 +1582,6 @@ bool cuda_linear_attention_project_layer(
     int kernel,
     float eps,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const int key_total = key_heads * k_dim;
     const int value_total = value_heads * v_dim;
     const int conv_dim = key_total * 2 + value_total;
@@ -1772,27 +1670,6 @@ bool cuda_linear_attention_project_layer(
     out.assign(static_cast<size_t>(out_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(out_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy linear out 失败");
     return true;
-#else
-    (void) in_proj_qkv_w;
-    (void) in_proj_z_w;
-    (void) in_proj_b_w;
-    (void) in_proj_a_w;
-    (void) conv_w;
-    (void) a_log;
-    (void) dt_bias;
-    (void) norm_w;
-    (void) out_w;
-    (void) x;
-    (void) state_handle;
-    (void) key_heads;
-    (void) value_heads;
-    (void) k_dim;
-    (void) v_dim;
-    (void) kernel;
-    (void) eps;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_rmsnorm_linear_attention_project_layer(
@@ -1816,7 +1693,6 @@ bool cuda_rmsnorm_linear_attention_project_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const uint16_t * device_x = cuda_rms_norm_input_to_bf16(input_norm_w, x, eps, one_plus);
     if (!device_x) {
         return false;
@@ -1901,29 +1777,6 @@ bool cuda_rmsnorm_linear_attention_project_layer(
     out.assign(static_cast<size_t>(out_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(out_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy linear out 失败");
     return true;
-#else
-    (void) input_norm_w;
-    (void) in_proj_qkv_w;
-    (void) in_proj_z_w;
-    (void) in_proj_b_w;
-    (void) in_proj_a_w;
-    (void) conv_w;
-    (void) a_log;
-    (void) dt_bias;
-    (void) norm_w;
-    (void) out_w;
-    (void) x;
-    (void) state_handle;
-    (void) key_heads;
-    (void) value_heads;
-    (void) k_dim;
-    (void) v_dim;
-    (void) kernel;
-    (void) eps;
-    (void) one_plus;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_linear_attention_full_layer(
@@ -1951,7 +1804,6 @@ bool cuda_linear_attention_full_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const int hidden_dim = static_cast<int>(x.size());
     const int key_total = key_heads * k_dim;
     const int value_total = value_heads * v_dim;
@@ -2038,33 +1890,6 @@ bool cuda_linear_attention_full_layer(
     out.assign(static_cast<size_t>(hidden_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.layer_out_buffer, hidden_float_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy layer out 失败");
     return true;
-#else
-    (void) input_norm_w;
-    (void) in_proj_qkv_w;
-    (void) in_proj_z_w;
-    (void) in_proj_b_w;
-    (void) in_proj_a_w;
-    (void) conv_w;
-    (void) a_log;
-    (void) dt_bias;
-    (void) attn_norm_w;
-    (void) attn_out_w;
-    (void) post_norm_w;
-    (void) mlp_gate_w;
-    (void) mlp_up_w;
-    (void) mlp_down_w;
-    (void) x;
-    (void) state_handle;
-    (void) key_heads;
-    (void) value_heads;
-    (void) k_dim;
-    (void) v_dim;
-    (void) kernel;
-    (void) eps;
-    (void) one_plus;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_linear_attention_full_layer_device(
@@ -2093,7 +1918,6 @@ bool cuda_linear_attention_full_layer_device(
     int kernel,
     float eps,
     bool one_plus) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (!device_x || !device_out || input_norm_w.info->dtype != "BF16") {
         return false;
     }
@@ -2197,34 +2021,6 @@ bool cuda_linear_attention_full_layer_device(
     launch_add_float(cache.layer_out_buffer, cache.mlp_out_buffer, static_cast<float *>(device_out), hidden_dim, nullptr);
     check_cuda(cudaGetLastError(), "launch_add_float linear device mlp residual 失败");
     return true;
-#else
-    (void) input_norm_w;
-    (void) in_proj_qkv_w;
-    (void) in_proj_z_w;
-    (void) in_proj_b_w;
-    (void) in_proj_a_w;
-    (void) conv_w;
-    (void) a_log;
-    (void) dt_bias;
-    (void) attn_norm_w;
-    (void) attn_out_w;
-    (void) post_norm_w;
-    (void) mlp_gate_w;
-    (void) mlp_up_w;
-    (void) mlp_down_w;
-    (void) device_x;
-    (void) device_out;
-    (void) hidden_dim;
-    (void) state_handle;
-    (void) key_heads;
-    (void) value_heads;
-    (void) k_dim;
-    (void) v_dim;
-    (void) kernel;
-    (void) eps;
-    (void) one_plus;
-    return false;
-#endif
 }
 
 bool cuda_full_attention_layer(
@@ -2244,7 +2040,6 @@ bool cuda_full_attention_layer(
     float partial_rotary_factor,
     float eps,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const int q_total = n_heads * head_dim;
     const int kv_total = kv_heads * head_dim;
     if (q_norm_w.info->dtype != "BF16" || k_norm_w.info->dtype != "BF16" || out_w.info->dtype != "BF16") {
@@ -2328,25 +2123,6 @@ bool cuda_full_attention_layer(
     out.assign(static_cast<size_t>(hidden_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(hidden_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy full out 失败");
     return true;
-#else
-    (void) q_norm_w;
-    (void) k_norm_w;
-    (void) out_w;
-    (void) q_and_gate;
-    (void) k;
-    (void) v;
-    (void) state_handle;
-    (void) n_heads;
-    (void) kv_heads;
-    (void) head_dim;
-    (void) max_seq_len;
-    (void) pos;
-    (void) rope_theta;
-    (void) partial_rotary_factor;
-    (void) eps;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_full_attention_project_layer(
@@ -2367,7 +2143,6 @@ bool cuda_full_attention_project_layer(
     float partial_rotary_factor,
     float eps,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const int q_total = n_heads * head_dim;
     const int kv_total = kv_heads * head_dim;
     if (q_proj_w.info->dtype != "BF16" ||
@@ -2466,26 +2241,6 @@ bool cuda_full_attention_project_layer(
     out.assign(static_cast<size_t>(out_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(out_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy full out 失败");
     return true;
-#else
-    (void) q_proj_w;
-    (void) k_proj_w;
-    (void) v_proj_w;
-    (void) q_norm_w;
-    (void) k_norm_w;
-    (void) out_w;
-    (void) x;
-    (void) state_handle;
-    (void) n_heads;
-    (void) kv_heads;
-    (void) head_dim;
-    (void) max_seq_len;
-    (void) pos;
-    (void) rope_theta;
-    (void) partial_rotary_factor;
-    (void) eps;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_rmsnorm_full_attention_project_layer(
@@ -2508,7 +2263,6 @@ bool cuda_rmsnorm_full_attention_project_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const uint16_t * device_x = cuda_rms_norm_input_to_bf16(input_norm_w, x, eps, one_plus);
     if (!device_x) {
         return false;
@@ -2603,28 +2357,6 @@ bool cuda_rmsnorm_full_attention_project_layer(
     out.assign(static_cast<size_t>(out_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.out_buffer, static_cast<size_t>(out_dim) * sizeof(float), cudaMemcpyDeviceToHost), "cudaMemcpy full out 失败");
     return true;
-#else
-    (void) input_norm_w;
-    (void) q_proj_w;
-    (void) k_proj_w;
-    (void) v_proj_w;
-    (void) q_norm_w;
-    (void) k_norm_w;
-    (void) out_w;
-    (void) x;
-    (void) state_handle;
-    (void) n_heads;
-    (void) kv_heads;
-    (void) head_dim;
-    (void) max_seq_len;
-    (void) pos;
-    (void) rope_theta;
-    (void) partial_rotary_factor;
-    (void) eps;
-    (void) one_plus;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_full_attention_full_layer(
@@ -2651,7 +2383,6 @@ bool cuda_full_attention_full_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     const int hidden_dim = static_cast<int>(x.size());
     const int q_total = n_heads * head_dim;
     const int kv_total = kv_heads * head_dim;
@@ -2721,32 +2452,6 @@ bool cuda_full_attention_full_layer(
     out.assign(static_cast<size_t>(hidden_dim), 0.0f);
     check_cuda(cudaMemcpy(out.data(), cache.layer_out_buffer, hidden_float_bytes, cudaMemcpyDeviceToHost), "cudaMemcpy layer out 失败");
     return true;
-#else
-    (void) input_norm_w;
-    (void) q_proj_w;
-    (void) k_proj_w;
-    (void) v_proj_w;
-    (void) q_norm_w;
-    (void) k_norm_w;
-    (void) attn_out_w;
-    (void) post_norm_w;
-    (void) mlp_gate_w;
-    (void) mlp_up_w;
-    (void) mlp_down_w;
-    (void) x;
-    (void) state_handle;
-    (void) n_heads;
-    (void) kv_heads;
-    (void) head_dim;
-    (void) max_seq_len;
-    (void) pos;
-    (void) rope_theta;
-    (void) partial_rotary_factor;
-    (void) eps;
-    (void) one_plus;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_full_attention_full_layer_device(
@@ -2774,7 +2479,6 @@ bool cuda_full_attention_full_layer_device(
     float partial_rotary_factor,
     float eps,
     bool one_plus) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (!device_x || !device_out || input_norm_w.info->dtype != "BF16") {
         return false;
     }
@@ -2861,33 +2565,6 @@ bool cuda_full_attention_full_layer_device(
     launch_add_float(cache.layer_out_buffer, cache.mlp_out_buffer, static_cast<float *>(device_out), hidden_dim, nullptr);
     check_cuda(cudaGetLastError(), "launch_add_float full device mlp residual 失败");
     return true;
-#else
-    (void) input_norm_w;
-    (void) q_proj_w;
-    (void) k_proj_w;
-    (void) v_proj_w;
-    (void) q_norm_w;
-    (void) k_norm_w;
-    (void) attn_out_w;
-    (void) post_norm_w;
-    (void) mlp_gate_w;
-    (void) mlp_up_w;
-    (void) mlp_down_w;
-    (void) device_x;
-    (void) device_out;
-    (void) hidden_dim;
-    (void) state_handle;
-    (void) n_heads;
-    (void) kv_heads;
-    (void) head_dim;
-    (void) max_seq_len;
-    (void) pos;
-    (void) rope_theta;
-    (void) partial_rotary_factor;
-    (void) eps;
-    (void) one_plus;
-    return false;
-#endif
 }
 
 const void * cuda_prefill_batch(
@@ -2898,7 +2575,6 @@ const void * cuda_prefill_batch(
     std::vector<void *> & full_states,
     const std::vector<int> & full_max_seq_lens,
     int & seq_len) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (prompt_ids.empty() || seq_len != 0) {
         return nullptr;
     }
@@ -3187,16 +2863,6 @@ const void * cuda_prefill_batch(
     }
     seq_len += tokens;
     return current + static_cast<size_t>(tokens - 1) * hidden_dim;
-#else
-    (void) config;
-    (void) weights;
-    (void) prompt_ids;
-    (void) linear_states;
-    (void) full_states;
-    (void) full_max_seq_lens;
-    (void) seq_len;
-    return nullptr;
-#endif
 }
 
 bool cuda_rmsnorm_mlp_layer(
@@ -3208,7 +2874,6 @@ bool cuda_rmsnorm_mlp_layer(
     float eps,
     bool one_plus,
     std::vector<float> & out) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (!cuda_rmsnorm_mlp_enabled()) {
         return false;
     }
@@ -3257,77 +2922,38 @@ bool cuda_rmsnorm_mlp_layer(
         nullptr);
     check_cuda(cudaGetLastError(), "launch_rms_norm_to_bf16 失败");
     return cuda_mlp_from_device_bf16(gate_w, up_w, down_w, cache.norm_bf16_buffer, out);
-#else
-    (void) norm_w;
-    (void) gate_w;
-    (void) up_w;
-    (void) down_w;
-    (void) x;
-    (void) eps;
-    (void) one_plus;
-    (void) out;
-    return false;
-#endif
 }
 
 bool cuda_cublas_enabled() {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     return true;
-#else
-    return false;
-#endif
 }
 
 void cuda_free_linear_attention_state(void * state) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     delete static_cast<CudaLinearAttentionState *>(state);
-#else
-    (void) state;
-#endif
 }
 
 void cuda_free_full_attention_state(void * state) {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     delete static_cast<CudaFullAttentionState *>(state);
-#else
-    (void) state;
-#endif
 }
 
 bool cuda_fused_mlp_enabled() {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     return true;
-#else
-    return false;
-#endif
 }
 
 bool cuda_project_attention_enabled() {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     return true;
-#else
-    return false;
-#endif
 }
 
 bool cuda_full_layer_enabled() {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     return true;
-#else
-    return false;
-#endif
 }
 
 bool cuda_rmsnorm_mlp_enabled() {
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     static const bool enabled = [] {
         const char * value = std::getenv("LLM_INFERENCE_CUDA_FUSE_RMSNORM_MLP");
         return value && std::strcmp(value, "1") == 0;
     }();
     return enabled;
-#else
-    return false;
-#endif
 }
 
 } // namespace llm_inference

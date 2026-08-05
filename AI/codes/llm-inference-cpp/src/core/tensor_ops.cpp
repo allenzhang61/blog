@@ -10,15 +10,16 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef LLM_INFERENCE_USE_CBLAS
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#else
 #include <cblas.h>
 #endif
 
 namespace llm_inference {
+namespace ops {
 
 namespace {
-
-#ifdef LLM_INFERENCE_USE_CBLAS
 
 size_t weight_cache_limit_bytes() {
     const char * env = std::getenv("LLM_INFERENCE_WEIGHT_CACHE_GB");
@@ -80,8 +81,6 @@ const std::vector<float> * cached_float_weight(const TensorRef & weight) {
     return &data;
 }
 
-#endif
-
 } // namespace
 
 void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<float> & y) {
@@ -95,13 +94,10 @@ void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<
     }
     y.assign(out_dim, 0.0f);
 
-#ifdef LLM_INFERENCE_USE_CUDA_CUBLAS
     if (cuda_matvec(weight, x, y)) {
         return;
     }
-#endif
 
-#ifdef LLM_INFERENCE_USE_CBLAS
     if (const std::vector<float> * matrix = cached_float_weight(weight)) {
         cblas_sgemv(
             CblasRowMajor,
@@ -118,7 +114,6 @@ void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<
             1);
         return;
     }
-#endif
 
 #pragma omp parallel for schedule(static)
     for (int o = 0; o < out_dim; ++o) {
@@ -126,4 +121,5 @@ void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<
     }
 }
 
+} // namespace ops
 } // namespace llm_inference
