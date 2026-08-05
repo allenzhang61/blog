@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.h"
+#include "../core/common.h"
 
 #include <cstdint>
 #include <map>
@@ -8,6 +8,8 @@
 #include <vector>
 
 namespace llm_inference {
+
+struct ModelConfig;
 
 // mmap 打开的权重文件，负责持有 fd 和映射内存生命周期。
 struct MappedFile {
@@ -56,20 +58,45 @@ struct TensorRef {
 };
 
 // 模型全部权重文件和 tensor metadata 索引。
-struct ModelWeights {
+class ModelWeights {
+public:
+    // 扫描模型目录下的 safetensors 文件，并 mmap 加载 metadata。
+    static ModelWeights load_mmap(const fs::path & model_dir);
+
+    // 校验 Qwen3.5 推理路径需要的 tensor 是否齐全。
+    void validate_qwen_tensors(const ModelConfig & config) const;
+
+    // 打印当前权重中所有 tensor 的名称、dtype、shape 和文件信息。
+    void dump_tensors() const;
+
+    // 按名称返回 tensor 引用；不存在时抛出异常。
+    TensorRef tensor_ref(const std::string & name) const;
+
+    // 已 mmap 的 safetensors 文件数量。
+    size_t mapped_file_count() const;
+
+    // 已索引的 tensor 数量。
+    size_t tensor_count() const;
+
+private:
     // mmap 后的 safetensors 文件列表。
     std::vector<MappedFile> files;
     // 按 tensor 名称索引的 metadata。
     std::map<std::string, TensorInfo> tensors;
+
+    // 检查权重中是否存在指定 tensor。
+    bool has_tensor(const std::string & name) const;
+
+    // 解析单个 safetensors 文件 header 并填充 tensor 索引。
+    void parse_safetensors_header(size_t file_index);
+
+    // mmap 打开单个 safetensors 文件。
+    static MappedFile mmap_file(const fs::path & path);
+
+    static uint64_t read_u64_le(const uint8_t * data);
+    static std::vector<int64_t> parse_i64_array(const std::string & text);
+    static std::vector<fs::path> find_safetensors_files(const fs::path & model_dir);
+    static std::string shape_to_string(const std::vector<int64_t> & shape);
 };
-
-// 扫描模型目录下的 safetensors 文件，并 mmap 加载 metadata。
-ModelWeights load_weights_mmap(const fs::path & model_dir);
-
-// 按名称返回 tensor 引用；不存在时抛出异常。
-TensorRef tensor_ref(const ModelWeights & weights, const std::string & name);
-
-// 检查权重中是否存在指定 tensor。
-bool has_tensor(const ModelWeights & weights, const std::string & name);
 
 } // namespace llm_inference

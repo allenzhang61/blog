@@ -3,8 +3,8 @@
 #include "../core/cli.h"
 #include "../core/config.h"
 #include "../core/profile.h"
-#include "../core/safetensors.h"
 #include "../ops/ops.h"
+#include "../safetensors/safetensors.h"
 #include "weights.h"
 
 #include <vector>
@@ -31,11 +31,26 @@ public:
     // 绑定只读模型配置和 mmap 权重，构造时解析权重引用，不拥有生命周期。
     QwenModel(const ModelConfig & config, const ModelWeights & weights);
 
-    // 对 prompt 做 prefill，并生成第一个 token。
-    int generate_next(const std::vector<int> & prompt_ids, RunState & state, Timing & timing) const;
+    // 使用 greedy 路径生成完整序列，优先走整段 CUDA，失败后回退到逐 token。
+    std::vector<int> run_greedy_generation(
+        RunState & state,
+        const Args & args,
+        const std::vector<int> & input_ids,
+        Timing & timing) const;
 
-    // 基于上一个 token decode 一个新 token。
-    int decode_one(int token, RunState & state, Timing & timing) const;
+    // 使用非 greedy 路径生成完整序列；当前实现仍复用逐 token greedy。
+    std::vector<int> run_non_greedy_generation(
+        RunState & state,
+        const Args & args,
+        const std::vector<int> & input_ids,
+        Timing & timing) const;
+
+    // 使用逐 token 路径生成完整序列。
+    std::vector<int> run_token_generation(
+        RunState & state,
+        const Args & args,
+        const std::vector<int> & input_ids,
+        Timing & timing) const;
 
     // 使用 CUDA 批量 prefill + 设备端 decode 生成完整序列。
     bool generate_sequence_device(
@@ -47,6 +62,12 @@ public:
         std::vector<int> & generated) const;
 
 private:
+    // 对 prompt 做 prefill，并生成第一个 token。
+    int generate_next(const std::vector<int> & prompt_ids, RunState & state, Timing & timing) const;
+
+    // 基于上一个 token decode 一个新 token。
+    int decode_one(int token, RunState & state, Timing & timing) const;
+
     // CUDA 单 token prefill 后取 argmax。
     bool generate_next_device(const std::vector<int> & prompt_ids, RunState & state, Timing & timing, int & next) const;
 
@@ -78,13 +99,5 @@ private:
     // 一次性解析好的结构化权重引用。
     ModelParams params_;
 };
-
-// 基于输入 token ids 执行完整生成流程，返回新生成的 token ids。
-std::vector<int> run_generation(
-    const ModelConfig & config,
-    const ModelWeights & weights,
-    const Args & args,
-    const std::vector<int> & input_ids,
-    Timing & timing);
 
 } // namespace llm_inference

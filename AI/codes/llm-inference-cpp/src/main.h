@@ -4,6 +4,6 @@
 #include "core/common.h"
 #include "core/config.h"
 #include "core/profile.h"
-#include "core/safetensors.h"
 #include "core/tokenizer.h"
 #include "model/QwenModel.h"
+#include "safetensors/safetensors.h"

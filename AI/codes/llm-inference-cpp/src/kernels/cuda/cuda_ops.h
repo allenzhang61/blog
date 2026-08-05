@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../core/config.h"
-#include "../../core/safetensors.h"
+#include "../../safetensors/safetensors.h"
 
 #include <cstddef>
 #include <cstdint>

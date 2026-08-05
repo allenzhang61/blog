@@ -17,11 +17,11 @@ int main(int argc, char ** argv) {
         timing.load_config_s = elapsed_s(start);
 
         start = Clock::now();
-        ModelWeights weights = load_weights_mmap(model_dir);
+        ModelWeights weights = ModelWeights::load_mmap(model_dir);
         timing.load_weights_s = elapsed_s(start);
 
         start = Clock::now();
-        validate_qwen_tensors(weights, config);
+        weights.validate_qwen_tensors(config);
         timing.validate_s = elapsed_s(start);
 
         double vocab_s = 0.0;
@@ -29,7 +29,7 @@ int main(int argc, char ** argv) {
         timing.load_vocab_s = vocab_s;
 
         if (args.dump_tensors) {
-            dump_tensors(weights);
+            weights.dump_tensors();
         }
 
         const std::vector<int> input_ids = resolve_input_ids(args);
@@ -41,7 +41,13 @@ int main(int argc, char ** argv) {
             for (int i = 0; i < args.warmup_runs; ++i) {
                 Timing warm_timing;
                 warm_timing.input_tokens = timing.input_tokens;
-                (void) run_generation(config, weights, args, input_ids, warm_timing);
+                QwenModel model(config, weights);
+                RunState warm_state = make_run_state(config, warm_timing.input_tokens + args.max_new_tokens + 4);
+                if (args.greedy) {
+                    (void) model.run_greedy_generation(warm_state, args, input_ids, warm_timing);
+                } else {
+                    (void) model.run_non_greedy_generation(warm_state, args, input_ids, warm_timing);
+                }
             }
             timing.warmup_s = elapsed_s(start);
             log("预热完成，耗时 " + std::to_string(timing.warmup_s) + "s");
@@ -49,7 +55,14 @@ int main(int argc, char ** argv) {
 
         log("开始推理...");
         start = Clock::now();
-        std::vector<int> generated = run_generation(config, weights, args, input_ids, timing);
+        QwenModel model(config, weights);
+        RunState state = make_run_state(config, timing.input_tokens + args.max_new_tokens + 4);
+        std::vector<int> generated;
+        if (args.greedy) {
+            generated = model.run_greedy_generation(state, args, input_ids, timing);
+        } else {
+            generated = model.run_non_greedy_generation(state, args, input_ids, timing);
+        }
         timing.infer_wall_s = elapsed_s(start);
         log("推理完成，耗时 " + std::to_string(timing.infer_wall_s) +
             "s，max_new_tokens=" + std::to_string(args.max_new_tokens));

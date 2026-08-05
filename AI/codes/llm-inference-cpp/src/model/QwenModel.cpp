@@ -11,25 +11,25 @@ namespace llm_inference {
 
 RunState make_run_state(const ModelConfig & config, int max_seq_len) {
     RunState state;
-    state.linear.resize(config.num_hidden_layers);
-    state.full.resize(config.num_hidden_layers);
-    const int conv_dim = config.linear_key_head_dim * config.linear_num_key_heads * 2 +
-                         config.linear_value_head_dim * config.linear_num_value_heads;
-    for (int layer = 0; layer < config.num_hidden_layers; ++layer) {
-        if (config.layer_types[layer] == "linear_attention") {
-            state.linear[layer].conv_state.assign(static_cast<size_t>(conv_dim) * config.linear_conv_kernel_dim, 0.0f);
+    state.linear.resize(config.text.num_hidden_layers);
+    state.full.resize(config.text.num_hidden_layers);
+    const int conv_dim = config.text.linear_key_head_dim * config.text.linear_num_key_heads * 2 +
+                         config.text.linear_value_head_dim * config.text.linear_num_value_heads;
+    for (int layer = 0; layer < config.text.num_hidden_layers; ++layer) {
+        if (config.text.layer_types[layer] == "linear_attention") {
+            state.linear[layer].conv_state.assign(static_cast<size_t>(conv_dim) * config.text.linear_conv_kernel_dim, 0.0f);
             state.linear[layer].recurrent_state.assign(
-                static_cast<size_t>(config.linear_num_value_heads) *
-                    config.linear_key_head_dim *
-                    config.linear_value_head_dim,
+                static_cast<size_t>(config.text.linear_num_value_heads) *
+                    config.text.linear_key_head_dim *
+                    config.text.linear_value_head_dim,
                 0.0f);
         } else {
             state.full[layer].max_seq_len = max_seq_len;
             state.full[layer].key_cache.assign(
-                static_cast<size_t>(max_seq_len) * config.num_key_value_heads * config.head_dim,
+                static_cast<size_t>(max_seq_len) * config.text.num_key_value_heads * config.text.head_dim,
                 0.0f);
             state.full[layer].value_cache.assign(
-                static_cast<size_t>(max_seq_len) * config.num_key_value_heads * config.head_dim,
+                static_cast<size_t>(max_seq_len) * config.text.num_key_value_heads * config.text.head_dim,
                 0.0f);
         }
     }
@@ -123,7 +123,7 @@ bool QwenModel::generate_sequence_device(
                 emb,
                 hidden,
                 hidden_size,
-                config_.rms_norm_eps,
+                config_.text.rms_norm_eps,
                 true,
                 token_slot)) {
             return false;
@@ -177,7 +177,7 @@ bool QwenModel::decode_one_device(int token, RunState & state, Timing & timing, 
 }
 
 const void * QwenModel::forward_token_device(int token, RunState & state) const {
-    const int hidden_size = config_.hidden_size;
+    const int hidden_size = config_.text.hidden_size;
     void * current = cuda_token_hidden_buffer(0, hidden_size);
     void * next = cuda_token_hidden_buffer(1, hidden_size);
     if (!current || !next || !cuda_embedding_lookup_device(params_.embed_tokens, token, current)) {
@@ -187,7 +187,7 @@ const void * QwenModel::forward_token_device(int token, RunState & state) const 
 }
 
 const void * QwenModel::forward_token_device_from_device(const void * device_token, RunState & state) const {
-    const int hidden_size = config_.hidden_size;
+    const int hidden_size = config_.text.hidden_size;
     void * current = cuda_token_hidden_buffer(0, hidden_size);
     void * next = cuda_token_hidden_buffer(1, hidden_size);
     if (!current || !next || !cuda_embedding_lookup_device_token(params_.embed_tokens, device_token, current)) {
@@ -197,10 +197,10 @@ const void * QwenModel::forward_token_device_from_device(const void * device_tok
 }
 
 const void * QwenModel::forward_token_device_layers(void * current, void * next, RunState & state) const {
-    const int hidden_size = config_.hidden_size;
+    const int hidden_size = config_.text.hidden_size;
     const int pos = state.seq_len;
 
-    for (int layer = 0; layer < config_.num_hidden_layers; ++layer) {
+    for (int layer = 0; layer < config_.text.num_hidden_layers; ++layer) {
         const LayerWeights & w = params_.layers[layer];
         bool ok = false;
         if (w.type == "linear_attention") {
@@ -223,12 +223,12 @@ const void * QwenModel::forward_token_device_layers(void * current, void * next,
                 next,
                 hidden_size,
                 state.linear[layer].cuda_state,
-                config_.linear_num_key_heads,
-                config_.linear_num_value_heads,
-                config_.linear_key_head_dim,
-                config_.linear_value_head_dim,
-                config_.linear_conv_kernel_dim,
-                config_.rms_norm_eps,
+                config_.text.linear_num_key_heads,
+                config_.text.linear_num_value_heads,
+                config_.text.linear_key_head_dim,
+                config_.text.linear_value_head_dim,
+                config_.text.linear_conv_kernel_dim,
+                config_.text.rms_norm_eps,
                 true);
         } else {
             ok = cuda_full_attention_full_layer_device(
@@ -247,14 +247,14 @@ const void * QwenModel::forward_token_device_layers(void * current, void * next,
                 next,
                 hidden_size,
                 state.full[layer].cuda_state,
-                config_.num_attention_heads,
-                config_.num_key_value_heads,
-                config_.head_dim,
+                config_.text.num_attention_heads,
+                config_.text.num_key_value_heads,
+                config_.text.head_dim,
                 state.full[layer].max_seq_len,
                 pos,
-                config_.rope_theta,
-                config_.partial_rotary_factor,
-                config_.rms_norm_eps,
+                config_.text.rope_parameters.rope_theta,
+                config_.text.rope_parameters.partial_rotary_factor,
+                config_.text.rms_norm_eps,
                 true);
         }
         if (!ok) {
@@ -272,7 +272,7 @@ std::vector<float> QwenModel::forward_token(int token, RunState & state) const {
     cpu::embedding_lookup(params_.embed_tokens, token, x);
     const int pos = state.seq_len;
 
-    for (int layer = 0; layer < config_.num_hidden_layers; ++layer) {
+    for (int layer = 0; layer < config_.text.num_hidden_layers; ++layer) {
         const LayerWeights & w = params_.layers[layer];
         if (w.type == "linear_attention") {
             std::vector<float> layer_out;
@@ -299,7 +299,7 @@ std::vector<float> QwenModel::forward_token(int token, RunState & state) const {
             mixer_done = ops::rmsnorm_full_attention_project(config_, w, x, state.full[layer], pos, mixer_out);
         }
         if (!mixer_done) {
-            cpu::rms_norm(w.input_norm, x, normed, config_.rms_norm_eps, true);
+            cpu::rms_norm(w.input_norm, x, normed, config_.text.rms_norm_eps, true);
             if (w.type == "linear_attention") {
                 ops::linear_attention(config_, w, normed, state.linear[layer], mixer_out);
             } else {
@@ -311,7 +311,7 @@ std::vector<float> QwenModel::forward_token(int token, RunState & state) const {
 
         residual = x;
         if (!ops::rmsnorm_mlp(config_, w, x, mixer_out)) {
-            cpu::rms_norm(w.post_norm, x, normed, config_.rms_norm_eps, true);
+            cpu::rms_norm(w.post_norm, x, normed, config_.text.rms_norm_eps, true);
             ops::mlp(w, normed, mixer_out);
         }
         x = residual;
@@ -319,7 +319,7 @@ std::vector<float> QwenModel::forward_token(int token, RunState & state) const {
     }
 
     std::vector<float> normed;
-    cpu::rms_norm(params_.final_norm, x, normed, config_.rms_norm_eps, true);
+    cpu::rms_norm(params_.final_norm, x, normed, config_.text.rms_norm_eps, true);
     state.seq_len += 1;
     return normed;
 }
@@ -340,7 +340,7 @@ bool QwenModel::argmax_logits_device(const void * device_hidden, Timing & timing
             emb,
             device_hidden,
             hidden_size,
-            config_.rms_norm_eps,
+            config_.text.rms_norm_eps,
             true,
             best_id)) {
         return false;
@@ -349,31 +349,45 @@ bool QwenModel::argmax_logits_device(const void * device_hidden, Timing & timing
     return true;
 }
 
-std::vector<int> run_generation(
-    const ModelConfig & config,
-    const ModelWeights & weights,
+std::vector<int> QwenModel::run_token_generation(
+    RunState & state,
     const Args & args,
     const std::vector<int> & input_ids,
-    Timing & timing) {
-    QwenModel model(config, weights);
-    RunState state = make_run_state(config, timing.input_tokens + args.max_new_tokens + 4);
+    Timing & timing) const {
     std::vector<int> generated;
-    if (args.greedy && model.generate_sequence_device(input_ids, state, args.max_new_tokens, config.eos_token_id, timing, generated)) {
-        return generated;
-    }
-    int next = model.generate_next(input_ids, state, timing);
+    int next = generate_next(input_ids, state, timing);
     for (int i = 0; i < args.max_new_tokens; ++i) {
         generated.push_back(next);
         timing.generated_ids.push_back(next);
         timing.generated_tokens += 1;
-        if (next == config.eos_token_id) {
+        if (next == config_.text.eos_token_id) {
             break;
         }
         if (i + 1 < args.max_new_tokens) {
-            next = model.decode_one(next, state, timing);
+            next = decode_one(next, state, timing);
         }
     }
     return generated;
+}
+
+std::vector<int> QwenModel::run_greedy_generation(
+    RunState & state,
+    const Args & args,
+    const std::vector<int> & input_ids,
+    Timing & timing) const {
+    std::vector<int> generated;
+    if (generate_sequence_device(input_ids, state, args.max_new_tokens, config_.text.eos_token_id, timing, generated)) {
+        return generated;
+    }
+    return run_token_generation(state, args, input_ids, timing);
+}
+
+std::vector<int> QwenModel::run_non_greedy_generation(
+    RunState & state,
+    const Args & args,
+    const std::vector<int> & input_ids,
+    Timing & timing) const {
+    return run_token_generation(state, args, input_ids, timing);
 }
 
 } // namespace llm_inference

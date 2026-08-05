@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../core/config.h"
-#include "../core/safetensors.h"
+#include "../safetensors/safetensors.h"
 
 #include <string>
 #include <vector>
@@ -57,9 +57,6 @@ struct ModelParams {
     TensorRef final_norm;
     std::vector<LayerWeights> layers;
 };
-
-// 校验 Qwen3.5 推理路径需要的 tensor 是否齐全。
-void validate_qwen_tensors(const ModelWeights & weights, const ModelConfig & config);
 
 // 从 mmap 权重一次性解析出结构化 ModelParams（不拷贝权重数据）。
 ModelParams parse_model_params(const ModelWeights & weights, const ModelConfig & config);

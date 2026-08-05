@@ -2903,9 +2903,9 @@ const void * cuda_prefill_batch(
         return nullptr;
     }
     const int tokens = static_cast<int>(prompt_ids.size());
-    const int hidden_dim = config.hidden_size;
+    const int hidden_dim = config.text.hidden_size;
     auto tensor = [&](const std::string & name) {
-        return tensor_ref(weights, name);
+        return weights.tensor_ref(name);
     };
 
     auto & cache = cuda_weight_cache();
@@ -2940,7 +2940,7 @@ const void * cuda_prefill_batch(
     ensure_u16_buffer(cache.norm_bf16_buffer, cache.norm_bf16_bytes, hidden_bf16_bytes, "batch norm bf16");
     ensure_u16_buffer(cache.post_norm_bf16_buffer, cache.post_norm_bf16_bytes, hidden_bf16_bytes, "batch post norm bf16");
 
-    for (int layer = 0; layer < config.num_hidden_layers; ++layer) {
+    for (int layer = 0; layer < config.text.num_hidden_layers; ++layer) {
         const std::string prefix = "model.language_model.layers." + std::to_string(layer) + ".";
         const TensorRef input_norm_w = tensor(prefix + "input_layernorm.weight");
         DeviceWeight * input_norm_device = cached_cuda_weight(input_norm_w);
@@ -2953,21 +2953,21 @@ const void * cuda_prefill_batch(
             cache.norm_bf16_buffer,
             tokens,
             hidden_dim,
-            config.rms_norm_eps,
+            config.text.rms_norm_eps,
             true,
             nullptr);
         check_cuda(cudaGetLastError(), "launch_rms_norm_batch_to_bf16 input 失败");
 
-        if (config.layer_types[layer] == "linear_attention") {
-            const int key_heads = config.linear_num_key_heads;
-            const int value_heads = config.linear_num_value_heads;
-            const int k_dim = config.linear_key_head_dim;
-            const int v_dim = config.linear_value_head_dim;
+        if (config.text.layer_types[layer] == "linear_attention") {
+            const int key_heads = config.text.linear_num_key_heads;
+            const int value_heads = config.text.linear_num_value_heads;
+            const int k_dim = config.text.linear_key_head_dim;
+            const int v_dim = config.text.linear_value_head_dim;
             const int key_total = key_heads * k_dim;
             const int value_total = value_heads * v_dim;
             const int conv_dim = key_total * 2 + value_total;
             CudaLinearAttentionState * state =
-                ensure_linear_attention_state(linear_states[layer], key_heads, value_heads, k_dim, v_dim, config.linear_conv_kernel_dim);
+                ensure_linear_attention_state(linear_states[layer], key_heads, value_heads, k_dim, v_dim, config.text.linear_conv_kernel_dim);
             ensure_float_buffer(state->batch_projection, state->batch_projection_bytes, static_cast<size_t>(tokens) * conv_dim * sizeof(float), "batch linear projection");
             ensure_float_buffer(state->batch_z, state->batch_z_bytes, static_cast<size_t>(tokens) * value_total * sizeof(float), "batch linear z");
             ensure_float_buffer(state->batch_b, state->batch_b_bytes, static_cast<size_t>(tokens) * value_heads * sizeof(float), "batch linear b");
@@ -3016,7 +3016,7 @@ const void * cuda_prefill_batch(
                 state->batch_conv_out,
                 tokens,
                 conv_dim,
-                config.linear_conv_kernel_dim,
+                config.text.linear_conv_kernel_dim,
                 nullptr);
             check_cuda(cudaGetLastError(), "launch_linear_attention_conv_batch 失败");
             DeviceWeight * a_log_device = cached_cuda_weight(a_log);
@@ -3040,7 +3040,7 @@ const void * cuda_prefill_batch(
                 value_heads,
                 k_dim,
                 v_dim,
-                config.rms_norm_eps,
+                config.text.rms_norm_eps,
                 nullptr);
             check_cuda(cudaGetLastError(), "launch_linear_attention_recurrent_batch 失败");
             DeviceWeight * attn_out_device = cached_cuda_weight(attn_out_w);
@@ -3051,9 +3051,9 @@ const void * cuda_prefill_batch(
             check_cuda(cudaGetLastError(), "launch_float_to_lowp batch linear gated 失败");
             cublas_batch_matvec_to_device(cache, attn_out_w, *attn_out_device, state->batch_gated_bf16, attn_out_device->type, tokens, cache.mixer_buffer);
         } else {
-            const int n_heads = config.num_attention_heads;
-            const int kv_heads = config.num_key_value_heads;
-            const int head_dim = config.head_dim;
+            const int n_heads = config.text.num_attention_heads;
+            const int kv_heads = config.text.num_key_value_heads;
+            const int head_dim = config.text.head_dim;
             const int q_total = n_heads * head_dim;
             const int kv_total = kv_heads * head_dim;
             CudaFullAttentionState * state =
@@ -3100,9 +3100,9 @@ const void * cuda_prefill_batch(
                 n_heads,
                 head_dim,
                 seq_len,
-                config.rope_theta,
-                config.partial_rotary_factor,
-                config.rms_norm_eps,
+                config.text.rope_parameters.rope_theta,
+                config.text.rope_parameters.partial_rotary_factor,
+                config.text.rms_norm_eps,
                 nullptr);
             check_cuda(cudaGetLastError(), "launch_full_attention_q_batch 失败");
             DeviceWeight * k_norm_device = cached_cuda_weight(k_norm_w);
@@ -3120,9 +3120,9 @@ const void * cuda_prefill_batch(
                 head_dim,
                 full_max_seq_lens[layer],
                 seq_len,
-                config.rope_theta,
-                config.partial_rotary_factor,
-                config.rms_norm_eps,
+                config.text.rope_parameters.rope_theta,
+                config.text.rope_parameters.partial_rotary_factor,
+                config.text.rms_norm_eps,
                 nullptr);
             check_cuda(cudaGetLastError(), "launch_full_attention_kv_batch 失败");
             launch_full_attention_attend_batch(
@@ -3161,7 +3161,7 @@ const void * cuda_prefill_batch(
             cache.post_norm_bf16_buffer,
             tokens,
             hidden_dim,
-            config.rms_norm_eps,
+            config.text.rms_norm_eps,
             true,
             nullptr);
         check_cuda(cudaGetLastError(), "launch_add_rms_norm_batch_to_bf16 post 失败");

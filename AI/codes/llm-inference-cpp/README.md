@@ -44,8 +44,13 @@ cmake --build build -j
 ```bash
 mkdir -p build
 g++ -std=c++17 -O3 -march=native -fopenmp -Wall -Wextra -Wpedantic \
+  -Ithird_party \
   src/core/*.cpp \
+  src/safetensors/*.cpp \
+  src/kernels/cpu/*.cpp \
+  src/kernels/cuda/*.cpp \
   src/model/*.cpp \
+  src/ops/*.cpp \
   src/main.cpp \
   -o build/llm-inference-cpp
 ```
@@ -56,13 +61,18 @@ g++ -std=c++17 -O3 -march=native -fopenmp -Wall -Wextra -Wpedantic \
 src/main.cpp/.h               CLI 流程编排
 src/core/cli.cpp/.h           参数解析
 src/core/common.cpp/.h        常量、日志、计时、基础类型
-src/core/config.cpp/.h        config.json 解析
+src/core/config.cpp/.h        config.json 解析，使用 nlohmann/json
 src/core/cuda_kernels.cu/.h   CUDA kernel launch 封装
-src/core/safetensors.cpp/.h   safetensors mmap 和 tensor metadata
+src/safetensors/safetensors.cpp/.h   safetensors mmap 和 tensor metadata
 src/core/tensor_ops.cpp/.h    BF16/F16/F32 读取、matvec、norm、激活函数
 src/core/tokenizer.cpp/.h     默认 prompt ids、vocab 反查、detokenize
 src/core/profile.cpp/.h       JSON timing 和 tensor dump
-src/model/NativeQwen.cpp/.h   Qwen3.5 forward、linear/full attention、KV/recurrent cache
+src/kernels/cpu/*.cpp/.h      CPU dtype、matvec、embedding、RMSNorm、elementwise kernel
+src/kernels/cuda/cuda_ops.cpp/.h CUDA fused attention / MLP / prefill 操作
+src/model/QwenModel.cpp/.h    Qwen3.5 forward、linear/full attention、KV/recurrent cache
+src/model/weights.cpp/.h      Qwen 权重命名和校验
+src/ops/ops.cpp/.h            设备/CPU 路径选择封装
+third_party/nlohmann/json.hpp vendored JSON single-header
 ```
 
 ## 运行

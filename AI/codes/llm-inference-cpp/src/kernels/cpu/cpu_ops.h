@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../core/safetensors.h"
+#include "../../safetensors/safetensors.h"
 
 #include <cstdint>
 #include <string>

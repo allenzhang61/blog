@@ -64,10 +64,10 @@ namespace {
 
 // 对单个 full attention head 应用 RoPE。
 void apply_rope(const ModelConfig & config, float * vec, int pos) {
-    const int rotary_dim = static_cast<int>(config.head_dim * config.partial_rotary_factor);
+    const int rotary_dim = static_cast<int>(config.text.head_dim * config.text.rope_parameters.partial_rotary_factor);
     const int half = rotary_dim / 2;
     for (int i = 0; i < half; ++i) {
-        const float inv_freq = 1.0f / std::pow(config.rope_theta, static_cast<float>(2 * i) / rotary_dim);
+        const float inv_freq = 1.0f / std::pow(config.text.rope_parameters.rope_theta, static_cast<float>(2 * i) / rotary_dim);
         const float angle = static_cast<float>(pos) * inv_freq;
         const float c = std::cos(angle);
         const float s = std::sin(angle);
@@ -103,12 +103,12 @@ bool linear_attention_full_layer(
         w.mlp.down,
         x,
         state.cuda_state,
-        config.linear_num_key_heads,
-        config.linear_num_value_heads,
-        config.linear_key_head_dim,
-        config.linear_value_head_dim,
-        config.linear_conv_kernel_dim,
-        config.rms_norm_eps,
+        config.text.linear_num_key_heads,
+        config.text.linear_num_value_heads,
+        config.text.linear_key_head_dim,
+        config.text.linear_value_head_dim,
+        config.text.linear_conv_kernel_dim,
+        config.text.rms_norm_eps,
         true,
         out);
 }
@@ -134,14 +134,14 @@ bool full_attention_full_layer(
         w.mlp.down,
         x,
         state.cuda_state,
-        config.num_attention_heads,
-        config.num_key_value_heads,
-        config.head_dim,
+        config.text.num_attention_heads,
+        config.text.num_key_value_heads,
+        config.text.head_dim,
         state.max_seq_len,
         pos,
-        config.rope_theta,
-        config.partial_rotary_factor,
-        config.rms_norm_eps,
+        config.text.rope_parameters.rope_theta,
+        config.text.rope_parameters.partial_rotary_factor,
+        config.text.rms_norm_eps,
         true,
         out);
 }
@@ -165,12 +165,12 @@ bool rmsnorm_linear_attention_project(
         w.lin.out_proj,
         x,
         state.cuda_state,
-        config.linear_num_key_heads,
-        config.linear_num_value_heads,
-        config.linear_key_head_dim,
-        config.linear_value_head_dim,
-        config.linear_conv_kernel_dim,
-        config.rms_norm_eps,
+        config.text.linear_num_key_heads,
+        config.text.linear_num_value_heads,
+        config.text.linear_key_head_dim,
+        config.text.linear_value_head_dim,
+        config.text.linear_conv_kernel_dim,
+        config.text.rms_norm_eps,
         true,
         out);
 }
@@ -192,14 +192,14 @@ bool rmsnorm_full_attention_project(
         w.full.o_proj,
         x,
         state.cuda_state,
-        config.num_attention_heads,
-        config.num_key_value_heads,
-        config.head_dim,
+        config.text.num_attention_heads,
+        config.text.num_key_value_heads,
+        config.text.head_dim,
         state.max_seq_len,
         pos,
-        config.rope_theta,
-        config.partial_rotary_factor,
-        config.rms_norm_eps,
+        config.text.rope_parameters.rope_theta,
+        config.text.rope_parameters.partial_rotary_factor,
+        config.text.rms_norm_eps,
         true,
         out);
 }
@@ -218,7 +218,7 @@ bool rmsnorm_mlp(
         w.mlp.up,
         w.mlp.down,
         x,
-        config.rms_norm_eps,
+        config.text.rms_norm_eps,
         true,
         out);
 }
@@ -229,14 +229,14 @@ void linear_attention(
     const std::vector<float> & x,
     LinearLayerState & state,
     std::vector<float> & out) {
-    const int key_heads = config.linear_num_key_heads;
-    const int value_heads = config.linear_num_value_heads;
-    const int k_dim = config.linear_key_head_dim;
-    const int v_dim = config.linear_value_head_dim;
+    const int key_heads = config.text.linear_num_key_heads;
+    const int value_heads = config.text.linear_num_value_heads;
+    const int k_dim = config.text.linear_key_head_dim;
+    const int v_dim = config.text.linear_value_head_dim;
     const int key_total = key_heads * k_dim;
     const int value_total = value_heads * v_dim;
     const int conv_dim = key_total * 2 + value_total;
-    const int kernel = config.linear_conv_kernel_dim;
+    const int kernel = config.text.linear_conv_kernel_dim;
 
     if (cuda_linear_attention_project_layer(
             w.lin.in_proj_qkv,
@@ -255,7 +255,7 @@ void linear_attention(
             k_dim,
             v_dim,
             kernel,
-            config.rms_norm_eps,
+            config.text.rms_norm_eps,
             out)) {
         return;
     }
@@ -285,7 +285,7 @@ void linear_attention(
             k_dim,
             v_dim,
             kernel,
-            config.rms_norm_eps,
+            config.text.rms_norm_eps,
             out)) {
         return;
     }
@@ -380,7 +380,7 @@ void linear_attention(
             z.data() + static_cast<size_t>(vh) * v_dim,
             gated.data() + static_cast<size_t>(vh) * v_dim,
             v_dim,
-            config.rms_norm_eps);
+            config.text.rms_norm_eps);
     }
     matvec(w.lin.out_proj, gated, out);
 }
@@ -392,9 +392,9 @@ void full_attention(
     FullAttentionState & state,
     int pos,
     std::vector<float> & out) {
-    const int n_heads = config.num_attention_heads;
-    const int kv_heads = config.num_key_value_heads;
-    const int head_dim = config.head_dim;
+    const int n_heads = config.text.num_attention_heads;
+    const int kv_heads = config.text.num_key_value_heads;
+    const int head_dim = config.text.head_dim;
     const int q_total = n_heads * head_dim;
     const int kv_total = kv_heads * head_dim;
 
@@ -412,9 +412,9 @@ void full_attention(
             head_dim,
             state.max_seq_len,
             pos,
-            config.rope_theta,
-            config.partial_rotary_factor,
-            config.rms_norm_eps,
+            config.text.rope_parameters.rope_theta,
+            config.text.rope_parameters.partial_rotary_factor,
+            config.text.rms_norm_eps,
             out)) {
         return;
     }
@@ -439,9 +439,9 @@ void full_attention(
             head_dim,
             state.max_seq_len,
             pos,
-            config.rope_theta,
-            config.partial_rotary_factor,
-            config.rms_norm_eps,
+            config.text.rope_parameters.rope_theta,
+            config.text.rope_parameters.partial_rotary_factor,
+            config.text.rms_norm_eps,
             out)) {
         return;
     }
@@ -460,14 +460,14 @@ void full_attention(
     for (int h = 0; h < n_heads; ++h) {
         std::vector<float> tmp(q.begin() + h * head_dim, q.begin() + (h + 1) * head_dim);
         std::vector<float> normed;
-        cpu::rms_norm(q_norm_w, tmp, normed, config.rms_norm_eps, true);
+        cpu::rms_norm(q_norm_w, tmp, normed, config.text.rms_norm_eps, true);
         std::copy(normed.begin(), normed.end(), q.begin() + h * head_dim);
         apply_rope(config, q.data() + h * head_dim, pos);
     }
     for (int h = 0; h < kv_heads; ++h) {
         std::vector<float> tmp(k.begin() + h * head_dim, k.begin() + (h + 1) * head_dim);
         std::vector<float> normed;
-        cpu::rms_norm(k_norm_w, tmp, normed, config.rms_norm_eps, true);
+        cpu::rms_norm(k_norm_w, tmp, normed, config.text.rms_norm_eps, true);
         std::copy(normed.begin(), normed.end(), k.begin() + h * head_dim);
         apply_rope(config, k.data() + h * head_dim, pos);
     }

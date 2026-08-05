@@ -2,8 +2,8 @@
 
 #include "cli.h"
 #include "config.h"
-#include "safetensors.h"
 #include "tensor_ops.h"
+#include "../safetensors/safetensors.h"
 
 #include <cstdint>
 #include <string>
@@ -42,13 +42,7 @@ struct Timing {
 // 转义字符串，生成可嵌入 JSON 的内容。
 std::string json_escape(const std::string & value);
 
-// 将 tensor shape 转为 "[d0, d1, ...]" 字符串。
-std::string shape_to_string(const std::vector<int64_t> & shape);
-
 // 汇总配置、权重和耗时信息，生成 profile JSON。
 std::string profile_json(const ModelConfig & config, const ModelWeights & weights, const Timing & timing, const Args & args);
-
-// 打印当前权重中所有 tensor 的名称、dtype、shape 和文件信息。
-void dump_tensors(const ModelWeights & weights);
 
 } // namespace llm_inference

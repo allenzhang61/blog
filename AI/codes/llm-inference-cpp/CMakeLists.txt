@@ -14,7 +14,7 @@ add_executable(llm-inference-cpp
     src/core/common.cpp
     src/core/config.cpp
     src/core/profile.cpp
-    src/core/safetensors.cpp
+    src/safetensors/safetensors.cpp
     src/core/tensor_ops.cpp
     src/kernels/cuda/cuda_ops.cpp
     src/core/tokenizer.cpp
@@ -23,12 +23,13 @@ add_executable(llm-inference-cpp
     src/kernels/cpu/embedding.cpp
     src/kernels/cpu/rmsnorm.cpp
     src/kernels/cpu/elementwise.cpp
-    src/tensor/tensor.cpp
     src/ops/ops.cpp
     src/main.cpp
     src/model/QwenModel.cpp
     src/model/weights.cpp
 )
+
+target_include_directories(llm-inference-cpp SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)

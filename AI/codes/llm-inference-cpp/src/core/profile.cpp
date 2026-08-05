@@ -3,33 +3,9 @@
 #include "../kernels/cuda/cuda_ops.h"
 
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 
 namespace llm_inference {
-
-std::string shape_to_string(const std::vector<int64_t> & shape) {
-    std::ostringstream out;
-    out << "[";
-    for (size_t i = 0; i < shape.size(); ++i) {
-        if (i > 0) {
-            out << ", ";
-        }
-        out << shape[i];
-    }
-    out << "]";
-    return out.str();
-}
-
-void dump_tensors(const ModelWeights & weights) {
-    for (const auto & [name, info] : weights.tensors) {
-        std::cerr << name << " dtype=" << info.dtype
-                  << " shape=" << shape_to_string(info.shape)
-                  << " file=" << weights.files[info.file_index].path.filename().string()
-                  << " bytes=" << (info.data_end - info.data_begin)
-                  << "\n";
-    }
-}
 
 std::string json_escape(const std::string & value) {
     std::ostringstream out;
@@ -65,10 +41,10 @@ std::string profile_json(
     out << "  \"load_weights_mmap_s\": " << timing.load_weights_s << ",\n";
     out << "  \"load_vocab_s\": " << timing.load_vocab_s << ",\n";
     out << "  \"validate_tensors_s\": " << timing.validate_s << ",\n";
-    out << "  \"mapped_files\": " << weights.files.size() << ",\n";
-    out << "  \"tensor_count\": " << weights.tensors.size() << ",\n";
-    out << "  \"hidden_size\": " << config.hidden_size << ",\n";
-    out << "  \"num_hidden_layers\": " << config.num_hidden_layers << ",\n";
+    out << "  \"mapped_files\": " << weights.mapped_file_count() << ",\n";
+    out << "  \"tensor_count\": " << weights.tensor_count() << ",\n";
+    out << "  \"hidden_size\": " << config.text.hidden_size << ",\n";
+    out << "  \"num_hidden_layers\": " << config.text.num_hidden_layers << ",\n";
     out << "  \"input_tokens\": " << timing.input_tokens << ",\n";
     out << "  \"generated_tokens\": " << timing.generated_tokens << ",\n";
     out << "  \"generated_ids\": [";
