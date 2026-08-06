@@ -8,7 +8,7 @@
 namespace llm_inference {
 
 // linear attention 层的运行时缓存。
-struct LinearLayerState {
+struct LinearAttentionState {
     // depthwise conv 的滑动窗口状态。
     std::vector<float> conv_state;
     // recurrent linear attention 状态。
@@ -16,12 +16,12 @@ struct LinearLayerState {
     // CUDA 侧 fused linear attention state。
     void * cuda_state = nullptr;
 
-    LinearLayerState() = default;
-    LinearLayerState(const LinearLayerState &) = delete;
-    LinearLayerState & operator=(const LinearLayerState &) = delete;
-    LinearLayerState(LinearLayerState && other) noexcept;
-    LinearLayerState & operator=(LinearLayerState && other) noexcept;
-    ~LinearLayerState();
+    LinearAttentionState() = default;
+    LinearAttentionState(const LinearAttentionState &) = delete;
+    LinearAttentionState & operator=(const LinearAttentionState &) = delete;
+    LinearAttentionState(LinearAttentionState && other) noexcept;
+    LinearAttentionState & operator=(LinearAttentionState && other) noexcept;
+    ~LinearAttentionState();
 };
 
 // full attention 层的运行时 KV cache。
@@ -55,7 +55,7 @@ void linear_attention(
     const ModelConfig & config,
     const LayerWeights & w,
     const std::vector<float> & x,
-    LinearLayerState & state,
+    LinearAttentionState & state,
     std::vector<float> & out);
 
 // CPU mixer：full attention。已在 input_norm 之后。

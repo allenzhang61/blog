@@ -16,7 +16,7 @@ struct RunState {
     // 已处理的序列长度。
     int seq_len = 0;
     // 每层 linear attention 状态。
-    std::vector<LinearLayerState> linear;
+    std::vector<LinearAttentionState> linear;
     // 每层 full attention 状态。
     std::vector<FullAttentionState> full;
 };

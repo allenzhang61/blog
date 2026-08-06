@@ -14,7 +14,6 @@ add_executable(llm-inference-cpp
     src/core/config.cpp
     src/core/profile.cpp
     src/safetensors/safetensors.cpp
-    src/core/tensor_ops.cpp
     src/core/tokenizer.cpp
     src/kernels/cpu/dtype.cpp
     src/kernels/cpu/matvec.cpp
