@@ -79,149 +79,6 @@ void apply_rope(const ModelConfig & config, float * vec, int pos) {
 
 } // namespace
 
-bool linear_attention_full_layer(
-    const ModelConfig & config,
-    const LayerWeights & w,
-    const std::vector<float> & x,
-    LinearLayerState & state,
-    std::vector<float> & out) {
-    return cuda_linear_attention_full_layer(
-        w.input_norm,
-        w.lin.in_proj_qkv,
-        w.lin.in_proj_z,
-        w.lin.in_proj_b,
-        w.lin.in_proj_a,
-        w.lin.conv1d,
-        w.lin.a_log,
-        w.lin.dt_bias,
-        w.lin.norm,
-        w.lin.out_proj,
-        w.post_norm,
-        w.mlp.gate,
-        w.mlp.up,
-        w.mlp.down,
-        x,
-        state.cuda_state,
-        config.text.linear_num_key_heads,
-        config.text.linear_num_value_heads,
-        config.text.linear_key_head_dim,
-        config.text.linear_value_head_dim,
-        config.text.linear_conv_kernel_dim,
-        config.text.rms_norm_eps,
-        true,
-        out);
-}
-
-bool full_attention_full_layer(
-    const ModelConfig & config,
-    const LayerWeights & w,
-    const std::vector<float> & x,
-    FullAttentionState & state,
-    int pos,
-    std::vector<float> & out) {
-    return cuda_full_attention_full_layer(
-        w.input_norm,
-        w.full.q_proj,
-        w.full.k_proj,
-        w.full.v_proj,
-        w.full.q_norm,
-        w.full.k_norm,
-        w.full.o_proj,
-        w.post_norm,
-        w.mlp.gate,
-        w.mlp.up,
-        w.mlp.down,
-        x,
-        state.cuda_state,
-        config.text.num_attention_heads,
-        config.text.num_key_value_heads,
-        config.text.head_dim,
-        state.max_seq_len,
-        pos,
-        config.text.rope_parameters.rope_theta,
-        config.text.rope_parameters.partial_rotary_factor,
-        config.text.rms_norm_eps,
-        true,
-        out);
-}
-
-bool rmsnorm_linear_attention_project(
-    const ModelConfig & config,
-    const LayerWeights & w,
-    const std::vector<float> & x,
-    LinearLayerState & state,
-    std::vector<float> & out) {
-    return cuda_rmsnorm_linear_attention_project_layer(
-        w.input_norm,
-        w.lin.in_proj_qkv,
-        w.lin.in_proj_z,
-        w.lin.in_proj_b,
-        w.lin.in_proj_a,
-        w.lin.conv1d,
-        w.lin.a_log,
-        w.lin.dt_bias,
-        w.lin.norm,
-        w.lin.out_proj,
-        x,
-        state.cuda_state,
-        config.text.linear_num_key_heads,
-        config.text.linear_num_value_heads,
-        config.text.linear_key_head_dim,
-        config.text.linear_value_head_dim,
-        config.text.linear_conv_kernel_dim,
-        config.text.rms_norm_eps,
-        true,
-        out);
-}
-
-bool rmsnorm_full_attention_project(
-    const ModelConfig & config,
-    const LayerWeights & w,
-    const std::vector<float> & x,
-    FullAttentionState & state,
-    int pos,
-    std::vector<float> & out) {
-    return cuda_rmsnorm_full_attention_project_layer(
-        w.input_norm,
-        w.full.q_proj,
-        w.full.k_proj,
-        w.full.v_proj,
-        w.full.q_norm,
-        w.full.k_norm,
-        w.full.o_proj,
-        x,
-        state.cuda_state,
-        config.text.num_attention_heads,
-        config.text.num_key_value_heads,
-        config.text.head_dim,
-        state.max_seq_len,
-        pos,
-        config.text.rope_parameters.rope_theta,
-        config.text.rope_parameters.partial_rotary_factor,
-        config.text.rms_norm_eps,
-        true,
-        out);
-}
-
-bool rmsnorm_mlp(
-    const ModelConfig & config,
-    const LayerWeights & w,
-    const std::vector<float> & x,
-    std::vector<float> & out) {
-    if (!cuda_rmsnorm_mlp_enabled()) {
-        return false;
-    }
-    return cuda_rmsnorm_mlp_layer(
-        w.post_norm,
-        w.mlp.gate,
-        w.mlp.up,
-        w.mlp.down,
-        x,
-        config.text.rms_norm_eps,
-        true,
-        out);
-}
-
 void linear_attention(
     const ModelConfig & config,
     const LayerWeights & w,
@@ -237,28 +94,6 @@ void linear_attention(
     const int conv_dim = key_total * 2 + value_total;
     const int kernel = config.text.linear_conv_kernel_dim;
 
-    if (cuda_linear_attention_project_layer(
-            w.lin.in_proj_qkv,
-            w.lin.in_proj_z,
-            w.lin.in_proj_b,
-            w.lin.in_proj_a,
-            w.lin.conv1d,
-            w.lin.a_log,
-            w.lin.dt_bias,
-            w.lin.norm,
-            w.lin.out_proj,
-            x,
-            state.cuda_state,
-            key_heads,
-            value_heads,
-            k_dim,
-            v_dim,
-            kernel,
-            config.text.rms_norm_eps,
-            out)) {
-        return;
-    }
-
     std::vector<float> mixed;
     std::vector<float> z;
     std::vector<float> b;
@@ -267,27 +102,6 @@ void linear_attention(
     matvec(w.lin.in_proj_z, x, z);
     matvec(w.lin.in_proj_b, x, b);
     matvec(w.lin.in_proj_a, x, a);
-
-    if (cuda_linear_attention_layer(
-            w.lin.conv1d,
-            w.lin.a_log,
-            w.lin.dt_bias,
-            w.lin.norm,
-            w.lin.out_proj,
-            mixed,
-            z,
-            b,
-            a,
-            state.cuda_state,
-            key_heads,
-            value_heads,
-            k_dim,
-            v_dim,
-            kernel,
-            config.text.rms_norm_eps,
-            out)) {
-        return;
-    }
 
     const TensorRef conv_w = w.lin.conv1d;
     std::vector<float> conv_out(conv_dim);
@@ -397,53 +211,12 @@ void full_attention(
     const int q_total = n_heads * head_dim;
     const int kv_total = kv_heads * head_dim;
 
-    if (cuda_full_attention_project_layer(
-            w.full.q_proj,
-            w.full.k_proj,
-            w.full.v_proj,
-            w.full.q_norm,
-            w.full.k_norm,
-            w.full.o_proj,
-            x,
-            state.cuda_state,
-            n_heads,
-            kv_heads,
-            head_dim,
-            state.max_seq_len,
-            pos,
-            config.text.rope_parameters.rope_theta,
-            config.text.rope_parameters.partial_rotary_factor,
-            config.text.rms_norm_eps,
-            out)) {
-        return;
-    }
-
     std::vector<float> q_and_gate;
     std::vector<float> k;
     std::vector<float> v;
     matvec(w.full.q_proj, x, q_and_gate);
     matvec(w.full.k_proj, x, k);
     matvec(w.full.v_proj, x, v);
-
-    if (cuda_full_attention_layer(
-            w.full.q_norm,
-            w.full.k_norm,
-            w.full.o_proj,
-            q_and_gate,
-            k,
-            v,
-            state.cuda_state,
-            n_heads,
-            kv_heads,
-            head_dim,
-            state.max_seq_len,
-            pos,
-            config.text.rope_parameters.rope_theta,
-            config.text.rope_parameters.partial_rotary_factor,
-            config.text.rms_norm_eps,
-            out)) {
-        return;
-    }
 
     std::vector<float> q(q_total);
     std::vector<float> gate(q_total);
@@ -520,10 +293,6 @@ void mlp(
     const TensorRef gate_w = w.mlp.gate;
     const TensorRef up_w = w.mlp.up;
     const TensorRef down_w = w.mlp.down;
-    if (cuda_mlp_layer(gate_w, up_w, down_w, x, out)) {
-        return;
-    }
-
     std::vector<float> gate;
     std::vector<float> up;
     std::vector<float> prod;
@@ -545,10 +314,6 @@ int argmax_logits(const ModelParams & params, const std::vector<float> & hidden)
     }
 
     int best_id = 0;
-    if (cuda_argmax_matvec(emb, hidden, best_id)) {
-        return best_id;
-    }
-
     std::vector<float> logits;
     matvec(emb, hidden, logits);
 

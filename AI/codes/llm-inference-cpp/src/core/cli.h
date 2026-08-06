@@ -29,6 +29,8 @@ struct Args {
     bool profile_timing = false;
     // 是否打印 safetensors 中的 tensor 列表。
     bool dump_tensors = false;
+    // 运行设备；严格设备匹配，不回退。默认 CPU。
+    Device device = Device::CPU;
 };
 
 // 解析 argc/argv，并在参数非法时抛出异常或打印 usage 退出。

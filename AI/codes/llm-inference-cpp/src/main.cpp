@@ -41,7 +41,7 @@ int main(int argc, char ** argv) {
             for (int i = 0; i < args.warmup_runs; ++i) {
                 Timing warm_timing;
                 warm_timing.input_tokens = timing.input_tokens;
-                QwenModel model(config, weights);
+                QwenModel model(config, weights, args.device);
                 RunState warm_state = make_run_state(config, warm_timing.input_tokens + args.max_new_tokens + 4);
                 if (args.greedy) {
                     (void) model.run_greedy_generation(warm_state, args, input_ids, warm_timing);
@@ -55,7 +55,7 @@ int main(int argc, char ** argv) {
 
         log("开始推理...");
         start = Clock::now();
-        QwenModel model(config, weights);
+        QwenModel model(config, weights, args.device);
         RunState state = make_run_state(config, timing.input_tokens + args.max_new_tokens + 4);
         std::vector<int> generated;
         if (args.greedy) {

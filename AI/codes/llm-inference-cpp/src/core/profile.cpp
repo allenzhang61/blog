@@ -37,6 +37,7 @@ std::string profile_json(
     out << "{\n";
     out << "  \"model_id\": \"" << MODEL_ID << "\",\n";
     out << "  \"model_dir\": \"" << json_escape(args.model_dir) << "\",\n";
+    out << "  \"device\": \"" << device_name(args.device) << "\",\n";
     out << "  \"load_config_s\": " << timing.load_config_s << ",\n";
     out << "  \"load_weights_mmap_s\": " << timing.load_weights_s << ",\n";
     out << "  \"load_vocab_s\": " << timing.load_vocab_s << ",\n";

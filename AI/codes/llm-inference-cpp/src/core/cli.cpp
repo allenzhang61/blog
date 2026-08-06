@@ -20,6 +20,7 @@ namespace llm_inference {
         << "  --greedy                 贪心解码\n"
         << "  --disable-thinking       当前仅影响日志；默认 prompt token ids 是 thinking=True 口径\n"
         << "  --warmup-runs N          正式统计前预热 N 次；默认 0\n"
+        << "  --device cpu|cuda        运行设备；严格设备匹配不回退，默认 cpu\n"
         << "  --profile-timing         输出 PROFILE_TIMING_JSON\n"
         << "  --dump-tensors           打印 safetensors 中的 tensor 列表\n"
         << "  -h, --help               显示帮助\n";
@@ -90,10 +91,12 @@ Args parse_args(int argc, char ** argv) {
             args.profile_timing = true;
         } else if (key == "--dump-tensors") {
             args.dump_tensors = true;
-        } else if (key == "--device" || key == "--dtype" || key == "--cache-dir" || key == "--revision" ||
+        } else if (key == "--device") {
+            args.device = device_from_string(need_value(key));
+        } else if (key == "--dtype" || key == "--cache-dir" || key == "--revision" ||
                    key == "--torch-profiler") {
             (void) need_value(key);
-            log("提示：" + key + " 是 Python 版本参数，当前原生 C++ CPU 实现先忽略。");
+            log("提示：" + key + " 是 Python 版本参数，当前原生 C++ 实现先忽略。");
         } else if (key == "--fast-decode" || key == "--static-cache" || key == "--nvtx") {
             log("提示：" + key + " 当前原生 C++ 实现先忽略。");
         } else if (!key.empty() && key[0] == '-') {

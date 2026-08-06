@@ -1,7 +1,6 @@
 #include "tensor_ops.h"
 
 #include "../kernels/cpu/cpu_ops.h"
-#include "../kernels/cuda/cuda_ops.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -93,10 +92,6 @@ void matvec(const TensorRef & weight, const std::vector<float> & x, std::vector<
         throw std::runtime_error("matvec 输入维度不匹配：" + weight.info->name);
     }
     y.assign(out_dim, 0.0f);
-
-    if (cuda_matvec(weight, x, y)) {
-        return;
-    }
 
     if (const std::vector<float> * matrix = cached_float_weight(weight)) {
         cblas_sgemv(
