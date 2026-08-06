@@ -93,9 +93,16 @@ private:
     // mmap 打开单个 safetensors 文件。
     static MappedFile mmap_file(const fs::path & path);
 
+    // 从 safetensors 文件头读取 little-endian uint64 header 长度。
     static uint64_t read_u64_le(const uint8_t * data);
+
+    // 解析 JSON 片段中的 int64 数组，例如 tensor shape。
     static std::vector<int64_t> parse_i64_array(const std::string & text);
+
+    // 查找模型目录下所有 .safetensors 权重文件并排序。
     static std::vector<fs::path> find_safetensors_files(const fs::path & model_dir);
+
+    // 将 shape 转为日志/错误信息中使用的可读字符串。
     static std::string shape_to_string(const std::vector<int64_t> & shape);
 };
 

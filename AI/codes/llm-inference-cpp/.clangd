@@ -1,0 +1,4 @@
+CompileFlags:
+  Add:
+    - -isystem
+    - /Users/zyl/codes/mygithub/blog/AI/codes/llm-inference-cpp/.clion-cache-backup/cuda-12.8-include

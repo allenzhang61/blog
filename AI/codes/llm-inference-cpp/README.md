@@ -13,7 +13,7 @@
 
 ## 当前进度
 
-当前版本已经能在 CPU 上完整跑通一次 Qwen3.5-4B 文本 forward：
+当前版本只保留 CUDA 推理路径，已能在 RTX 3080 上完成 Qwen3.5-4B greedy 生成：
 
 - 解析 `config.json`
 - 扫描 Hugging Face 模型目录中的 `.safetensors`
@@ -21,38 +21,23 @@
 - 解析 safetensors header 中的 tensor 名称、dtype、shape、data_offsets
 - 读取 BF16 / F32 tensor
 - 使用内置默认 prompt token ids 跑 prefill
-- 实现 Qwen3.5 的 linear attention / full attention / MLP / RMSNorm / RoPE / greedy logits
-- 输出加载耗时、prefill 耗时、logits 耗时和 generated token ids
+- CUDA 实现 Qwen3.5 的 linear attention / full attention / MLP / RMSNorm / RoPE / greedy logits
+- 输出加载耗时、prefill 耗时、decode 耗时和 generated token ids
 - 保留与 Python 入口相似的 CLI 参数
 
 还有这些限制：
 
 - 当前只内置了默认 prompt 的 token ids；任意 prompt 需要继续实现 `tokenizer.json` BPE tokenizer，或者用 `--input-ids` 手动传入 token ids
-- 当前是 CPU 教学实现，速度很慢
 - 当前只实现 greedy
-- CUDA kernel 还没有实现
 
 ## 构建
 
 ```bash
-cmake -S . -B build
-cmake --build build -j
-```
-
-如果环境里没有 `cmake`，也可以直接用：
-
-```bash
-mkdir -p build
-g++ -std=c++17 -O3 -march=native -fopenmp -Wall -Wextra -Wpedantic \
-  -Ithird_party \
-  src/core/*.cpp \
-  src/safetensors/*.cpp \
-  src/kernels/cpu/*.cpp \
-  src/kernels/cuda/*.cpp \
-  src/model/*.cpp \
-  src/ops/*.cpp \
-  src/main.cpp \
-  -o build/llm-inference-cpp
+cmake -S . -B build-cuda128 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
+  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc
+cmake --build build-cuda128 -j
 ```
 
 ## 代码结构
@@ -64,14 +49,11 @@ src/core/common.cpp/.h        常量、日志、计时、基础类型
 src/core/config.cpp/.h        config.json 解析，使用 nlohmann/json
 src/core/cuda_kernels.cu/.h   CUDA kernel launch 封装
 src/safetensors/safetensors.cpp/.h   safetensors mmap 和 tensor metadata
-src/core/tensor_ops.cpp/.h    BF16/F16/F32 读取、matvec、norm、激活函数
 src/core/tokenizer.cpp/.h     默认 prompt ids、vocab 反查、detokenize
 src/core/profile.cpp/.h       JSON timing 和 tensor dump
-src/kernels/cpu/*.cpp/.h      CPU dtype、matvec、embedding、RMSNorm、elementwise kernel
 src/kernels/cuda/cuda_ops.cpp/.h CUDA fused attention / MLP / prefill 操作
-src/model/QwenModel.cpp/.h    Qwen3.5 forward、linear/full attention、KV/recurrent cache
+src/model/QwenModel.cpp/.h    Qwen3.5 CUDA forward、linear/full attention、KV/recurrent cache
 src/model/weights.cpp/.h      Qwen 权重命名和校验
-src/ops/ops.cpp/.h            设备/CPU 路径选择封装
 third_party/nlohmann/json.hpp vendored JSON single-header
 ```
 
@@ -87,15 +69,13 @@ config.json
 例如：
 
 ```bash
-./build/llm-inference-cpp \
+./build-cuda128/llm-inference-cpp \
   --model-dir /home/zyl/hf-cache/models--Qwen--Qwen3.5-4B/snapshots/<snapshot> \
   --prompt "介绍一下 TCP 三次握手" \
-  --max-new-tokens 1 \
+  --max-new-tokens 64 \
   --greedy \
   --profile-timing
 ```
-
-在 RTX 3080 那台 WSL 机器上，CPU 跑 15 token prefill + 1 token logits 的一次验证耗时约 86.9s，其中 safetensors mmap 加载只有约 0.02s，主要时间都在原生 CPU 矩阵计算。
 
 ## 验证结果
 
@@ -152,7 +132,6 @@ libcublas-dev-12-8
 ```bash
 cmake -S . -B build-cuda128 \
   -DCMAKE_BUILD_TYPE=Release \
-  -DLLM_INFERENCE_ENABLE_CUDA=ON \
   -DCUDAToolkit_ROOT=/usr/local/cuda-12.8 \
   -DCMAKE_CUDA_COMPILER=/usr/local/cuda-12.8/bin/nvcc
 cmake --build build-cuda128 -j
@@ -204,6 +183,6 @@ CUDA concat projection + project attention + fused MLP 已经把这些路径搬�
 - 每 token 仍有大量小 GEMV，尽管已经合并了一部分 projection。
 - prefill 已改成 batch path，但 batch path 里 linear/full attention projection 还没有完全复用 decode 的 concat projection 布局，仍有继续融合空间。
 - decode 已让 hidden 在层间常驻 GPU，剩余差距主要来自 batch=1 GEMV backend、kernel launch 数量、权重/KV layout 和专用 fused kernel。
-- 另有 `LLM_INFERENCE_CUDA_FUSE_RMSNORM_MLP=1` 可实验性融合 `post_attention_layernorm + MLP`，本轮 64-token 实测为 15.29s，慢于默认路径，所以默认关闭。
-- 另有 `LLM_INFERENCE_CUDA_CONVERT_BF16_TO_F16=1` 可实验性把 2D BF16 权重入 VRAM 时转成 FP16；8-token 对齐，但 warmup 从约 8s 增加到约 68s，正式推理几乎无收益，所以默认关闭。
-- 另有 `LLM_INFERENCE_CUDA_CUSTOM_BF16_GEMV=1` 可实验性启用原生 one-block-per-row BF16 GEMV；8-token 对齐，但从约 0.51s 退到约 0.61s，慢于 cuBLAS，所以默认关闭。
+- 历史实验：`LLM_INFERENCE_CUDA_FUSE_RMSNORM_MLP=1` 曾用于融合 `post_attention_layernorm + MLP`，本轮 64-token 实测为 15.29s，慢于默认路径，代码中已移除。
+- 历史实验：`LLM_INFERENCE_CUDA_CONVERT_BF16_TO_F16=1` 曾用于把 2D BF16 权重入 VRAM 时转成 FP16；8-token 对齐，但 warmup 从约 8s 增加到约 68s，正式推理几乎无收益，代码中已移除。
+- 历史实验：`LLM_INFERENCE_CUDA_CUSTOM_BF16_GEMV=1` 曾用于启用原生 one-block-per-row BF16 GEMV；8-token 对齐，但从约 0.51s 退到约 0.61s，慢于 cuBLAS，代码中已移除。

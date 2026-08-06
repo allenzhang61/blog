@@ -37,7 +37,7 @@ std::string profile_json(
     out << "{\n";
     out << "  \"model_id\": \"" << MODEL_ID << "\",\n";
     out << "  \"model_dir\": \"" << json_escape(args.model_dir) << "\",\n";
-    out << "  \"device\": \"" << device_name(args.device) << "\",\n";
+    out << "  \"device\": \"cuda\",\n";
     out << "  \"load_config_s\": " << timing.load_config_s << ",\n";
     out << "  \"load_weights_mmap_s\": " << timing.load_weights_s << ",\n";
     out << "  \"load_vocab_s\": " << timing.load_vocab_s << ",\n";
@@ -62,18 +62,8 @@ std::string profile_json(
     out << "  \"warmup_runs\": " << args.warmup_runs << ",\n";
     out << "  \"warmup_s\": " << timing.warmup_s << ",\n";
     out << "  \"infer_wall_s\": " << timing.infer_wall_s << ",\n";
-    out << "  \"cuda_cublas_enabled\": " << (cuda_cublas_enabled() ? "true" : "false") << ",\n";
-    out << "  \"cuda_fused_mlp_enabled\": " << (cuda_fused_mlp_enabled() ? "true" : "false") << ",\n";
-    out << "  \"cuda_project_attention_enabled\": " << (cuda_project_attention_enabled() ? "true" : "false") << ",\n";
-    out << "  \"cuda_full_layer_enabled\": " << (cuda_full_layer_enabled() ? "true" : "false") << ",\n";
-    out << "  \"cuda_rmsnorm_mlp_enabled\": " << (cuda_rmsnorm_mlp_enabled() ? "true" : "false") << ",\n";
-    out << "  \"status\": \""
-        << (cuda_full_layer_enabled() ? "native_cuda_full_layer_forward_done" :
-            (cuda_project_attention_enabled() ? "native_cuda_project_attention_fused_mlp_forward_done" :
-            (cuda_fused_mlp_enabled() ? "native_cuda_matvec_fused_mlp_forward_done" :
-            (cuda_cublas_enabled() ? "native_cuda_matvec_forward_done" : "native_cpu_forward_done"))
-        ))
-        << "\"\n";
+    out << "  \"backend\": \"cuda_full_layer\",\n";
+    out << "  \"status\": \"native_cuda_full_layer_forward_done\"\n";
     out << "}";
     return out.str();
 }

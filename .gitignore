@@ -32,6 +32,8 @@ AI/codes/llm-train-cpp/build-*
 AI/codes/llm-train-cpp/default.profraw
 
 AI/codes/llm-inference-cpp/build-mac/
+AI/codes/llm-inference-cpp/.clion-cache-backup/
+AI/codes/llm-inference-cpp/cmake-build-*/
 
 AI/chapter-03/data/*.pt
 AI/chapter-03/data/*.csv

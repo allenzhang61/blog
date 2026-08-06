@@ -1,6 +1,5 @@
 #include "QwenModel.h"
 
-#include "../kernels/cpu/cpu_ops.h"
 #include "../kernels/cuda/cuda_ops.h"
 
 #include <algorithm>
@@ -9,72 +8,68 @@
 
 namespace llm_inference {
 
+LinearAttentionState::LinearAttentionState(LinearAttentionState && other) noexcept
+    : cuda_state(other.cuda_state) {
+    other.cuda_state = nullptr;
+}
+
+LinearAttentionState & LinearAttentionState::operator=(LinearAttentionState && other) noexcept {
+    if (this != &other) {
+        cuda_free_linear_attention_state(cuda_state);
+        cuda_state = other.cuda_state;
+        other.cuda_state = nullptr;
+    }
+    return *this;
+}
+
+LinearAttentionState::~LinearAttentionState() {
+    cuda_free_linear_attention_state(cuda_state);
+}
+
+FullAttentionState::FullAttentionState(FullAttentionState && other) noexcept
+    : max_seq_len(other.max_seq_len),
+      cuda_state(other.cuda_state) {
+    other.cuda_state = nullptr;
+}
+
+FullAttentionState & FullAttentionState::operator=(FullAttentionState && other) noexcept {
+    if (this != &other) {
+        cuda_free_full_attention_state(cuda_state);
+        max_seq_len = other.max_seq_len;
+        cuda_state = other.cuda_state;
+        other.cuda_state = nullptr;
+    }
+    return *this;
+}
+
+FullAttentionState::~FullAttentionState() {
+    cuda_free_full_attention_state(cuda_state);
+}
+
 RunState make_run_state(const ModelConfig & config, int max_seq_len) {
     RunState state;
     state.linear.resize(config.text.num_hidden_layers);
     state.full.resize(config.text.num_hidden_layers);
-    const int conv_dim = config.text.linear_key_head_dim * config.text.linear_num_key_heads * 2 +
-                         config.text.linear_value_head_dim * config.text.linear_num_value_heads;
     for (int layer = 0; layer < config.text.num_hidden_layers; ++layer) {
-        if (config.text.layer_types[layer] == "linear_attention") {
-            state.linear[layer].conv_state.assign(static_cast<size_t>(conv_dim) * config.text.linear_conv_kernel_dim, 0.0f);
-            state.linear[layer].recurrent_state.assign(
-                static_cast<size_t>(config.text.linear_num_value_heads) *
-                    config.text.linear_key_head_dim *
-                    config.text.linear_value_head_dim,
-                0.0f);
-        } else {
+        if (config.text.layer_types[layer] != "linear_attention") {
             state.full[layer].max_seq_len = max_seq_len;
-            state.full[layer].key_cache.assign(
-                static_cast<size_t>(max_seq_len) * config.text.num_key_value_heads * config.text.head_dim,
-                0.0f);
-            state.full[layer].value_cache.assign(
-                static_cast<size_t>(max_seq_len) * config.text.num_key_value_heads * config.text.head_dim,
-                0.0f);
         }
     }
     return state;
 }
 
-QwenModel::QwenModel(const ModelConfig & config, const ModelWeights & weights, Device device)
-    : config_(config), weights_(weights), device_(device), params_(parse_model_params(weights, config)) {
-    if (device_ == Device::CUDA && !cuda_cublas_enabled()) {
-        throw std::runtime_error("请求 device=cuda，但当前构建未启用 CUDA/cuBLAS 或设备不可用（严格设备匹配，不回退 CPU）。");
-    }
+QwenModel::QwenModel(const ModelConfig & config, const ModelWeights & weights)
+    : config_(config), params_(parse_model_params(weights, config)) {
 }
 
-int QwenModel::generate_next(const std::vector<int> & prompt_ids, RunState & state, Timing & timing) const {
-    if (device_ == Device::CUDA) {
-        return generate_next_device(prompt_ids, state, timing);
-    }
-    std::vector<float> hidden;
-    const auto prefill_start = Clock::now();
-    for (int token : prompt_ids) {
-        hidden = forward_token(token, state);
-    }
-    timing.prefill_s = elapsed_s(prefill_start);
-    return argmax_logits(hidden, timing);
-}
-
-int QwenModel::decode_one(int token, RunState & state, Timing & timing) const {
-    if (device_ == Device::CUDA) {
-        return decode_one_device(token, state, timing);
-    }
-    const auto decode_start = Clock::now();
-    std::vector<float> hidden = forward_token(token, state);
-    const int next = argmax_logits(hidden, timing);
-    timing.decode_total_s += elapsed_s(decode_start);
-    return next;
-}
-
-bool QwenModel::generate_sequence_device(
-        const std::vector<int> & prompt_ids,
+std::vector<int> QwenModel::generate(
         RunState & state,
-        int max_new_tokens,
-        int eos_token_id,
-        Timing & timing,
-        std::vector<int> & generated) const {
-    void * generated_device = cuda_generated_token_buffer(max_new_tokens);
+        const Args & args,
+        const std::vector<int> & input_ids,
+        Timing & timing) const {
+    std::vector<int> generated;
+    const int max_new_tokens = args.max_new_tokens;
+    void * generated_device = cuda_token_id_buffer(max_new_tokens);
     if (!generated_device) {
         throw std::runtime_error("CUDA 生成 token 缓冲区分配失败。");
     }
@@ -92,18 +87,12 @@ bool QwenModel::generate_sequence_device(
             full_cuda_states[i] = state.full[i].cuda_state;
             full_max_seq_lens[i] = state.full[i].max_seq_len;
         }
-        hidden = cuda_prefill_batch(config_, weights_, prompt_ids, linear_cuda_states, full_cuda_states, full_max_seq_lens, state.seq_len);
-        if (hidden) {
-            for (size_t i = 0; i < state.linear.size(); ++i) {
-                state.linear[i].cuda_state = linear_cuda_states[i];
-            }
-            for (size_t i = 0; i < state.full.size(); ++i) {
-                state.full[i].cuda_state = full_cuda_states[i];
-            }
-        } else {
-            for (int token : prompt_ids) {
-                hidden = forward_token_device(token, state);
-            }
+        hidden = cuda_prefill_batch(config_, params_, input_ids, linear_cuda_states, full_cuda_states, full_max_seq_lens, state.seq_len);
+        for (size_t i = 0; i < state.linear.size(); ++i) {
+            state.linear[i].cuda_state = linear_cuda_states[i];
+        }
+        for (size_t i = 0; i < state.full.size(); ++i) {
+            state.full[i].cuda_state = full_cuda_states[i];
         }
     }
     if (!cuda_synchronize_device()) {
@@ -128,58 +117,33 @@ bool QwenModel::generate_sequence_device(
             throw std::runtime_error("CUDA final norm + argmax 到设备失败。");
         }
         if (i + 1 < max_new_tokens) {
-            hidden = forward_token_device_from_device(token_slot, state);
+            hidden = forward_token_device(0, token_slot, state);
         }
     }
     if (!cuda_copy_generated_tokens_to_host(generated_device, max_new_tokens, generated)) {
         throw std::runtime_error("CUDA 生成 token 拷回主机失败。");
     }
     timing.decode_total_s += elapsed_s(decode_start);
-    if (eos_token_id >= 0) {
-        const auto eos = std::find(generated.begin(), generated.end(), eos_token_id);
+    if (config_.text.eos_token_id >= 0) {
+        const auto eos = std::find(generated.begin(), generated.end(), config_.text.eos_token_id);
         if (eos != generated.end()) {
             generated.resize(static_cast<size_t>(std::distance(generated.begin(), eos)) + 1);
         }
     }
     timing.generated_tokens += static_cast<int>(generated.size());
     timing.generated_ids.insert(timing.generated_ids.end(), generated.begin(), generated.end());
-    return true;
+    return generated;
 }
 
-int QwenModel::generate_next_device(const std::vector<int> & prompt_ids, RunState & state, Timing & timing) const {
-    const auto prefill_start = Clock::now();
-    const void * hidden = nullptr;
-    for (int token : prompt_ids) {
-        hidden = forward_token_device(token, state);
-    }
-    timing.prefill_s = elapsed_s(prefill_start);
-    return argmax_logits_device(hidden, timing);
-}
-
-int QwenModel::decode_one_device(int token, RunState & state, Timing & timing) const {
-    const auto decode_start = Clock::now();
-    const void * hidden = forward_token_device(token, state);
-    const int next = argmax_logits_device(hidden, timing);
-    timing.decode_total_s += elapsed_s(decode_start);
-    return next;
-}
-
-const void * QwenModel::forward_token_device(int token, RunState & state) const {
+const void * QwenModel::forward_token_device(int token, const void * device_token, RunState & state) const {
     const int hidden_size = config_.text.hidden_size;
     void * current = cuda_token_hidden_buffer(0, hidden_size);
     void * next = cuda_token_hidden_buffer(1, hidden_size);
-    if (!current || !next || !cuda_embedding_lookup_device(params_.embed_tokens, token, current)) {
-        throw std::runtime_error("CUDA embedding lookup（主机 token）失败。");
-    }
-    return forward_token_device_layers(current, next, state);
-}
-
-const void * QwenModel::forward_token_device_from_device(const void * device_token, RunState & state) const {
-    const int hidden_size = config_.text.hidden_size;
-    void * current = cuda_token_hidden_buffer(0, hidden_size);
-    void * next = cuda_token_hidden_buffer(1, hidden_size);
-    if (!current || !next || !cuda_embedding_lookup_device_token(params_.embed_tokens, device_token, current)) {
-        throw std::runtime_error("CUDA embedding lookup（设备 token）失败。");
+    const bool ok = device_token ?
+        cuda_embedding_lookup_device_token(params_.embed_tokens, device_token, current) :
+        cuda_embedding_lookup_device(params_.embed_tokens, token, current);
+    if (!current || !next || !ok) {
+        throw std::runtime_error("CUDA embedding lookup 失败。");
     }
     return forward_token_device_layers(current, next, state);
 }
@@ -253,110 +217,6 @@ const void * QwenModel::forward_token_device_layers(void * current, void * next,
 
     state.seq_len += 1;
     return current;
-}
-
-std::vector<float> QwenModel::forward_token(int token, RunState & state) const {
-    std::vector<float> x;
-    cpu::embedding_lookup(params_.embed_tokens, token, x);
-    const int pos = state.seq_len;
-
-    for (int layer = 0; layer < config_.text.num_hidden_layers; ++layer) {
-        const LayerWeights & w = params_.layers[layer];
-
-        std::vector<float> residual = x;
-        std::vector<float> normed;
-        std::vector<float> mixer_out;
-
-        cpu::rms_norm(w.input_norm, x, normed, config_.text.rms_norm_eps, true);
-        if (w.type == "linear_attention") {
-            ops::linear_attention(config_, w, normed, state.linear[layer], mixer_out);
-        } else {
-            ops::full_attention(config_, w, normed, state.full[layer], pos, mixer_out);
-        }
-        x = residual;
-        cpu::add_inplace(x, mixer_out);
-
-        residual = x;
-        cpu::rms_norm(w.post_norm, x, normed, config_.text.rms_norm_eps, true);
-        ops::mlp(w, normed, mixer_out);
-        x = residual;
-        cpu::add_inplace(x, mixer_out);
-    }
-
-    std::vector<float> normed;
-    cpu::rms_norm(params_.final_norm, x, normed, config_.text.rms_norm_eps, true);
-    state.seq_len += 1;
-    return normed;
-}
-
-int QwenModel::argmax_logits(const std::vector<float> & hidden, Timing & timing) const {
-    const auto start = Clock::now();
-    const int best_id = ops::argmax_logits(params_, hidden);
-    timing.logits_s += elapsed_s(start);
-    return best_id;
-}
-
-int QwenModel::argmax_logits_device(const void * device_hidden, Timing & timing) const {
-    const TensorRef emb = params_.embed_tokens;
-    const int hidden_size = static_cast<int>(emb.info->shape[1]);
-    const auto start = Clock::now();
-    int best_id = 0;
-    if (!cuda_final_norm_argmax_device(
-            params_.final_norm,
-            emb,
-            device_hidden,
-            hidden_size,
-            config_.text.rms_norm_eps,
-            true,
-            best_id)) {
-        throw std::runtime_error("CUDA final norm + logits argmax 失败。");
-    }
-    timing.logits_s += elapsed_s(start);
-    return best_id;
-}
-
-std::vector<int> QwenModel::run_token_generation(
-    RunState & state,
-    const Args & args,
-    const std::vector<int> & input_ids,
-    Timing & timing) const {
-    std::vector<int> generated;
-    int next = generate_next(input_ids, state, timing);
-    for (int i = 0; i < args.max_new_tokens; ++i) {
-        generated.push_back(next);
-        timing.generated_ids.push_back(next);
-        timing.generated_tokens += 1;
-        if (next == config_.text.eos_token_id) {
-            break;
-        }
-        if (i + 1 < args.max_new_tokens) {
-            next = decode_one(next, state, timing);
-        }
-    }
-    return generated;
-}
-
-std::vector<int> QwenModel::run_greedy_generation(
-    RunState & state,
-    const Args & args,
-    const std::vector<int> & input_ids,
-    Timing & timing) const {
-    // CUDA：走整段设备端 prefill + decode（失败即抛异常，不回退 CPU）。
-    if (device_ == Device::CUDA) {
-        std::vector<int> generated;
-        generate_sequence_device(input_ids, state, args.max_new_tokens, config_.text.eos_token_id, timing, generated);
-        return generated;
-    }
-    // CPU：逐 token 生成。
-    return run_token_generation(state, args, input_ids, timing);
-}
-
-std::vector<int> QwenModel::run_non_greedy_generation(
-    RunState & state,
-    const Args & args,
-    const std::vector<int> & input_ids,
-    Timing & timing) const {
-    return run_token_generation(state, args, input_ids, timing);
 }
 
 } // namespace llm_inference

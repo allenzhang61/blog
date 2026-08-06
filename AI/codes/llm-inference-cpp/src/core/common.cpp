@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <iostream>
-#include <stdexcept>
 
 namespace llm_inference {
 
@@ -20,20 +19,6 @@ double elapsed_s(Clock::time_point start) {
 
 void log(const std::string & message) {
     std::cerr << message << std::endl;
-}
-
-Device device_from_string(const std::string & name) {
-    if (name == "cpu") {
-        return Device::CPU;
-    }
-    if (name == "cuda" || name == "gpu") {
-        return Device::CUDA;
-    }
-    throw std::runtime_error("未知设备：" + name + "（仅支持 cpu / cuda）");
-}
-
-const char * device_name(Device device) {
-    return device == Device::CUDA ? "cuda" : "cpu";
 }
 
 } // namespace llm_inference
