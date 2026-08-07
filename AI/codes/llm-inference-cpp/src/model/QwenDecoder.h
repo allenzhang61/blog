@@ -6,6 +6,7 @@
 #include "QwenFullAttentionBlock.h"
 #include "QwenBlock.h"
 #include "QwenLinearAttentionBlock.h"
+#include "QwenPrefillRunner.h"
 #include "runtime_state.h"
 #include "weights.h"
 #include "../core/config.h"
@@ -29,9 +30,8 @@ public:
     Tensor forward(const Tensor & device_token_id, RunState & state) const;
 
 private:
-    const ModelConfig & config_;
-    const ModelParams & params_;
     TokenEmbedding embedding_;
+    QwenPrefillRunner prefill_runner_;
     std::vector<std::unique_ptr<QwenBlock>> blocks_;
 };
 

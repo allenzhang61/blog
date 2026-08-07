@@ -51,7 +51,7 @@ src/core/cuda_kernels.cu/.h   CUDA kernel launch 封装
 src/safetensors/safetensors.cpp/.h   safetensors mmap 和 tensor metadata
 src/core/tokenizer.cpp/.h     默认 prompt ids、vocab 反查、detokenize
 src/core/profile.cpp/.h       JSON timing 和 tensor dump
-src/kernels/cuda/cuda_ops.cpp/.h CUDA fused attention / MLP / prefill 操作
+src/kernels/cuda/cuda_ops.cpp/.h CUDA 通用 buffer / lowp / cuBLAS helper
 src/kernels/cuda/cache/*.cpp/.h CUDA 权重 cache、scratch buffer 和 attention state
 src/model/Module.h            推理模块基类
 src/model/Tensor.h            运行时 CUDA tensor 轻量引用
@@ -65,6 +65,7 @@ src/model/QwenFullAttentionBlock.cpp/.h full attention block 模块
 src/model/QwenDecoder.cpp/.h  block 堆叠，负责 prefill 和 decode forward
 src/model/QwenLmHead.cpp/.h   final norm + tied lm head + greedy argmax
 src/model/QwenModel.cpp/.h    Qwen3.5 模型结构和单 token forward
+src/model/QwenPrefillRunner.cpp/.h CUDA batch prefill 执行器
 src/model/QwenGenerator.cpp/.h greedy 生成流程编排
 src/model/runtime_state.cpp/.h KV/recurrent cache 运行时状态
 src/model/weights.cpp/.h      Qwen 权重命名和校验
