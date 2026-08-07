@@ -24,6 +24,7 @@ add_executable(llm-inference-cpp
     src/model/QwenDecoder.cpp
     src/model/QwenFullAttention.cpp
     src/model/QwenFullAttentionBlock.cpp
+    src/model/QwenGenerator.cpp
     src/model/QwenLinearAttention.cpp
     src/model/QwenLinearAttentionBlock.cpp
     src/model/QwenLmHead.cpp

@@ -42,8 +42,9 @@ int main(int argc, char ** argv) {
                 Timing warm_timing;
                 warm_timing.input_tokens = timing.input_tokens;
                 QwenModel model(config, weights);
+                QwenGenerator generator(model, config);
                 RunState warm_state = make_run_state(config, warm_timing.input_tokens + args.max_new_tokens + 4);
-                (void) model.generate(warm_state, args, input_ids, warm_timing);
+                (void) generator.generate(warm_state, args, input_ids, warm_timing);
             }
             timing.warmup_s = elapsed_s(start);
             log("预热完成，耗时 " + std::to_string(timing.warmup_s) + "s");
@@ -52,8 +53,9 @@ int main(int argc, char ** argv) {
         log("开始推理...");
         start = Clock::now();
         QwenModel model(config, weights);
+        QwenGenerator generator(model, config);
         RunState state = make_run_state(config, timing.input_tokens + args.max_new_tokens + 4);
-        std::vector<int> generated = model.generate(state, args, input_ids, timing);
+        std::vector<int> generated = generator.generate(state, args, input_ids, timing);
         timing.infer_wall_s = elapsed_s(start);
         log("推理完成，耗时 " + std::to_string(timing.infer_wall_s) +
             "s，max_new_tokens=" + std::to_string(args.max_new_tokens));

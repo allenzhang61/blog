@@ -1,8 +1,6 @@
 #pragma once
 
-#include "../core/cli.h"
 #include "../core/config.h"
-#include "../core/profile.h"
 #include "Tensor.h"
 #include "Module.h"
 #include "QwenDecoder.h"
@@ -14,7 +12,7 @@
 
 namespace llm_inference {
 
-// Qwen3.5 原生推理实现，封装单 token forward 和生成循环。
+// Qwen3.5 原生模型结构，封装 prefill、单 token forward 和 lm head。
 // 持有 embedding、decoder、lm head 等子模块。
 class QwenModel : public Module {
 public:
@@ -23,15 +21,14 @@ public:
 
     const char * name() const override;
 
-    // 使用 CUDA greedy 路径生成完整序列。
-    std::vector<int> generate(
-        RunState & state,
-        const Args & args,
-        const std::vector<int> & input_ids,
-        Timing & timing) const;
+    // batch prefill 完整 prompt，返回最后一个 prompt token 的 device hidden。
+    Tensor prefill(const std::vector<int> & input_ids, RunState & state) const;
 
     // decode 阶段执行一次完整模型 forward，输入 token id 在 device 上，返回下一轮 hidden。
     Tensor forward(const Tensor & device_token_id, RunState & state) const;
+
+    // 根据当前 hidden 选出下一个 token id，并写入指定的 device token slot。
+    void forward_lm_head(const Tensor & device_hidden, const Tensor & device_token_out) const;
 
 private:
     // 模型结构配置引用。

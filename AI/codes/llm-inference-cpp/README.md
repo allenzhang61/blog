@@ -63,7 +63,8 @@ src/model/QwenLinearAttentionBlock.cpp/.h linear attention block 模块
 src/model/QwenFullAttentionBlock.cpp/.h full attention block 模块
 src/model/QwenDecoder.cpp/.h  block 堆叠，负责 prefill 和 decode forward
 src/model/QwenLmHead.cpp/.h   final norm + tied lm head + greedy argmax
-src/model/QwenModel.cpp/.h    Qwen3.5 生成流程编排
+src/model/QwenModel.cpp/.h    Qwen3.5 模型结构和单 token forward
+src/model/QwenGenerator.cpp/.h greedy 生成流程编排
 src/model/runtime_state.cpp/.h KV/recurrent cache 运行时状态
 src/model/weights.cpp/.h      Qwen 权重命名和校验
 third_party/nlohmann/json.hpp vendored JSON single-header
