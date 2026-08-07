@@ -16,7 +16,7 @@ namespace llm_inference {
 namespace {
 
 
-void launch_float_to_lowp(const float * input, uint16_t * output, int n, cudaDataType_t type) {
+void cuda_float_to_lowp_impl(const float * input, uint16_t * output, int n, cudaDataType_t type) {
     if (type == CUDA_R_16F) {
         launch_float_to_f16(input, output, n, nullptr);
     } else {
@@ -24,9 +24,9 @@ void launch_float_to_lowp(const float * input, uint16_t * output, int n, cudaDat
     }
 }
 
-void cublas_matvec_to_device(
+void cuda_weight_matvec_to_device_impl(
     CudaWeightCache & cache,
-    const TensorRef & weight,
+    const WeightData & weight,
     DeviceWeight & device_weight,
     const void * device_x,
     cudaDataType_t x_type,
@@ -61,7 +61,7 @@ void cublas_matvec_to_device(
 
 void cublas_batch_matvec_to_device(
     CudaWeightCache & cache,
-    const TensorRef & weight,
+    const WeightData & weight,
     DeviceWeight & device_weight,
     const void * device_x,
     cudaDataType_t x_type,
@@ -95,7 +95,7 @@ void cublas_batch_matvec_to_device(
         "cublasGemmEx batch matvec 失败 " + weight.info->name);
 }
 
-DeviceWeight & require_device_weight(const TensorRef & weight, const std::string & context) {
+DeviceWeight & require_device_weight(const WeightData & weight, const std::string & context) {
     DeviceWeight * device = cached_cuda_weight(weight);
     if (!device) {
         throw std::runtime_error(context + " 失败：权重无法缓存到 CUDA，tensor=" + weight.info->name);
@@ -103,10 +103,10 @@ DeviceWeight & require_device_weight(const TensorRef & weight, const std::string
     return *device;
 }
 
-bool cuda_mlp_from_device_bf16_to_device(
-    const TensorRef & gate_w,
-    const TensorRef & up_w,
-    const TensorRef & down_w,
+bool cuda_mlp_from_device_bf16_to_device_impl(
+    const WeightData & gate_w,
+    const WeightData & up_w,
+    const WeightData & down_w,
     const uint16_t * device_x,
     float * device_out) {
     const int intermediate_dim = static_cast<int>(gate_w.info->shape[0]);
@@ -127,24 +127,24 @@ bool cuda_mlp_from_device_bf16_to_device(
     cache.prod_buffer.ensure_bytes(intermediate_float_bytes, "mlp prod buffer");
     cache.prod_lowp_buffer.ensure_bytes(intermediate_bf16_bytes, "mlp prod bf16 buffer");
 
-    TensorInfo combined_info = *gate_w.info;
+    WeightMeta combined_info = *gate_w.info;
     combined_info.name = gate_w.info->name + "+up";
     combined_info.shape[0] = static_cast<int64_t>(intermediate_dim) * 2;
-    TensorRef combined_ref {&combined_info, nullptr};
-    cublas_matvec_to_device(cache, combined_ref, *gate_up_device, device_x, gate_up_device->type, cache.gate_up_buffer);
+    WeightData combined_ref {&combined_info, nullptr};
+    cuda_weight_matvec_to_device_impl(cache, combined_ref, *gate_up_device, device_x, gate_up_device->type, cache.gate_up_buffer);
     launch_silu_mul(cache.gate_up_buffer, cache.gate_up_buffer + intermediate_dim, cache.prod_buffer, intermediate_dim, nullptr);
     check_cuda(cudaGetLastError(), "launch_silu_mul 失败");
-    launch_float_to_lowp(cache.prod_buffer, cache.prod_lowp_buffer, intermediate_dim, down_device->type);
+    cuda_float_to_lowp_impl(cache.prod_buffer, cache.prod_lowp_buffer, intermediate_dim, down_device->type);
     check_cuda(cudaGetLastError(), "launch_float_to_bf16 失败");
-    cublas_matvec_to_device(cache, down_w, *down_device, cache.prod_lowp_buffer, down_device->type, device_out);
+    cuda_weight_matvec_to_device_impl(cache, down_w, *down_device, cache.prod_lowp_buffer, down_device->type, device_out);
     (void) hidden_dim;
     return true;
 }
 
 bool cuda_mlp_batch_from_device_bf16_to_device(
-    const TensorRef & gate_w,
-    const TensorRef & up_w,
-    const TensorRef & down_w,
+    const WeightData & gate_w,
+    const WeightData & up_w,
+    const WeightData & down_w,
     const uint16_t * device_x,
     int tokens,
     float * device_out) {
@@ -165,10 +165,10 @@ bool cuda_mlp_batch_from_device_bf16_to_device(
     if (!gate_up_device) {
         return false;
     }
-    TensorInfo combined_info = *gate_w.info;
+    WeightMeta combined_info = *gate_w.info;
     combined_info.name = gate_w.info->name + "+up";
     combined_info.shape[0] = static_cast<int64_t>(intermediate_dim) * 2;
-    TensorRef combined_ref {&combined_info, nullptr};
+    WeightData combined_ref {&combined_info, nullptr};
     cache.gate_up_buffer.ensure_bytes(static_cast<size_t>(tokens) * intermediate_dim * 2 * sizeof(float), "batch mlp gate up");
     cublas_batch_matvec_to_device(cache, combined_ref, *gate_up_device, device_x, gate_up_device->type, tokens, cache.gate_up_buffer);
     launch_silu_mul_gate_up_batch(cache.gate_up_buffer, cache.prod_buffer, tokens, intermediate_dim, nullptr);
@@ -177,14 +177,14 @@ bool cuda_mlp_batch_from_device_bf16_to_device(
     if (!down_device) {
         return false;
     }
-    launch_float_to_lowp(cache.prod_buffer, cache.prod_lowp_buffer, tokens * intermediate_dim, down_device->type);
-    check_cuda(cudaGetLastError(), "launch_float_to_lowp batch mlp prod 失败");
+    cuda_float_to_lowp_impl(cache.prod_buffer, cache.prod_lowp_buffer, tokens * intermediate_dim, down_device->type);
+    check_cuda(cudaGetLastError(), "cuda_float_to_lowp_impl batch mlp prod 失败");
     cublas_batch_matvec_to_device(cache, down_w, *down_device, cache.prod_lowp_buffer, down_device->type, tokens, device_out);
     (void) hidden_dim;
     return true;
 }
 
-CudaLinearAttentionState * ensure_linear_attention_state(
+CudaLinearAttentionState * ensure_linear_attention_state_impl(
     void *& state_handle,
     int key_heads,
     int value_heads,
@@ -228,7 +228,7 @@ CudaLinearAttentionState * ensure_linear_attention_state(
     return state;
 }
 
-CudaFullAttentionState * ensure_full_attention_state(
+CudaFullAttentionState * ensure_full_attention_state_impl(
     void *& state_handle,
     int n_heads,
     int kv_heads,
@@ -294,6 +294,47 @@ void release_full_attention_batch_buffers(CudaFullAttentionState * state) {
 
 } // namespace
 
+void cuda_float_to_lowp(const float * input, uint16_t * output, int n, cudaDataType_t type) {
+    cuda_float_to_lowp_impl(input, output, n, type);
+}
+
+void cuda_weight_matvec_to_device(
+    CudaWeightCache & cache,
+    const WeightData & weight,
+    DeviceWeight & device_weight,
+    const void * device_x,
+    cudaDataType_t x_type,
+    float * device_y) {
+    cuda_weight_matvec_to_device_impl(cache, weight, device_weight, device_x, x_type, device_y);
+}
+
+bool cuda_mlp_from_device_bf16_to_device(
+    const WeightData & gate_w,
+    const WeightData & up_w,
+    const WeightData & down_w,
+    const uint16_t * device_x,
+    float * device_out) {
+    return cuda_mlp_from_device_bf16_to_device_impl(gate_w, up_w, down_w, device_x, device_out);
+}
+
+CudaLinearAttentionState * ensure_linear_attention_state(
+    void *& state_handle,
+    int key_heads,
+    int value_heads,
+    int k_dim,
+    int v_dim,
+    int kernel) {
+    return ensure_linear_attention_state_impl(state_handle, key_heads, value_heads, k_dim, v_dim, kernel);
+}
+
+CudaFullAttentionState * ensure_full_attention_state(
+    void *& state_handle,
+    int n_heads,
+    int kv_heads,
+    int head_dim,
+    int max_seq_len) {
+    return ensure_full_attention_state_impl(state_handle, n_heads, kv_heads, head_dim, max_seq_len);
+}
 
 void * cuda_token_hidden_buffer(int slot, int hidden_size) {
     auto & cache = cuda_weight_cache();
@@ -307,26 +348,7 @@ void * cuda_token_id_buffer(int count) {
     return cache.token_id_buffer;
 }
 
-bool cuda_embedding_lookup_device(const TensorRef & emb, int token_id, void * device_out) {
-    if (emb.info->shape.size() != 2 || !device_out) {
-        return false;
-    }
-    const int vocab = static_cast<int>(emb.info->shape[0]);
-    const int hidden = static_cast<int>(emb.info->shape[1]);
-    if (token_id < 0 || token_id >= vocab) {
-        throw std::runtime_error("token id 越界：" + std::to_string(token_id));
-    }
-    DeviceWeight * emb_device = cached_cuda_weight(emb);
-    if (!emb_device || (emb_device->type != CUDA_R_16BF && emb_device->type != CUDA_R_16F)) {
-        return false;
-    }
-    const auto * row = static_cast<const uint16_t *>(emb_device->ptr) + static_cast<size_t>(token_id) * hidden;
-    launch_lowp_row_to_float(row, static_cast<float *>(device_out), hidden, emb_device->type == CUDA_R_16F ? 1 : 0, nullptr);
-    check_cuda(cudaGetLastError(), "launch_lowp_row_to_float embedding 失败");
-    return true;
-}
-
-bool cuda_embedding_lookup_device_token(const TensorRef & emb, const void * device_token_id, void * device_out) {
+bool cuda_embedding_lookup_device_token(const WeightData & emb, const void * device_token_id, void * device_out) {
     if (emb.info->shape.size() != 2 || !device_token_id || !device_out) {
         return false;
     }
@@ -349,8 +371,8 @@ bool cuda_embedding_lookup_device_token(const TensorRef & emb, const void * devi
 }
 
 bool cuda_final_norm_argmax_to_device(
-    const TensorRef & norm_w,
-    const TensorRef & emb,
+    const WeightData & norm_w,
+    const WeightData & emb,
     const void * device_hidden,
     int hidden_size,
     float eps,
@@ -381,7 +403,7 @@ bool cuda_final_norm_argmax_to_device(
             one_plus,
             nullptr);
         check_cuda(cudaGetLastError(), "launch_rms_norm_to_f16 final device 失败");
-        cublas_matvec_to_device(cache, emb, *emb_device, cache.norm_lowp_buffer, CUDA_R_16F, cache.y_buffer);
+        cuda_weight_matvec_to_device_impl(cache, emb, *emb_device, cache.norm_lowp_buffer, CUDA_R_16F, cache.y_buffer);
     } else {
         launch_rms_norm_to_bf16(
             static_cast<const float *>(device_hidden),
@@ -392,7 +414,7 @@ bool cuda_final_norm_argmax_to_device(
             one_plus,
             nullptr);
         check_cuda(cudaGetLastError(), "launch_rms_norm_to_bf16 final device 失败");
-        cublas_matvec_to_device(cache, emb, *emb_device, cache.norm_lowp_buffer, CUDA_R_16BF, cache.y_buffer);
+        cuda_weight_matvec_to_device_impl(cache, emb, *emb_device, cache.norm_lowp_buffer, CUDA_R_16BF, cache.y_buffer);
     }
 
     const int blocks = (vocab + 255) / 256;
@@ -429,250 +451,6 @@ bool cuda_synchronize_device() {
     return true;
 }
 
-bool cuda_linear_attention_full_layer_device(
-    const TensorRef & input_norm_w,
-    const TensorRef & in_proj_qkv_w,
-    const TensorRef & in_proj_z_w,
-    const TensorRef & in_proj_b_w,
-    const TensorRef & in_proj_a_w,
-    const TensorRef & conv_w,
-    const TensorRef & a_log,
-    const TensorRef & dt_bias,
-    const TensorRef & attn_norm_w,
-    const TensorRef & attn_out_w,
-    const TensorRef & post_norm_w,
-    const TensorRef & mlp_gate_w,
-    const TensorRef & mlp_up_w,
-    const TensorRef & mlp_down_w,
-    const void * device_x,
-    void * device_out,
-    int hidden_dim,
-    void *& state_handle,
-    int key_heads,
-    int value_heads,
-    int k_dim,
-    int v_dim,
-    int kernel,
-    float eps,
-    bool one_plus) {
-    if (!device_x || !device_out || input_norm_w.info->dtype != "BF16") {
-        return false;
-    }
-    const int key_total = key_heads * k_dim;
-    const int value_total = value_heads * v_dim;
-    const int conv_dim = key_total * 2 + value_total;
-    DeviceWeight * input_norm_device = cached_cuda_weight(input_norm_w);
-    DeviceWeight * projection_device = cached_cuda_concat_weight(
-        in_proj_qkv_w.info->name + "\n" + in_proj_z_w.info->name + "\n" + in_proj_b_w.info->name + "\n" + in_proj_a_w.info->name,
-        {in_proj_qkv_w, in_proj_z_w, in_proj_b_w, in_proj_a_w});
-    DeviceWeight * conv_device = cached_cuda_weight(conv_w);
-    DeviceWeight * a_log_device = cached_cuda_weight(a_log);
-    DeviceWeight * dt_bias_device = cached_cuda_weight(dt_bias);
-    DeviceWeight * attn_norm_device = cached_cuda_weight(attn_norm_w);
-    DeviceWeight * attn_out_device = cached_cuda_weight(attn_out_w);
-    DeviceWeight * post_norm_device = cached_cuda_weight(post_norm_w);
-    if (!input_norm_device || !projection_device || !conv_device || !a_log_device || !dt_bias_device || !attn_norm_device || !attn_out_device || !post_norm_device) {
-        return false;
-    }
-
-    auto & cache = cuda_weight_cache();
-    const size_t hidden_float_bytes = static_cast<size_t>(hidden_dim) * sizeof(float);
-    const size_t hidden_bf16_bytes = static_cast<size_t>(hidden_dim) * sizeof(uint16_t);
-    cache.mixer_buffer.ensure_bytes(hidden_float_bytes, "layer mixer buffer");
-    cache.layer_out_buffer.ensure_bytes(hidden_float_bytes, "layer out buffer");
-    cache.mlp_out_buffer.ensure_bytes(hidden_float_bytes, "layer mlp out buffer");
-    cache.norm_lowp_buffer.ensure_bytes(hidden_bf16_bytes, "input norm bf16 buffer");
-    cache.post_norm_lowp_buffer.ensure_bytes(hidden_bf16_bytes, "post norm bf16 buffer");
-
-    if (projection_device->type == CUDA_R_16F) {
-        launch_rms_norm_to_f16(
-            static_cast<const float *>(device_x),
-            static_cast<const uint16_t *>(input_norm_device->ptr),
-            cache.norm_lowp_buffer,
-            hidden_dim,
-            eps,
-            one_plus,
-            nullptr);
-        check_cuda(cudaGetLastError(), "launch_rms_norm_to_f16 device linear input 失败");
-    } else {
-        launch_rms_norm_to_bf16(
-            static_cast<const float *>(device_x),
-            static_cast<const uint16_t *>(input_norm_device->ptr),
-            cache.norm_lowp_buffer,
-            hidden_dim,
-            eps,
-            one_plus,
-            nullptr);
-        check_cuda(cudaGetLastError(), "launch_rms_norm_to_bf16 device linear input 失败");
-    }
-
-    CudaLinearAttentionState * state =
-        ensure_linear_attention_state(state_handle, key_heads, value_heads, k_dim, v_dim, kernel);
-    TensorInfo combined_info = *in_proj_qkv_w.info;
-    combined_info.name = in_proj_qkv_w.info->name + "+z+b+a";
-    combined_info.shape[0] = static_cast<int64_t>(conv_dim + value_total + value_heads * 2);
-    TensorRef combined_ref {&combined_info, nullptr};
-    cublas_matvec_to_device(cache, combined_ref, *projection_device, cache.norm_lowp_buffer, projection_device->type, state->projection);
-    const float * mixed_ptr = state->projection;
-    const float * z_ptr = state->projection + conv_dim;
-    const float * b_ptr = state->projection + conv_dim + value_total;
-    const float * a_ptr = state->projection + conv_dim + value_total + value_heads;
-
-    launch_linear_attention_conv(mixed_ptr, static_cast<const uint16_t *>(conv_device->ptr), state->conv_state, state->conv_out, conv_dim, kernel, nullptr);
-    check_cuda(cudaGetLastError(), "launch_linear_attention_conv device 失败");
-    launch_linear_attention_recurrent(
-        state->conv_out,
-        z_ptr,
-        b_ptr,
-        a_ptr,
-        static_cast<const float *>(a_log_device->ptr),
-        static_cast<const uint16_t *>(dt_bias_device->ptr),
-        static_cast<const float *>(attn_norm_device->ptr),
-        state->recurrent_state,
-        state->gated,
-        key_heads,
-        value_heads,
-        k_dim,
-        v_dim,
-        eps,
-        nullptr);
-    check_cuda(cudaGetLastError(), "launch_linear_attention_recurrent device 失败");
-    launch_float_to_lowp(state->gated, state->gated_bf16, value_total, attn_out_device->type);
-    check_cuda(cudaGetLastError(), "launch_float_to_lowp linear gated device 失败");
-    cublas_matvec_to_device(cache, attn_out_w, *attn_out_device, state->gated_bf16, attn_out_device->type, cache.mixer_buffer);
-
-    launch_add_rms_norm_to_bf16(
-        static_cast<const float *>(device_x),
-        cache.mixer_buffer,
-        static_cast<const uint16_t *>(post_norm_device->ptr),
-        cache.layer_out_buffer,
-        cache.post_norm_lowp_buffer,
-        hidden_dim,
-        eps,
-        one_plus,
-        nullptr);
-    check_cuda(cudaGetLastError(), "launch_add_rms_norm_to_bf16 linear device post 失败");
-    if (!cuda_mlp_from_device_bf16_to_device(mlp_gate_w, mlp_up_w, mlp_down_w, cache.post_norm_lowp_buffer, cache.mlp_out_buffer)) {
-        return false;
-    }
-    launch_add_float(cache.layer_out_buffer, cache.mlp_out_buffer, static_cast<float *>(device_out), hidden_dim, nullptr);
-    check_cuda(cudaGetLastError(), "launch_add_float linear device mlp residual 失败");
-    return true;
-}
-
-bool cuda_full_attention_full_layer_device(
-    const TensorRef & input_norm_w,
-    const TensorRef & q_proj_w,
-    const TensorRef & k_proj_w,
-    const TensorRef & v_proj_w,
-    const TensorRef & q_norm_w,
-    const TensorRef & k_norm_w,
-    const TensorRef & attn_out_w,
-    const TensorRef & post_norm_w,
-    const TensorRef & mlp_gate_w,
-    const TensorRef & mlp_up_w,
-    const TensorRef & mlp_down_w,
-    const void * device_x,
-    void * device_out,
-    int hidden_dim,
-    void *& state_handle,
-    int n_heads,
-    int kv_heads,
-    int head_dim,
-    int max_seq_len,
-    int pos,
-    float rope_theta,
-    float partial_rotary_factor,
-    float eps,
-    bool one_plus) {
-    if (!device_x || !device_out || input_norm_w.info->dtype != "BF16") {
-        return false;
-    }
-    const int q_total = n_heads * head_dim;
-    const int kv_total = kv_heads * head_dim;
-    DeviceWeight * input_norm_device = cached_cuda_weight(input_norm_w);
-    DeviceWeight * projection_device = cached_cuda_concat_weight(
-        q_proj_w.info->name + "\n" + k_proj_w.info->name + "\n" + v_proj_w.info->name,
-        {q_proj_w, k_proj_w, v_proj_w});
-    DeviceWeight * q_norm_device = cached_cuda_weight(q_norm_w);
-    DeviceWeight * k_norm_device = cached_cuda_weight(k_norm_w);
-    DeviceWeight * attn_out_device = cached_cuda_weight(attn_out_w);
-    DeviceWeight * post_norm_device = cached_cuda_weight(post_norm_w);
-    if (!input_norm_device || !projection_device || !q_norm_device || !k_norm_device || !attn_out_device || !post_norm_device) {
-        return false;
-    }
-
-    auto & cache = cuda_weight_cache();
-    const size_t hidden_float_bytes = static_cast<size_t>(hidden_dim) * sizeof(float);
-    const size_t hidden_bf16_bytes = static_cast<size_t>(hidden_dim) * sizeof(uint16_t);
-    cache.mixer_buffer.ensure_bytes(hidden_float_bytes, "layer mixer buffer");
-    cache.layer_out_buffer.ensure_bytes(hidden_float_bytes, "layer out buffer");
-    cache.mlp_out_buffer.ensure_bytes(hidden_float_bytes, "layer mlp out buffer");
-    cache.norm_lowp_buffer.ensure_bytes(hidden_bf16_bytes, "input norm bf16 buffer");
-    cache.post_norm_lowp_buffer.ensure_bytes(hidden_bf16_bytes, "post norm bf16 buffer");
-
-    if (projection_device->type == CUDA_R_16F) {
-        launch_rms_norm_to_f16(
-            static_cast<const float *>(device_x),
-            static_cast<const uint16_t *>(input_norm_device->ptr),
-            cache.norm_lowp_buffer,
-            hidden_dim,
-            eps,
-            one_plus,
-            nullptr);
-        check_cuda(cudaGetLastError(), "launch_rms_norm_to_f16 device full input 失败");
-    } else {
-        launch_rms_norm_to_bf16(
-            static_cast<const float *>(device_x),
-            static_cast<const uint16_t *>(input_norm_device->ptr),
-            cache.norm_lowp_buffer,
-            hidden_dim,
-            eps,
-            one_plus,
-            nullptr);
-        check_cuda(cudaGetLastError(), "launch_rms_norm_to_bf16 device full input 失败");
-    }
-
-    CudaFullAttentionState * state =
-        ensure_full_attention_state(state_handle, n_heads, kv_heads, head_dim, max_seq_len);
-    TensorInfo combined_info = *q_proj_w.info;
-    combined_info.name = q_proj_w.info->name + "+k+v";
-    combined_info.shape[0] = static_cast<int64_t>(q_total * 2 + kv_total * 2);
-    TensorRef combined_ref {&combined_info, nullptr};
-    cublas_matvec_to_device(cache, combined_ref, *projection_device, cache.norm_lowp_buffer, projection_device->type, state->projection);
-    const float * q_and_gate_ptr = state->projection;
-    const float * k_ptr = state->projection + q_total * 2;
-    const float * v_ptr = state->projection + q_total * 2 + kv_total;
-
-    launch_full_attention_q(q_and_gate_ptr, static_cast<const uint16_t *>(q_norm_device->ptr), state->q, state->gate, n_heads, head_dim, pos, rope_theta, partial_rotary_factor, eps, nullptr);
-    check_cuda(cudaGetLastError(), "launch_full_attention_q device 失败");
-    launch_full_attention_kv(k_ptr, v_ptr, static_cast<const uint16_t *>(k_norm_device->ptr), state->key_cache, state->value_cache, kv_heads, head_dim, max_seq_len, pos, rope_theta, partial_rotary_factor, eps, nullptr);
-    check_cuda(cudaGetLastError(), "launch_full_attention_kv device 失败");
-    launch_full_attention_attend(state->q, state->gate, state->key_cache, state->value_cache, state->attn, n_heads, kv_heads, head_dim, max_seq_len, pos, nullptr);
-    check_cuda(cudaGetLastError(), "launch_full_attention_attend device 失败");
-    launch_float_to_lowp(state->attn, state->attn_bf16, q_total, attn_out_device->type);
-    check_cuda(cudaGetLastError(), "launch_float_to_lowp full attn device 失败");
-    cublas_matvec_to_device(cache, attn_out_w, *attn_out_device, state->attn_bf16, attn_out_device->type, cache.mixer_buffer);
-
-    launch_add_rms_norm_to_bf16(
-        static_cast<const float *>(device_x),
-        cache.mixer_buffer,
-        static_cast<const uint16_t *>(post_norm_device->ptr),
-        cache.layer_out_buffer,
-        cache.post_norm_lowp_buffer,
-        hidden_dim,
-        eps,
-        one_plus,
-        nullptr);
-    check_cuda(cudaGetLastError(), "launch_add_rms_norm_to_bf16 full device post 失败");
-    if (!cuda_mlp_from_device_bf16_to_device(mlp_gate_w, mlp_up_w, mlp_down_w, cache.post_norm_lowp_buffer, cache.mlp_out_buffer)) {
-        return false;
-    }
-    launch_add_float(cache.layer_out_buffer, cache.mlp_out_buffer, static_cast<float *>(device_out), hidden_dim, nullptr);
-    check_cuda(cudaGetLastError(), "launch_add_float full device mlp residual 失败");
-    return true;
-}
-
 const void * cuda_prefill_batch(
     const ModelConfig & config,
     const ModelParams & params,
@@ -697,7 +475,7 @@ const void * cuda_prefill_batch(
         throw std::runtime_error("CUDA batch prefill 失败：token hidden 或 token id buffer 分配失败。");
     }
     check_cuda(cudaMemcpy(token_ids, prompt_ids.data(), static_cast<size_t>(tokens) * sizeof(int), cudaMemcpyHostToDevice), "cudaMemcpy prompt ids 失败");
-    const TensorRef emb = params.embed_tokens;
+    const WeightData emb = params.embed_tokens;
     DeviceWeight * emb_device = cached_cuda_weight(emb);
     if (!emb_device || (emb_device->type != CUDA_R_16BF && emb_device->type != CUDA_R_16F)) {
         throw std::runtime_error("CUDA batch prefill 失败：embedding 权重未缓存或 dtype 不是 BF16/F16。");
@@ -723,7 +501,7 @@ const void * cuda_prefill_batch(
 
     for (int layer = 0; layer < config.text.num_hidden_layers; ++layer) {
         const LayerWeights & layer_weights = params.layers[layer];
-        const TensorRef input_norm_w = layer_weights.input_norm;
+        const WeightData input_norm_w = layer_weights.input_norm;
         DeviceWeight & input_norm_device = require_device_weight(input_norm_w, "CUDA batch prefill input norm layer=" + std::to_string(layer));
         launch_rms_norm_batch_to_bf16(
             current,
@@ -745,7 +523,7 @@ const void * cuda_prefill_batch(
             const int value_total = value_heads * v_dim;
             const int conv_dim = key_total * 2 + value_total;
             CudaLinearAttentionState * state =
-                ensure_linear_attention_state(linear_states[layer], key_heads, value_heads, k_dim, v_dim, config.text.linear_conv_kernel_dim);
+                ensure_linear_attention_state_impl(linear_states[layer], key_heads, value_heads, k_dim, v_dim, config.text.linear_conv_kernel_dim);
             state->batch_projection.ensure_bytes(static_cast<size_t>(tokens) * conv_dim * sizeof(float), "batch linear projection");
             state->batch_z.ensure_bytes(static_cast<size_t>(tokens) * value_total * sizeof(float), "batch linear z");
             state->batch_b.ensure_bytes(static_cast<size_t>(tokens) * value_heads * sizeof(float), "batch linear b");
@@ -754,15 +532,15 @@ const void * cuda_prefill_batch(
             state->batch_gated.ensure_bytes(static_cast<size_t>(tokens) * value_total * sizeof(float), "batch linear gated");
             state->batch_gated_lowp.ensure_bytes(static_cast<size_t>(tokens) * value_total * sizeof(uint16_t), "batch linear gated bf16");
 
-            const TensorRef qkv_w = layer_weights.lin.in_proj_qkv;
-            const TensorRef z_w = layer_weights.lin.in_proj_z;
-            const TensorRef b_w = layer_weights.lin.in_proj_b;
-            const TensorRef a_w = layer_weights.lin.in_proj_a;
-            const TensorRef conv_w = layer_weights.lin.conv1d;
-            const TensorRef a_log = layer_weights.lin.a_log;
-            const TensorRef dt_bias = layer_weights.lin.dt_bias;
-            const TensorRef attn_norm_w = layer_weights.lin.norm;
-            const TensorRef attn_out_w = layer_weights.lin.out_proj;
+            const WeightData qkv_w = layer_weights.lin.in_proj_qkv;
+            const WeightData z_w = layer_weights.lin.in_proj_z;
+            const WeightData b_w = layer_weights.lin.in_proj_b;
+            const WeightData a_w = layer_weights.lin.in_proj_a;
+            const WeightData conv_w = layer_weights.lin.conv1d;
+            const WeightData a_log = layer_weights.lin.a_log;
+            const WeightData dt_bias = layer_weights.lin.dt_bias;
+            const WeightData attn_norm_w = layer_weights.lin.norm;
+            const WeightData attn_out_w = layer_weights.lin.out_proj;
             DeviceWeight & qkv_device = require_device_weight(qkv_w, "CUDA batch prefill linear qkv layer=" + std::to_string(layer));
             cublas_batch_matvec_to_device(cache, qkv_w, qkv_device, cache.norm_lowp_buffer, CUDA_R_16BF, tokens, state->batch_projection);
             DeviceWeight & z_device = require_device_weight(z_w, "CUDA batch prefill linear z layer=" + std::to_string(layer));
@@ -804,8 +582,8 @@ const void * cuda_prefill_batch(
                 nullptr);
             check_cuda(cudaGetLastError(), "launch_linear_attention_recurrent_batch 失败");
             DeviceWeight & attn_out_device = require_device_weight(attn_out_w, "CUDA batch prefill linear out layer=" + std::to_string(layer));
-            launch_float_to_lowp(state->batch_gated, state->batch_gated_lowp, tokens * value_total, attn_out_device.type);
-            check_cuda(cudaGetLastError(), "launch_float_to_lowp batch linear gated 失败");
+            cuda_float_to_lowp_impl(state->batch_gated, state->batch_gated_lowp, tokens * value_total, attn_out_device.type);
+            check_cuda(cudaGetLastError(), "cuda_float_to_lowp_impl batch linear gated 失败");
             cublas_batch_matvec_to_device(cache, attn_out_w, attn_out_device, state->batch_gated_lowp, attn_out_device.type, tokens, cache.mixer_buffer);
         } else {
             const int n_heads = config.text.num_attention_heads;
@@ -814,7 +592,7 @@ const void * cuda_prefill_batch(
             const int q_total = n_heads * head_dim;
             const int kv_total = kv_heads * head_dim;
             CudaFullAttentionState * state =
-                ensure_full_attention_state(full_states[layer], n_heads, kv_heads, head_dim, full_max_seq_lens[layer]);
+                ensure_full_attention_state_impl(full_states[layer], n_heads, kv_heads, head_dim, full_max_seq_lens[layer]);
             state->batch_projection.ensure_bytes(static_cast<size_t>(tokens) * q_total * 2 * sizeof(float), "batch full q projection");
             state->batch_k.ensure_bytes(static_cast<size_t>(tokens) * kv_total * sizeof(float), "batch full k");
             state->batch_v.ensure_bytes(static_cast<size_t>(tokens) * kv_total * sizeof(float), "batch full v");
@@ -823,12 +601,12 @@ const void * cuda_prefill_batch(
             state->batch_attn.ensure_bytes(static_cast<size_t>(tokens) * q_total * sizeof(float), "batch full attn");
             state->batch_attn_lowp.ensure_bytes(static_cast<size_t>(tokens) * q_total * sizeof(uint16_t), "batch full attn bf16");
 
-            const TensorRef q_w = layer_weights.full.q_proj;
-            const TensorRef k_w = layer_weights.full.k_proj;
-            const TensorRef v_w = layer_weights.full.v_proj;
-            const TensorRef q_norm_w = layer_weights.full.q_norm;
-            const TensorRef k_norm_w = layer_weights.full.k_norm;
-            const TensorRef out_w = layer_weights.full.o_proj;
+            const WeightData q_w = layer_weights.full.q_proj;
+            const WeightData k_w = layer_weights.full.k_proj;
+            const WeightData v_w = layer_weights.full.v_proj;
+            const WeightData q_norm_w = layer_weights.full.q_norm;
+            const WeightData k_norm_w = layer_weights.full.k_norm;
+            const WeightData out_w = layer_weights.full.o_proj;
             DeviceWeight & q_device = require_device_weight(q_w, "CUDA batch prefill full q layer=" + std::to_string(layer));
             cublas_batch_matvec_to_device(cache, q_w, q_device, cache.norm_lowp_buffer, CUDA_R_16BF, tokens, state->batch_projection);
             DeviceWeight & k_device = require_device_weight(k_w, "CUDA batch prefill full k layer=" + std::to_string(layer));
@@ -882,12 +660,12 @@ const void * cuda_prefill_batch(
                 nullptr);
             check_cuda(cudaGetLastError(), "launch_full_attention_attend_batch 失败");
             DeviceWeight & out_device = require_device_weight(out_w, "CUDA batch prefill full out layer=" + std::to_string(layer));
-            launch_float_to_lowp(state->batch_attn, state->batch_attn_lowp, tokens * q_total, out_device.type);
-            check_cuda(cudaGetLastError(), "launch_float_to_lowp batch full attn 失败");
+            cuda_float_to_lowp_impl(state->batch_attn, state->batch_attn_lowp, tokens * q_total, out_device.type);
+            check_cuda(cudaGetLastError(), "cuda_float_to_lowp_impl batch full attn 失败");
             cublas_batch_matvec_to_device(cache, out_w, out_device, state->batch_attn_lowp, out_device.type, tokens, cache.mixer_buffer);
         }
 
-        const TensorRef post_norm_w = layer_weights.post_norm;
+        const WeightData post_norm_w = layer_weights.post_norm;
         DeviceWeight & post_norm_device = require_device_weight(post_norm_w, "CUDA batch prefill post norm layer=" + std::to_string(layer));
         launch_add_rms_norm_batch_to_bf16(
             current,

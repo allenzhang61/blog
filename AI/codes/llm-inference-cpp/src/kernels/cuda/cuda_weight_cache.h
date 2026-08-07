@@ -161,10 +161,10 @@ public:
 CudaWeightCache & cuda_weight_cache();
 
 // 将 safetensors dtype 映射为 CUDA/cuBLAS dtype。
-cudaDataType_t cuda_type_for(const TensorRef & weight);
+cudaDataType_t cuda_type_for(const WeightData & weight);
 
 // 返回当前支持 dtype 的单元素字节数。
-size_t dtype_size_for(const TensorRef & weight);
+size_t dtype_size_for(const WeightData & weight);
 
 // 将 host float 编码为 IEEE F16 bit pattern。
 uint16_t float_to_f16_bits(float value);
@@ -182,9 +182,26 @@ std::vector<uint16_t> host_float_to_bf16(const std::vector<float> & x);
 std::vector<uint16_t> host_float_to_lowp(const std::vector<float> & x, cudaDataType_t type);
 
 // 获取普通 device 权重缓存；首次访问时从 mmap host 权重上传到 GPU。
-DeviceWeight * cached_cuda_weight(const TensorRef & weight);
+DeviceWeight * cached_cuda_weight(const WeightData & weight);
 
 // 将多个 BF16 二维权重按行拼接后上传并缓存，用于合并 projection。
-DeviceWeight * cached_cuda_concat_weight(const std::string & name, const std::vector<TensorRef> & weights);
+DeviceWeight * cached_cuda_concat_weight(const std::string & name, const std::vector<WeightData> & weights);
+
+// 确保 linear attention CUDA state 已按指定形状初始化。
+CudaLinearAttentionState * ensure_linear_attention_state(
+    void *& state_handle,
+    int key_heads,
+    int value_heads,
+    int k_dim,
+    int v_dim,
+    int kernel);
+
+// 确保 full attention CUDA KV cache 已按指定形状初始化。
+CudaFullAttentionState * ensure_full_attention_state(
+    void *& state_handle,
+    int n_heads,
+    int kv_heads,
+    int head_dim,
+    int max_seq_len);
 
 } // namespace llm_inference

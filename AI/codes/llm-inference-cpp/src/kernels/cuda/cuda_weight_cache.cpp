@@ -91,7 +91,7 @@ CudaWeightCache & cuda_weight_cache() {
     return cache;
 }
 
-cudaDataType_t cuda_type_for(const TensorRef & weight) {
+cudaDataType_t cuda_type_for(const WeightData & weight) {
     if (weight.info->dtype == "BF16") {
         return CUDA_R_16BF;
     }
@@ -104,7 +104,7 @@ cudaDataType_t cuda_type_for(const TensorRef & weight) {
     throw std::runtime_error("暂不支持 CUDA dtype：" + weight.info->dtype + " tensor=" + weight.info->name);
 }
 
-size_t dtype_size_for(const TensorRef & weight) {
+size_t dtype_size_for(const WeightData & weight) {
     if (weight.info->dtype == "BF16" || weight.info->dtype == "F16") {
         return sizeof(uint16_t);
     }
@@ -148,7 +148,7 @@ float bf16_to_float(uint16_t value) {
     return out;
 }
 
-DeviceWeight * cached_cuda_weight(const TensorRef & weight) {
+DeviceWeight * cached_cuda_weight(const WeightData & weight) {
     auto & cache = cuda_weight_cache();
     auto found = cache.items.find(weight.info->name);
     if (found != cache.items.end()) {
@@ -180,7 +180,7 @@ DeviceWeight * cached_cuda_weight(const TensorRef & weight) {
     return &it->second;
 }
 
-DeviceWeight * cached_cuda_concat_weight(const std::string & name, const std::vector<TensorRef> & weights) {
+DeviceWeight * cached_cuda_concat_weight(const std::string & name, const std::vector<WeightData> & weights) {
     auto & cache = cuda_weight_cache();
     auto found = cache.items.find(name);
     if (found != cache.items.end()) {
@@ -191,7 +191,7 @@ DeviceWeight * cached_cuda_concat_weight(const std::string & name, const std::ve
     }
     const int64_t in_dim = weights[0].info->shape[1];
     int64_t total_rows = 0;
-    for (const TensorRef & weight : weights) {
+    for (const WeightData & weight : weights) {
         if (weight.info->dtype != "BF16" || weight.info->shape.size() != 2 || weight.info->shape[1] != in_dim) {
             return nullptr;
         }
@@ -211,7 +211,7 @@ DeviceWeight * cached_cuda_concat_weight(const std::string & name, const std::ve
 
     std::vector<uint16_t> host;
     host.reserve(elems);
-    for (const TensorRef & weight : weights) {
+    for (const WeightData & weight : weights) {
         const size_t weight_elems = static_cast<size_t>(weight.info->shape[0]) * static_cast<size_t>(in_dim);
         const auto * p = reinterpret_cast<const uint16_t *>(weight.data);
         host.insert(host.end(), p, p + weight_elems);

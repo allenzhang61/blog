@@ -19,7 +19,17 @@ add_executable(llm-inference-cpp
     src/kernels/cuda/cuda_scratch_buffer.cpp
     src/kernels/cuda/cuda_weight_cache.cpp
     src/main.cpp
+    src/model/Embedding.cpp
+    src/model/QwenBlock.cpp
+    src/model/QwenDecoder.cpp
+    src/model/QwenFullAttention.cpp
+    src/model/QwenFullAttentionBlock.cpp
+    src/model/QwenLinearAttention.cpp
+    src/model/QwenLinearAttentionBlock.cpp
+    src/model/QwenLmHead.cpp
+    src/model/QwenMlp.cpp
     src/model/QwenModel.cpp
+    src/model/runtime_state.cpp
     src/model/weights.cpp
 )
 

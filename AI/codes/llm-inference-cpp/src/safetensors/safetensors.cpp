@@ -109,7 +109,7 @@ void ModelWeights::parse_safetensors_header(size_t file_index) {
     for (auto it = std::sregex_iterator(header.begin(), header.end(), tensor_pattern);
          it != std::sregex_iterator();
          ++it) {
-        TensorInfo info;
+        WeightMeta info;
         info.name = (*it)[1].str();
         info.dtype = (*it)[2].str();
         info.shape = parse_i64_array((*it)[3].str());
@@ -146,13 +146,13 @@ ModelWeights ModelWeights::load_mmap(const fs::path & model_dir) {
     return weights;
 }
 
-TensorRef ModelWeights::tensor_ref(const std::string & name) const {
+WeightData ModelWeights::weight_data(const std::string & name) const {
     auto it = tensors.find(name);
     if (it == tensors.end()) {
         throw std::runtime_error("缺少 tensor：" + name);
     }
-    const TensorInfo & info = it->second;
-    return TensorRef{ &info, files[info.file_index].data + info.data_begin };
+    const WeightMeta & info = it->second;
+    return WeightData{ &info, files[info.file_index].data + info.data_begin };
 }
 
 size_t ModelWeights::mapped_file_count() const {

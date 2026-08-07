@@ -52,7 +52,19 @@ src/safetensors/safetensors.cpp/.h   safetensors mmap 和 tensor metadata
 src/core/tokenizer.cpp/.h     默认 prompt ids、vocab 反查、detokenize
 src/core/profile.cpp/.h       JSON timing 和 tensor dump
 src/kernels/cuda/cuda_ops.cpp/.h CUDA fused attention / MLP / prefill 操作
-src/model/QwenModel.cpp/.h    Qwen3.5 CUDA forward、linear/full attention、KV/recurrent cache
+src/model/Module.h            推理模块基类
+src/model/Tensor.h            运行时 CUDA tensor 轻量引用
+src/model/Embedding.cpp/.h    token embedding 模块
+src/model/QwenBlock.cpp/.h    Qwen transformer block 抽象基类
+src/model/QwenMlp.cpp/.h      Qwen MLP 子模块
+src/model/QwenLinearAttention.cpp/.h linear attention mixer 子模块
+src/model/QwenFullAttention.cpp/.h full attention mixer 子模块
+src/model/QwenLinearAttentionBlock.cpp/.h linear attention block 模块
+src/model/QwenFullAttentionBlock.cpp/.h full attention block 模块
+src/model/QwenDecoder.cpp/.h  block 堆叠，负责 prefill 和 decode forward
+src/model/QwenLmHead.cpp/.h   final norm + tied lm head + greedy argmax
+src/model/QwenModel.cpp/.h    Qwen3.5 生成流程编排
+src/model/runtime_state.cpp/.h KV/recurrent cache 运行时状态
 src/model/weights.cpp/.h      Qwen 权重命名和校验
 third_party/nlohmann/json.hpp vendored JSON single-header
 ```
