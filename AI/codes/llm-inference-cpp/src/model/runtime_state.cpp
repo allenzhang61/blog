@@ -1,6 +1,7 @@
 #include "runtime_state.h"
 
-#include "../kernels/cuda/cuda_ops.h"
+#include "../kernels/cuda/cache/CudaFullAttentionState.h"
+#include "../kernels/cuda/cache/CudaLinearAttentionState.h"
 
 namespace llm_inference {
 
@@ -11,7 +12,7 @@ LinearAttentionState::LinearAttentionState(LinearAttentionState && other) noexce
 
 LinearAttentionState & LinearAttentionState::operator=(LinearAttentionState && other) noexcept {
     if (this != &other) {
-        cuda_free_linear_attention_state(cuda_state);
+        CudaLinearAttentionState::destroy(cuda_state);
         cuda_state = other.cuda_state;
         other.cuda_state = nullptr;
     }
@@ -19,7 +20,7 @@ LinearAttentionState & LinearAttentionState::operator=(LinearAttentionState && o
 }
 
 LinearAttentionState::~LinearAttentionState() {
-    cuda_free_linear_attention_state(cuda_state);
+    CudaLinearAttentionState::destroy(cuda_state);
 }
 
 FullAttentionState::FullAttentionState(FullAttentionState && other) noexcept
@@ -30,7 +31,7 @@ FullAttentionState::FullAttentionState(FullAttentionState && other) noexcept
 
 FullAttentionState & FullAttentionState::operator=(FullAttentionState && other) noexcept {
     if (this != &other) {
-        cuda_free_full_attention_state(cuda_state);
+        CudaFullAttentionState::destroy(cuda_state);
         max_seq_len = other.max_seq_len;
         cuda_state = other.cuda_state;
         other.cuda_state = nullptr;
@@ -39,7 +40,7 @@ FullAttentionState & FullAttentionState::operator=(FullAttentionState && other) 
 }
 
 FullAttentionState::~FullAttentionState() {
-    cuda_free_full_attention_state(cuda_state);
+    CudaFullAttentionState::destroy(cuda_state);
 }
 
 RunState make_run_state(const ModelConfig & config, int max_seq_len) {
@@ -55,4 +56,3 @@ RunState make_run_state(const ModelConfig & config, int max_seq_len) {
 }
 
 } // namespace llm_inference
-

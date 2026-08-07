@@ -2,7 +2,7 @@
 
 #include "../core/cuda_kernels.h"
 #include "../kernels/cuda/cuda_common.h"
-#include "../kernels/cuda/cuda_weight_cache.h"
+#include "../kernels/cuda/cache/CudaWeightCache.h"
 
 #include <stdexcept>
 
@@ -26,16 +26,16 @@ Tensor QwenLinearAttentionBlock::forward(const Tensor & device_x, RunState & sta
     const int hidden_dim = config_.text.hidden_size;
     const float eps = config_.text.rms_norm_eps;
 
-    DeviceWeight * input_norm_device = cached_cuda_weight(weights_.input_norm);
-    DeviceWeight * post_norm_device = cached_cuda_weight(weights_.post_norm);
-    DeviceWeight * projection_device = cached_cuda_concat_weight(
+    auto & cache = cuda_weight_cache();
+    DeviceWeight * input_norm_device = cache.cached_weight(weights_.input_norm);
+    DeviceWeight * post_norm_device = cache.cached_weight(weights_.post_norm);
+    DeviceWeight * projection_device = cache.cached_concat_weight(
         weights_.lin.in_proj_qkv.info->name + "\n" + weights_.lin.in_proj_z.info->name + "\n" + weights_.lin.in_proj_b.info->name + "\n" + weights_.lin.in_proj_a.info->name,
         {weights_.lin.in_proj_qkv, weights_.lin.in_proj_z, weights_.lin.in_proj_b, weights_.lin.in_proj_a});
     if (!input_norm_device || !post_norm_device || !projection_device) {
         throw std::runtime_error("CUDA linear attention block 权重缓存失败，layer=" + std::to_string(layer_index_));
     }
 
-    auto & cache = cuda_weight_cache();
     cache.layer_out_buffer.ensure_bytes(static_cast<size_t>(hidden_dim) * sizeof(float), "layer out buffer");
     cache.norm_lowp_buffer.ensure_bytes(static_cast<size_t>(hidden_dim) * sizeof(uint16_t), "input norm bf16 buffer");
     cache.post_norm_lowp_buffer.ensure_bytes(static_cast<size_t>(hidden_dim) * sizeof(uint16_t), "post norm bf16 buffer");

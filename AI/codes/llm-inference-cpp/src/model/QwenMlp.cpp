@@ -1,7 +1,7 @@
 #include "QwenMlp.h"
 
 #include "../kernels/cuda/cuda_ops.h"
-#include "../kernels/cuda/cuda_weight_cache.h"
+#include "../kernels/cuda/cache/CudaWeightCache.h"
 
 #include <stdexcept>
 

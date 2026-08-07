@@ -3,7 +3,8 @@
 #include "../core/cuda_kernels.h"
 #include "../kernels/cuda/cuda_common.h"
 #include "../kernels/cuda/cuda_ops.h"
-#include "../kernels/cuda/cuda_weight_cache.h"
+#include "../kernels/cuda/cache/CudaFullAttentionState.h"
+#include "../kernels/cuda/cache/CudaWeightCache.h"
 
 #include <stdexcept>
 
@@ -30,21 +31,21 @@ Tensor QwenFullAttention::forward(const Tensor & normed_x, RunState & state) con
     const float rope_theta = config_.text.rope_parameters.rope_theta;
     const float partial_rotary_factor = config_.text.rope_parameters.partial_rotary_factor;
 
-    DeviceWeight * projection_device = cached_cuda_concat_weight(
+    auto & cache = cuda_weight_cache();
+    DeviceWeight * projection_device = cache.cached_concat_weight(
         weights_.q_proj.info->name + "\n" + weights_.k_proj.info->name + "\n" + weights_.v_proj.info->name,
         {weights_.q_proj, weights_.k_proj, weights_.v_proj});
-    DeviceWeight * q_norm_device = cached_cuda_weight(weights_.q_norm);
-    DeviceWeight * k_norm_device = cached_cuda_weight(weights_.k_norm);
-    DeviceWeight * attn_out_device = cached_cuda_weight(weights_.o_proj);
+    DeviceWeight * q_norm_device = cache.cached_weight(weights_.q_norm);
+    DeviceWeight * k_norm_device = cache.cached_weight(weights_.k_norm);
+    DeviceWeight * attn_out_device = cache.cached_weight(weights_.o_proj);
     if (!projection_device || !q_norm_device || !k_norm_device || !attn_out_device) {
         throw std::runtime_error("CUDA full attention 权重缓存失败，layer=" + std::to_string(layer_index_));
     }
 
-    auto & cache = cuda_weight_cache();
     cache.mixer_buffer.ensure_bytes(static_cast<size_t>(hidden_dim) * sizeof(float), "layer mixer buffer");
 
     CudaFullAttentionState * cuda_state =
-        ensure_full_attention_state(state.full[layer_index_].cuda_state, n_heads, kv_heads, head_dim, max_seq_len);
+        CudaFullAttentionState::ensure(state.full[layer_index_].cuda_state, n_heads, kv_heads, head_dim, max_seq_len);
     WeightMeta combined_info = *weights_.q_proj.info;
     combined_info.name = weights_.q_proj.info->name + "+k+v";
     combined_info.shape[0] = static_cast<int64_t>(q_total * 2 + kv_total * 2);
@@ -67,4 +68,3 @@ Tensor QwenFullAttention::forward(const Tensor & normed_x, RunState & state) con
 }
 
 } // namespace llm_inference
-

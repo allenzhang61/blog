@@ -3,7 +3,8 @@
 #include "../core/cuda_kernels.h"
 #include "../kernels/cuda/cuda_common.h"
 #include "../kernels/cuda/cuda_ops.h"
-#include "../kernels/cuda/cuda_weight_cache.h"
+#include "../kernels/cuda/cache/CudaLinearAttentionState.h"
+#include "../kernels/cuda/cache/CudaWeightCache.h"
 
 #include <stdexcept>
 
@@ -29,22 +30,22 @@ Tensor QwenLinearAttention::forward(const Tensor & normed_x, RunState & state) c
     const int conv_dim = key_total * 2 + value_total;
     const float eps = config_.text.rms_norm_eps;
 
-    DeviceWeight * projection_device = cached_cuda_concat_weight(
+    auto & cache = cuda_weight_cache();
+    DeviceWeight * projection_device = cache.cached_concat_weight(
         weights_.in_proj_qkv.info->name + "\n" + weights_.in_proj_z.info->name + "\n" + weights_.in_proj_b.info->name + "\n" + weights_.in_proj_a.info->name,
         {weights_.in_proj_qkv, weights_.in_proj_z, weights_.in_proj_b, weights_.in_proj_a});
-    DeviceWeight * conv_device = cached_cuda_weight(weights_.conv1d);
-    DeviceWeight * a_log_device = cached_cuda_weight(weights_.a_log);
-    DeviceWeight * dt_bias_device = cached_cuda_weight(weights_.dt_bias);
-    DeviceWeight * attn_norm_device = cached_cuda_weight(weights_.norm);
-    DeviceWeight * attn_out_device = cached_cuda_weight(weights_.out_proj);
+    DeviceWeight * conv_device = cache.cached_weight(weights_.conv1d);
+    DeviceWeight * a_log_device = cache.cached_weight(weights_.a_log);
+    DeviceWeight * dt_bias_device = cache.cached_weight(weights_.dt_bias);
+    DeviceWeight * attn_norm_device = cache.cached_weight(weights_.norm);
+    DeviceWeight * attn_out_device = cache.cached_weight(weights_.out_proj);
     if (!projection_device || !conv_device || !a_log_device || !dt_bias_device || !attn_norm_device || !attn_out_device) {
         throw std::runtime_error("CUDA linear attention 权重缓存失败，layer=" + std::to_string(layer_index_));
     }
 
-    auto & cache = cuda_weight_cache();
     cache.mixer_buffer.ensure_bytes(static_cast<size_t>(hidden_dim) * sizeof(float), "layer mixer buffer");
     CudaLinearAttentionState * cuda_state =
-        ensure_linear_attention_state(state.linear[layer_index_].cuda_state, key_heads, value_heads, k_dim, v_dim, kernel);
+        CudaLinearAttentionState::ensure(state.linear[layer_index_].cuda_state, key_heads, value_heads, k_dim, v_dim, kernel);
 
     WeightMeta combined_info = *weights_.in_proj_qkv.info;
     combined_info.name = weights_.in_proj_qkv.info->name + "+z+b+a";
@@ -83,4 +84,3 @@ Tensor QwenLinearAttention::forward(const Tensor & normed_x, RunState & state) c
 }
 
 } // namespace llm_inference
-

@@ -52,6 +52,7 @@ src/safetensors/safetensors.cpp/.h   safetensors mmap 和 tensor metadata
 src/core/tokenizer.cpp/.h     默认 prompt ids、vocab 反查、detokenize
 src/core/profile.cpp/.h       JSON timing 和 tensor dump
 src/kernels/cuda/cuda_ops.cpp/.h CUDA fused attention / MLP / prefill 操作
+src/kernels/cuda/cache/*.cpp/.h CUDA 权重 cache、scratch buffer 和 attention state
 src/model/Module.h            推理模块基类
 src/model/Tensor.h            运行时 CUDA tensor 轻量引用
 src/model/Embedding.cpp/.h    token embedding 模块

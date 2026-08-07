@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../core/config.h"
-#include "cuda_weight_cache.h"
+#include "cache/CudaWeightCache.h"
 #include "../../model/weights.h"
 #include "../../safetensors/safetensors.h"
 
@@ -58,11 +58,5 @@ const void * cuda_prefill_batch(
     std::vector<void *> & full_states,
     const std::vector<int> & full_max_seq_lens,
     int & seq_len);
-
-// 释放 linear attention 的 CUDA cache/state。
-void cuda_free_linear_attention_state(void * state);
-
-// 释放 full attention 的 CUDA KV cache/state。
-void cuda_free_full_attention_state(void * state);
 
 } // namespace llm_inference

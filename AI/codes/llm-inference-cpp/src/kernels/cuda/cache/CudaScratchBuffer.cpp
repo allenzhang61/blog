@@ -1,6 +1,6 @@
-#include "cuda_scratch_buffer.h"
+#include "CudaScratchBuffer.h"
 
-#include "cuda_common.h"
+#include "../cuda_common.h"
 
 #include <cuda_runtime.h>
 
@@ -31,11 +31,6 @@ CudaScratchBuffer<T> & CudaScratchBuffer<T>::operator=(CudaScratchBuffer && othe
 }
 
 template <typename T>
-T * CudaScratchBuffer<T>::ensure(size_t count, const std::string & name) {
-    return ensure_bytes(count * sizeof(T), name);
-}
-
-template <typename T>
 T * CudaScratchBuffer<T>::ensure_bytes(size_t required_bytes, const std::string & name) {
     if (bytes_ >= required_bytes) {
         return ptr_;
@@ -58,18 +53,8 @@ void CudaScratchBuffer<T>::reset() {
 }
 
 template <typename T>
-T * CudaScratchBuffer<T>::data() const {
-    return ptr_;
-}
-
-template <typename T>
 CudaScratchBuffer<T>::operator T *() const {
     return ptr_;
-}
-
-template <typename T>
-size_t CudaScratchBuffer<T>::bytes() const {
-    return bytes_;
 }
 
 template class CudaScratchBuffer<uint8_t>;
