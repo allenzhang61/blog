@@ -2,7 +2,7 @@
 
 #include "Module.h"
 #include "Tensor.h"
-#include "runtime_state.h"
+#include "RunState.h"
 #include "weights.h"
 #include "../core/config.h"
 
@@ -25,4 +25,3 @@ private:
 };
 
 } // namespace llm_inference
-

@@ -19,12 +19,12 @@ const char * QwenFullAttention::name() const {
 }
 
 Tensor QwenFullAttention::forward(const Tensor & normed_x, RunState & state) const {
-    const int pos = state.seq_len;
+    const int pos = state.sequence_length();
     const int hidden_dim = config_.text.hidden_size;
     const int n_heads = config_.text.num_attention_heads;
     const int kv_heads = config_.text.num_key_value_heads;
     const int head_dim = config_.text.head_dim;
-    const int max_seq_len = state.full[layer_index_].max_seq_len;
+    const int max_seq_len = state.full_state(layer_index_).max_seq_len;
     const int q_total = n_heads * head_dim;
     const int kv_total = kv_heads * head_dim;
     const float eps = config_.text.rms_norm_eps;
@@ -45,7 +45,7 @@ Tensor QwenFullAttention::forward(const Tensor & normed_x, RunState & state) con
     cache.mixer_buffer.ensure_bytes(static_cast<size_t>(hidden_dim) * sizeof(float), "layer mixer buffer");
 
     CudaFullAttentionState * cuda_state =
-        CudaFullAttentionState::ensure(state.full[layer_index_].cuda_state, n_heads, kv_heads, head_dim, max_seq_len);
+        CudaFullAttentionState::ensure(state.full_state(layer_index_).cuda_state, n_heads, kv_heads, head_dim, max_seq_len);
     WeightMeta combined_info = *weights_.q_proj.info;
     combined_info.name = weights_.q_proj.info->name + "+k+v";
     combined_info.shape[0] = static_cast<int64_t>(q_total * 2 + kv_total * 2);

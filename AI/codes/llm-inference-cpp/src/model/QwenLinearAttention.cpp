@@ -45,7 +45,7 @@ Tensor QwenLinearAttention::forward(const Tensor & normed_x, RunState & state) c
 
     cache.mixer_buffer.ensure_bytes(static_cast<size_t>(hidden_dim) * sizeof(float), "layer mixer buffer");
     CudaLinearAttentionState * cuda_state =
-        CudaLinearAttentionState::ensure(state.linear[layer_index_].cuda_state, key_heads, value_heads, k_dim, v_dim, kernel);
+        CudaLinearAttentionState::ensure(state.linear_state(layer_index_).cuda_state, key_heads, value_heads, k_dim, v_dim, kernel);
 
     WeightMeta combined_info = *weights_.in_proj_qkv.info;
     combined_info.name = weights_.in_proj_qkv.info->name + "+z+b+a";

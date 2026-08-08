@@ -67,7 +67,7 @@ src/model/QwenLmHead.cpp/.h   final norm + tied lm head + greedy argmax
 src/model/QwenModel.cpp/.h    Qwen3.5 模型结构和单 token forward
 src/model/QwenPrefillRunner.cpp/.h CUDA batch prefill 执行器
 src/model/QwenGenerator.cpp/.h greedy 生成流程编排
-src/model/runtime_state.cpp/.h KV/recurrent cache 运行时状态
+src/model/RunState.cpp/.h 单次生成的 KV/recurrent 运行时状态
 src/model/weights.cpp/.h      Qwen 权重命名和校验
 third_party/nlohmann/json.hpp vendored JSON single-header
 ```

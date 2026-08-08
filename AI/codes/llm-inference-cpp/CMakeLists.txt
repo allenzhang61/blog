@@ -34,7 +34,7 @@ add_executable(llm-inference-cpp
     src/model/QwenMlp.cpp
     src/model/QwenModel.cpp
     src/model/QwenPrefillRunner.cpp
-    src/model/runtime_state.cpp
+    src/model/RunState.cpp
     src/model/weights.cpp
 )
 

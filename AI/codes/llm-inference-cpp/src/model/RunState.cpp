@@ -1,4 +1,4 @@
-#include "runtime_state.h"
+#include "RunState.h"
 
 #include "../kernels/cuda/cache/CudaFullAttentionState.h"
 #include "../kernels/cuda/cache/CudaLinearAttentionState.h"
@@ -43,16 +43,14 @@ FullAttentionState::~FullAttentionState() {
     CudaFullAttentionState::destroy(cuda_state);
 }
 
-RunState make_run_state(const ModelConfig & config, int max_seq_len) {
-    RunState state;
-    state.linear.resize(config.text.num_hidden_layers);
-    state.full.resize(config.text.num_hidden_layers);
+RunState::RunState(const ModelConfig & config, int max_seq_len)
+    : linear_states_(config.text.num_hidden_layers),
+      full_states_(config.text.num_hidden_layers) {
     for (int layer = 0; layer < config.text.num_hidden_layers; ++layer) {
         if (config.text.layer_types[layer] != "linear_attention") {
-            state.full[layer].max_seq_len = max_seq_len;
+            full_states_[layer].max_seq_len = max_seq_len;
         }
     }
-    return state;
 }
 
 } // namespace llm_inference

@@ -4,7 +4,7 @@
 #include "../core/config.h"
 #include "../core/profile.h"
 #include "QwenModel.h"
-#include "runtime_state.h"
+#include "RunState.h"
 
 #include <vector>
 

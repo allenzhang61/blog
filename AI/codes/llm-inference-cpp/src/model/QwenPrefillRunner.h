@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Tensor.h"
-#include "runtime_state.h"
+#include "RunState.h"
 #include "weights.h"
 #include "../core/config.h"
 

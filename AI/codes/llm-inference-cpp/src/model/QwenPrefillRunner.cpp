@@ -73,21 +73,21 @@ QwenPrefillRunner::QwenPrefillRunner(const ModelConfig & config, const ModelPara
 }
 
 Tensor QwenPrefillRunner::forward(const std::vector<int> & input_ids, RunState & state) const {
-    std::vector<void *> linear_cuda_states(state.linear.size(), nullptr);
-    std::vector<void *> full_cuda_states(state.full.size(), nullptr);
-    std::vector<int> full_max_seq_lens(state.full.size(), 0);
-    for (size_t i = 0; i < state.linear.size(); ++i) {
-        linear_cuda_states[i] = state.linear[i].cuda_state;
+    std::vector<void *> linear_cuda_states(state.layer_count(), nullptr);
+    std::vector<void *> full_cuda_states(state.layer_count(), nullptr);
+    std::vector<int> full_max_seq_lens(state.layer_count(), 0);
+    for (size_t i = 0; i < state.layer_count(); ++i) {
+        linear_cuda_states[i] = state.linear_state(i).cuda_state;
     }
-    for (size_t i = 0; i < state.full.size(); ++i) {
-        full_cuda_states[i] = state.full[i].cuda_state;
-        full_max_seq_lens[i] = state.full[i].max_seq_len;
+    for (size_t i = 0; i < state.layer_count(); ++i) {
+        full_cuda_states[i] = state.full_state(i).cuda_state;
+        full_max_seq_lens[i] = state.full_state(i).max_seq_len;
     }
 
     if (input_ids.empty()) {
         throw std::runtime_error("CUDA batch prefill 失败：prompt ids 为空。");
     }
-    if (state.seq_len != 0) {
+    if (state.sequence_length() != 0) {
         throw std::runtime_error("CUDA batch prefill 失败：seq_len 必须从 0 开始。");
     }
     const int tokens = static_cast<int>(input_ids.size());
@@ -247,7 +247,7 @@ Tensor QwenPrefillRunner::forward(const std::vector<int> & input_ids, RunState &
                 tokens,
                 n_heads,
                 head_dim,
-                state.seq_len,
+                state.sequence_length(),
                 config_.text.rope_parameters.rope_theta,
                 config_.text.rope_parameters.partial_rotary_factor,
                 config_.text.rms_norm_eps,
@@ -264,7 +264,7 @@ Tensor QwenPrefillRunner::forward(const std::vector<int> & input_ids, RunState &
                 kv_heads,
                 head_dim,
                 full_max_seq_lens[layer],
-                state.seq_len,
+                state.sequence_length(),
                 config_.text.rope_parameters.rope_theta,
                 config_.text.rope_parameters.partial_rotary_factor,
                 config_.text.rms_norm_eps,
@@ -281,7 +281,7 @@ Tensor QwenPrefillRunner::forward(const std::vector<int> & input_ids, RunState &
                 kv_heads,
                 head_dim,
                 full_max_seq_lens[layer],
-                state.seq_len,
+                state.sequence_length(),
                 nullptr);
             check_cuda(cudaGetLastError(), "launch_full_attention_attend_batch 失败");
             DeviceWeight & out_device = require_device_weight(cache, out_w, "CUDA batch prefill full out layer=" + std::to_string(layer));
@@ -329,13 +329,13 @@ Tensor QwenPrefillRunner::forward(const std::vector<int> & input_ids, RunState &
         }
     }
 
-    for (size_t i = 0; i < state.linear.size(); ++i) {
-        state.linear[i].cuda_state = linear_cuda_states[i];
+    for (size_t i = 0; i < state.layer_count(); ++i) {
+        state.linear_state(i).cuda_state = linear_cuda_states[i];
     }
-    for (size_t i = 0; i < state.full.size(); ++i) {
-        state.full[i].cuda_state = full_cuda_states[i];
+    for (size_t i = 0; i < state.layer_count(); ++i) {
+        state.full_state(i).cuda_state = full_cuda_states[i];
     }
-    state.seq_len += tokens;
+    state.advance(tokens);
     return {current + static_cast<size_t>(tokens - 1) * hidden_dim, hidden_dim, -1};
 }
 

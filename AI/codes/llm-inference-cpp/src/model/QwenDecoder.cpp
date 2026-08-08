@@ -35,7 +35,7 @@ Tensor QwenDecoder::forward(const Tensor & device_token_id, RunState & state) co
         current = block->forward(current, state);
     }
 
-    state.seq_len += 1;
+    state.advance(1);
     return current;
 }
 

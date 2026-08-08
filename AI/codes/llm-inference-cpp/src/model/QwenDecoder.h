@@ -7,7 +7,7 @@
 #include "QwenBlock.h"
 #include "QwenLinearAttentionBlock.h"
 #include "QwenPrefillRunner.h"
-#include "runtime_state.h"
+#include "RunState.h"
 #include "weights.h"
 #include "../core/config.h"
 

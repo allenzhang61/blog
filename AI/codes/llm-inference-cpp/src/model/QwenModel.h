@@ -5,7 +5,7 @@
 #include "Module.h"
 #include "QwenDecoder.h"
 #include "QwenLmHead.h"
-#include "runtime_state.h"
+#include "RunState.h"
 #include "weights.h"
 
 #include <vector>
