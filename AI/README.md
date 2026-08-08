@@ -244,6 +244,9 @@
   - Reranker
   - RAG 测评
   - Agentic RAG
+- 知识库
+  - outline
+  - ragflow
 
 ### python & cuda
 
