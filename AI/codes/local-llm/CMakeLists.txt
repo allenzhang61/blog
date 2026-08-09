@@ -1,7 +1,12 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(local_llm)
+project(local_llm LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CUDA_STANDARD 17)
+# 目标架构：RTX A4000 为 sm_86。可用 -DCMAKE_CUDA_ARCHITECTURES=xx 覆盖。
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 86)
+endif()
 
 add_executable(local_llm main.cpp
         src/utils/cli/Args.cpp
@@ -29,6 +34,29 @@ add_executable(local_llm main.cpp
         src/backend/cuda/mem/CudaScratchBuffer.h
         src/llm/qwen/QwenSession.cpp
         src/llm/qwen/QwenSession.h
+        src/llm/qwen/QwenForwardScratch.cpp
+        src/llm/qwen/QwenForwardScratch.h
+        src/backend/cuda/ops/kernel.cu
+        src/backend/cuda/ops/kernel.cuh
+        src/backend/cuda/ops/gemm.cpp
+        src/backend/cuda/ops/gemm.h
+        src/llm/qwen/model/Module.h
+        src/llm/qwen/model/RMSNorm.cpp
+        src/llm/qwen/model/RMSNorm.h
+        src/llm/qwen/model/Embedding.cpp
+        src/llm/qwen/model/Embedding.h
+        src/llm/qwen/model/SwiGLUMlp.cpp
+        src/llm/qwen/model/SwiGLUMlp.h
+        src/llm/qwen/model/LMHead.cpp
+        src/llm/qwen/model/LMHead.h
+        src/llm/qwen/model/FullAttention.cpp
+        src/llm/qwen/model/FullAttention.h
+        src/llm/qwen/model/LinearAttention.cpp
+        src/llm/qwen/model/LinearAttention.h
+        src/llm/qwen/model/DecoderLayer.cpp
+        src/llm/qwen/model/DecoderLayer.h
+        src/llm/qwen/model/QwenModel.cpp
+        src/llm/qwen/model/QwenModel.h
 )
 
 target_include_directories(local_llm PRIVATE src)
@@ -55,21 +83,21 @@ target_compile_definitions(local_llm PRIVATE PCRE2_CODE_UNIT_WIDTH=8)
 target_include_directories(local_llm PRIVATE ${PCRE2_INCLUDE_DIR} ${UTF8PROC_INCLUDE_DIR})
 target_link_libraries(local_llm PRIVATE ${PCRE2_LIBRARY} ${UTF8PROC_LIBRARY})
 
-# CUDA：当前 CUDA 相关 .cpp 只用 host 端 runtime / cuBLAS API（无 .cu kernel），
-# 因此用普通编译器编译，只需补上 CUDA toolkit 的头文件与链接库路径。
-# 允许通过 -DCUDA_TOOLKIT_ROOT_DIR=/path 覆盖，默认探测常见安装位置。
+# CUDA：project() 已启用 CUDA 语言，.cu kernel 由 nvcc 编译。
+# 这里再补上 cuBLAS 的头文件与链接库路径（cudart 由 CUDA 工具链自动链接，
+# 但显式链接更稳妥）。允许通过 -DCUDA_TOOLKIT_ROOT_DIR=/path 覆盖探测位置。
 find_path(CUDA_INCLUDE_DIR NAMES cublas_v2.h cuda_runtime.h
         HINTS ${CUDA_TOOLKIT_ROOT_DIR}
-        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8
-        PATH_SUFFIXES include)
+        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
+        PATH_SUFFIXES include targets/x86_64-linux/include)
 find_library(CUDART_LIBRARY NAMES cudart
         HINTS ${CUDA_TOOLKIT_ROOT_DIR}
-        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8
-        PATH_SUFFIXES lib64 lib)
+        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
+        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib)
 find_library(CUBLAS_LIBRARY NAMES cublas
         HINTS ${CUDA_TOOLKIT_ROOT_DIR}
-        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8
-        PATH_SUFFIXES lib64 lib)
+        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
+        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib)
 
 if(NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY OR NOT CUBLAS_LIBRARY)
     message(FATAL_ERROR "未找到 CUDA toolkit（cublas_v2.h / libcudart / libcublas）。可用 -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda 指定")
