@@ -62,10 +62,10 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
         scratch.input_lowp_buffer.ensure(static_cast<size_t>(tokens) * hidden, "lin in lowp");
     to_weight_lowp(d_hidden, d_in_lowp, tokens * hidden, *qkv, nullptr);
 
-    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_in_lowp, qkv->type, tokens, d_mixed);
-    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_in_lowp, z_w->type, tokens, d_z);
-    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_in_lowp, b_w->type, tokens, d_b);
-    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_in_lowp, a_w->type, tokens, d_a);
+    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_in_lowp, qkv->type, tokens, d_mixed, "linattn.in_proj_qkv");
+    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_in_lowp, z_w->type, tokens, d_z, "linattn.in_proj_z");
+    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_in_lowp, b_w->type, tokens, d_b, "linattn.in_proj_b");
+    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_in_lowp, a_w->type, tokens, d_a, "linattn.in_proj_a");
 
     float *conv_state = static_cast<float *>(state.conv_state.ptr);
     float *recurrent_state = static_cast<float *>(state.recurrent_state.ptr);
@@ -80,7 +80,7 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
     to_weight_lowp(d_gated, d_gated_lowp, tokens * value_total, *out_proj, nullptr);
 
     // out_proj：[hidden, value_total] · gated[value_total, tokens] -> [hidden, tokens]。
-    gemm_weight(pool_->handle, *out_proj, hidden, value_total, d_gated_lowp, out_proj->type, tokens, d_out);
+    gemm_weight(pool_->handle, *out_proj, hidden, value_total, d_gated_lowp, out_proj->type, tokens, d_out, "linattn.out_proj");
 
     check_cuda(cudaDeviceSynchronize(), "LinearAttention prefill 同步失败");
 }
@@ -122,10 +122,10 @@ void LinearAttention::decode(const float *d_hidden, float *d_out,
     uint16_t *d_in_lowp = scratch.input_lowp_buffer.ensure(hidden, "lin in lowp");
     to_weight_lowp(d_hidden, d_in_lowp, hidden, *qkv, nullptr);
 
-    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_in_lowp, qkv->type, 1, d_mixed);
-    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_in_lowp, z_w->type, 1, d_z);
-    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_in_lowp, b_w->type, 1, d_b);
-    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_in_lowp, a_w->type, 1, d_a);
+    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_in_lowp, qkv->type, 1, d_mixed, "linattn.in_proj_qkv");
+    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_in_lowp, z_w->type, 1, d_z, "linattn.in_proj_z");
+    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_in_lowp, b_w->type, 1, d_b, "linattn.in_proj_b");
+    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_in_lowp, a_w->type, 1, d_a, "linattn.in_proj_a");
 
     float *conv_state = static_cast<float *>(state.conv_state.ptr);
     float *recurrent_state = static_cast<float *>(state.recurrent_state.ptr);
@@ -139,7 +139,7 @@ void LinearAttention::decode(const float *d_hidden, float *d_out,
 
     to_weight_lowp(d_gated, d_gated_lowp, value_total, *out_proj, nullptr);
 
-    gemm_weight(pool_->handle, *out_proj, hidden, value_total, d_gated_lowp, out_proj->type, 1, d_out);
+    gemm_weight(pool_->handle, *out_proj, hidden, value_total, d_gated_lowp, out_proj->type, 1, d_out, "linattn.out_proj");
 
     check_cuda(cudaDeviceSynchronize(), "LinearAttention decode 同步失败");
 }

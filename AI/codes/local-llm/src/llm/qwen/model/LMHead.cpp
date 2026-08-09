@@ -32,7 +32,7 @@ int LMHead::forward(const float *d_hidden, int hidden_size, QwenForwardScratch &
     to_weight_lowp(d_hidden, d_in_lowp, hidden_size, *w, nullptr);
 
     float *d_logits = scratch.y_buffer.ensure(static_cast<size_t>(vocab), "lm_head logits");
-    gemm_weight(pool_->handle, *w, vocab, hidden_size, d_in_lowp, w->type, /*tokens=*/1, d_logits);
+    gemm_weight(pool_->handle, *w, vocab, hidden_size, d_in_lowp, w->type, /*tokens=*/1, d_logits, "lm_head");
 
     // argmax：分块归约。block_values/indices 上限 1024（与 kernel 内一致）。
     float *d_block_val = scratch.argmax_block_values.ensure(1024, "argmax block values");

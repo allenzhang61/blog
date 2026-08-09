@@ -9,6 +9,8 @@
 #include <cuda_fp16.h>
 #include <cfloat>
 
+#include "utils/stats/ScopedTimer.h"
+
 namespace {
 
 constexpr int kBlock = 256;
@@ -607,29 +609,35 @@ inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 // ================= launch 封装 =================
 
 void launch_float_to_bf16(const float *input, uint16_t *output, int n, void *stream) {
+    ScopedGpuTimer timer("float_to_bf16", as_stream(stream));
     float_to_bf16_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(input, output, n);
 }
 
 void launch_float_to_f16(const float *input, uint16_t *output, int n, void *stream) {
+    ScopedGpuTimer timer("float_to_f16", as_stream(stream));
     float_to_f16_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(input, output, n);
 }
 
 void launch_add(const float *a, const float *b, float *out, int n, void *stream) {
+    ScopedGpuTimer timer("residual_add", as_stream(stream));
     add_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(a, b, out, n);
 }
 
 void launch_silu_mul(const float *gate, const float *up, float *out, int n, void *stream) {
+    ScopedGpuTimer timer("mlp.silu_mul", as_stream(stream));
     silu_mul_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(gate, up, out, n);
 }
 
 void launch_embedding_lookup(const uint16_t *table, const int *token_ids, float *output,
                              int tokens, int vocab, int hidden, int lowp_type, void *stream) {
+    ScopedGpuTimer timer("embedding", as_stream(stream));
     embedding_lookup_kernel<<<tokens, kBlock, 0, as_stream(stream)>>>(
         table, token_ids, output, vocab, hidden, lowp_type);
 }
 
 void launch_rms_norm(const float *input, const void *weight, int weight_type, float *output,
                      int rows, int hidden, float eps, bool one_plus, void *stream) {
+    ScopedGpuTimer timer("rms_norm", as_stream(stream));
     rms_norm_kernel<float><<<rows, kBlock, kBlock * sizeof(float), as_stream(stream)>>>(
         input, weight, weight_type, output, hidden, eps, one_plus, 0);
 }
@@ -637,6 +645,7 @@ void launch_rms_norm(const float *input, const void *weight, int weight_type, fl
 void launch_rms_norm_to_lowp(const float *input, const void *weight, int weight_type, uint16_t *output,
                              int rows, int hidden, float eps, bool one_plus,
                              int lowp_type, void *stream) {
+    ScopedGpuTimer timer("rms_norm_to_lowp", as_stream(stream));
     rms_norm_kernel<uint16_t><<<rows, kBlock, kBlock * sizeof(float), as_stream(stream)>>>(
         input, weight, weight_type, output, hidden, eps, one_plus, lowp_type);
 }
@@ -644,6 +653,7 @@ void launch_rms_norm_to_lowp(const float *input, const void *weight, int weight_
 void launch_argmax(const float *logits, int vocab,
                    float *block_values, int *block_indices,
                    float *best_value, int *best_index, void *stream) {
+    ScopedGpuTimer timer("argmax", as_stream(stream));
     cudaStream_t s = as_stream(stream);
     int blocks = grid_for(vocab);
     if (blocks > 1024) blocks = 1024; // 上限，避免 block_values 过大
@@ -657,6 +667,7 @@ void launch_argmax(const float *logits, int vocab,
 void launch_full_attention_q(const float *q_and_gate, const uint16_t *q_norm_weight,
                              float *q, float *gate, int n_heads, int head_dim, int pos,
                              float rope_theta, float partial_rotary_factor, float eps, void *stream) {
+    ScopedGpuTimer timer("fullattn.rope_q", as_stream(stream));
     full_attention_q_kernel<<<n_heads, kBlock, 0, as_stream(stream)>>>(
         q_and_gate, q_norm_weight, q, gate, n_heads, head_dim, pos,
         rope_theta, partial_rotary_factor, eps);
@@ -666,6 +677,7 @@ void launch_full_attention_q_batch(const float *q_and_gate, const uint16_t *q_no
                                    float *q, float *gate, int tokens, int n_heads, int head_dim,
                                    int start_pos, float rope_theta, float partial_rotary_factor,
                                    float eps, void *stream) {
+    ScopedGpuTimer timer("fullattn.rope_q", as_stream(stream));
     full_attention_q_batch_kernel<<<tokens * n_heads, kBlock, 0, as_stream(stream)>>>(
         q_and_gate, q_norm_weight, q, gate, tokens, n_heads, head_dim, start_pos,
         rope_theta, partial_rotary_factor, eps);
@@ -675,6 +687,7 @@ void launch_full_attention_kv(const float *k_in, const float *v_in, const uint16
                               float *key_cache, float *value_cache, int kv_heads, int head_dim,
                               int max_seq_len, int pos, float rope_theta, float partial_rotary_factor,
                               float eps, void *stream) {
+    ScopedGpuTimer timer("fullattn.rope_kv", as_stream(stream));
     full_attention_kv_kernel<<<kv_heads, kBlock, 0, as_stream(stream)>>>(
         k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim, max_seq_len, pos,
         rope_theta, partial_rotary_factor, eps);
@@ -684,6 +697,7 @@ void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const 
                                     float *key_cache, float *value_cache, int tokens, int kv_heads,
                                     int head_dim, int max_seq_len, int start_pos, float rope_theta,
                                     float partial_rotary_factor, float eps, void *stream) {
+    ScopedGpuTimer timer("fullattn.rope_kv", as_stream(stream));
     full_attention_kv_batch_kernel<<<tokens * kv_heads, kBlock, 0, as_stream(stream)>>>(
         k_in, v_in, k_norm_weight, key_cache, value_cache, tokens, kv_heads, head_dim, max_seq_len,
         start_pos, rope_theta, partial_rotary_factor, eps);
@@ -692,6 +706,7 @@ void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const 
 void launch_full_attention_attend(const float *q, const float *gate, const float *key_cache,
                                   const float *value_cache, float *attn, int n_heads, int kv_heads,
                                   int head_dim, int max_seq_len, int pos, void *stream) {
+    ScopedGpuTimer timer("fullattn.attend", as_stream(stream));
     size_t smem = (static_cast<size_t>(pos + 1) + kBlock) * sizeof(float);
     full_attention_attend_kernel<<<n_heads, kBlock, smem, as_stream(stream)>>>(
         q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim, max_seq_len, pos);
@@ -701,6 +716,7 @@ void launch_full_attention_attend_batch(const float *q, const float *gate, const
                                         const float *value_cache, float *attn, int tokens, int n_heads,
                                         int kv_heads, int head_dim, int max_seq_len, int start_pos,
                                         void *stream) {
+    ScopedGpuTimer timer("fullattn.attend", as_stream(stream));
     // shared 大小需覆盖本段最大位置的 scores。
     size_t max_pos = static_cast<size_t>(start_pos + tokens - 1);
     size_t smem = (max_pos + 1 + kBlock) * sizeof(float);
@@ -712,6 +728,7 @@ void launch_full_attention_attend_batch(const float *q, const float *gate, const
 
 void launch_linear_attention_conv(const float *mixed, const uint16_t *conv_weight, float *conv_state,
                                   float *conv_out, int conv_dim, int kernel, void *stream) {
+    ScopedGpuTimer timer("linattn.conv", as_stream(stream));
     linear_attention_conv_kernel<<<grid_for(conv_dim), kBlock, 0, as_stream(stream)>>>(
         mixed, conv_weight, conv_state, conv_out, conv_dim, kernel);
 }
@@ -719,6 +736,7 @@ void launch_linear_attention_conv(const float *mixed, const uint16_t *conv_weigh
 void launch_linear_attention_conv_batch(const float *mixed, const uint16_t *conv_weight,
                                         float *conv_state, float *conv_out, int tokens, int conv_dim,
                                         int kernel, void *stream) {
+    ScopedGpuTimer timer("linattn.conv", as_stream(stream));
     linear_attention_conv_batch_kernel<<<grid_for(conv_dim), kBlock, 0, as_stream(stream)>>>(
         mixed, conv_weight, conv_state, conv_out, tokens, conv_dim, kernel);
 }
@@ -728,6 +746,7 @@ void launch_linear_attention_recurrent(const float *conv_out, const float *z, co
                                        const float *norm_weight, float *recurrent_state, float *gated,
                                        int key_heads, int value_heads, int k_dim, int v_dim,
                                        float eps, void *stream) {
+    ScopedGpuTimer timer("linattn.recurrent", as_stream(stream));
     size_t smem = (static_cast<size_t>(2 * k_dim + 2 * v_dim) + 2 * kBlock) * sizeof(float);
     linear_attention_recurrent_kernel<<<value_heads, kBlock, smem, as_stream(stream)>>>(
         conv_out, z, b, a, a_log, dt_bias, norm_weight, recurrent_state, gated,
@@ -739,6 +758,7 @@ void launch_linear_attention_recurrent_batch(const float *conv_out, const float 
                                              const float *norm_weight, float *recurrent_state, float *gated,
                                              int tokens, int key_heads, int value_heads, int k_dim, int v_dim,
                                              float eps, void *stream) {
+    ScopedGpuTimer timer("linattn.recurrent", as_stream(stream));
     size_t smem = (static_cast<size_t>(2 * k_dim + 2 * v_dim) + 2 * kBlock) * sizeof(float);
     linear_attention_recurrent_batch_kernel<<<value_heads, kBlock, smem, as_stream(stream)>>>(
         conv_out, z, b, a, a_log, dt_bias, norm_weight, recurrent_state, gated, tokens,
@@ -746,5 +766,6 @@ void launch_linear_attention_recurrent_batch(const float *conv_out, const float 
 }
 
 void launch_float_to_lowp(const float *input, uint16_t *output, int n, int lowp_type, void *stream) {
+    ScopedGpuTimer timer("float_to_lowp", as_stream(stream));
     float_to_lowp_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(input, output, n, lowp_type);
 }

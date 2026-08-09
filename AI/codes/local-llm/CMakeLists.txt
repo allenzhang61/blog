@@ -1,4 +1,18 @@
 cmake_minimum_required(VERSION 3.22.1)
+
+# 在 project() 启用 CUDA 语言前，兜底定位 nvcc：CLion 等 IDE 的默认 profile 常常
+# 不会显式传 -DCMAKE_CUDA_COMPILER，而 nvcc 通常不在默认 PATH（在 /usr/local/cuda/bin）。
+# 仅在用户/环境未指定时探测常见路径，不覆盖显式传入的值。
+if(NOT DEFINED CMAKE_CUDA_COMPILER AND NOT DEFINED ENV{CUDACXX})
+    find_program(_LOCAL_LLM_NVCC nvcc
+            HINTS ${CUDA_TOOLKIT_ROOT_DIR} ENV CUDA_PATH
+            PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
+            PATH_SUFFIXES bin)
+    if(_LOCAL_LLM_NVCC)
+        set(CMAKE_CUDA_COMPILER "${_LOCAL_LLM_NVCC}")
+    endif()
+endif()
+
 project(local_llm LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -57,6 +71,18 @@ add_executable(local_llm main.cpp
         src/llm/qwen/model/DecoderLayer.h
         src/llm/qwen/model/QwenModel.cpp
         src/llm/qwen/model/QwenModel.h
+        src/utils/stats/StatsReport.h
+        src/utils/stats/MemoryUsageProvider.h
+        src/utils/stats/Profiler.cpp
+        src/utils/stats/Profiler.h
+        src/utils/stats/ScopedTimer.cpp
+        src/utils/stats/ScopedTimer.h
+        src/utils/stats/MemoryReporter.cpp
+        src/utils/stats/MemoryReporter.h
+        src/utils/stats/DeviceMonitor.cpp
+        src/utils/stats/DeviceMonitor.h
+        src/utils/stats/WeightLoadTracker.cpp
+        src/utils/stats/WeightLoadTracker.h
 )
 
 target_include_directories(local_llm PRIVATE src)
@@ -105,5 +131,16 @@ endif()
 
 target_include_directories(local_llm PRIVATE ${CUDA_INCLUDE_DIR})
 target_link_libraries(local_llm PRIVATE ${CUDART_LIBRARY} ${CUBLAS_LIBRARY})
+
+# NVML（libnvidia-ml）：DeviceMonitor 用于采样 GPU 利用率 / 带宽 / 功耗 / 温度。
+# nvml.h 随 CUDA toolkit 提供；运行库 libnvidia-ml 随驱动安装（stubs 也可链接）。
+find_library(NVML_LIBRARY NAMES nvidia-ml
+        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
+        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
+        PATH_SUFFIXES lib64 lib lib64/stubs lib/stubs targets/x86_64-linux/lib targets/x86_64-linux/lib/stubs)
+if(NOT NVML_LIBRARY)
+    message(FATAL_ERROR "未找到 NVML（libnvidia-ml）。可用 -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda 指定，或安装 NVIDIA 驱动")
+endif()
+target_link_libraries(local_llm PRIVATE ${NVML_LIBRARY})
 
 

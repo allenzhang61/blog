@@ -99,6 +99,21 @@ public:
     // 最终最大值 / token id 的单元素 device buffer。
     CudaScratchBuffer<float> argmax_best_value;
     CudaScratchBuffer<int> argmax_best_index;
+
+    // 所有 grow-only buffer 当前容量（即峰值）字节数之和，供显存统计用。
+    size_t total_bytes() const {
+        return full_projection.bytes() + full_q.bytes() + full_gate.bytes() + full_k.bytes() +
+               full_v.bytes() + full_attn.bytes() + full_attn_lowp.bytes() +
+               linear_projection.bytes() + linear_z.bytes() + linear_b.bytes() + linear_a.bytes() +
+               linear_conv_out.bytes() + linear_gated.bytes() + linear_gated_lowp.bytes() +
+               input_lowp_buffer.bytes() + y_buffer.bytes() + gate_buffer.bytes() +
+               up_buffer.bytes() + gate_up_buffer.bytes() + prod_buffer.bytes() +
+               prod_lowp_buffer.bytes() + mixer_buffer.bytes() + mlp_out_buffer.bytes() +
+               layer_out_buffer.bytes() + token_hidden_a.bytes() + token_hidden_b.bytes() +
+               norm_lowp_buffer.bytes() + post_norm_lowp_buffer.bytes() +
+               argmax_block_values.bytes() + argmax_block_indices.bytes() +
+               argmax_best_value.bytes() + argmax_best_index.bytes();
+    }
 };
 
 

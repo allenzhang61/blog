@@ -47,3 +47,14 @@ QwenSession::QwenSession(const QwenConfig &config, const std::vector<int> &input
         }
     }
 }
+
+size_t QwenSession::kv_state_bytes() const {
+    size_t total = 0;
+    for (const FullAttnKVCache &c : fullAttnKVCaches) {
+        total += c.key_cache.bytes + c.value_cache.bytes;
+    }
+    for (const LinearAttnRecurrentState &s : linearAttnRecurrentStates) {
+        total += s.conv_state.bytes + s.recurrent_state.bytes;
+    }
+    return total;
+}

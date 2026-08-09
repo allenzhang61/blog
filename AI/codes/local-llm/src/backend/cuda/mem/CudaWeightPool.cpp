@@ -5,8 +5,10 @@
 #include "CudaWeightPool.h"
 
 #include "../common.h"
+#include "utils/stats/WeightLoadTracker.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
@@ -14,6 +16,45 @@
 #include <vector>
 
 #include <cuda_runtime.h>
+
+// 计时版显存分配：cudaMalloc 是 host 侧同步调用，用 CPU 时钟（steady_clock）测更准确，
+// 不走 CUDA event（后者测的是 stream 上的 GPU 时间线）。timed 为 false 时不计时、返回 0。
+void CudaWeightPool::cuda_malloc_timed(void **ptr, size_t bytes, const std::string &what,
+                                       bool timed, double &out_ms) {
+    out_ms = 0.0;
+    if (!timed) {
+        check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc weight 失败 " + what);
+        return;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc weight 失败 " + what);
+    const auto t1 = std::chrono::steady_clock::now();
+    out_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+// 计时版 H2D 拷贝：timed 为 true 时用 CUDA event 测 host->device 耗时（毫秒），
+// 否则退化为普通同步拷贝、耗时返回 0，避免非 profile 路径产生额外开销。
+void CudaWeightPool::memcpy_h2d_timed(void *dst, const void *src, size_t bytes,
+                                      const std::string &what, bool timed, double &out_ms) {
+    out_ms = 0.0;
+    if (!timed) {
+        check_cuda(cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice), "cudaMemcpy weight 失败 " + what);
+        return;
+    }
+    cudaEvent_t start = nullptr;
+    cudaEvent_t stop = nullptr;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+    check_cuda(cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice), "cudaMemcpy weight 失败 " + what);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float ms = 0.0f;
+    cudaEventElapsedTime(&ms, start, stop);
+    out_ms = static_cast<double>(ms);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+}
 
 size_t CudaWeightPool::cache_limit_bytes() {
     const char *env = std::getenv("LOCAL_LLM_CUDA_WEIGHT_POOL_GB");
@@ -72,6 +113,9 @@ CudaWeight *CudaWeightPool::cached_weight(const WeightData &weight) {
         return nullptr;
     }
     if (bytes_ + bytes > limit) {
+        if (tracker_) {
+            tracker_->record(WeightLoadEventKind::EvictAll, "", bytes_, 0.0, 0);
+        }
         items_.clear();
         bytes_ = 0;
     }
@@ -79,12 +123,18 @@ CudaWeight *CudaWeightPool::cached_weight(const WeightData &weight) {
     CudaWeight device;
     device.bytes = bytes;
     device.type = cuda_type_for(weight);
-    check_cuda(cudaMalloc(&device.ptr, bytes), "cudaMalloc weight 失败 " + weight.info->name);
-    check_cuda(cudaMemcpy(device.ptr, weight.data, bytes, cudaMemcpyHostToDevice),
-               "cudaMemcpy weight 失败 " + weight.info->name);
+    double malloc_ms = 0.0;
+    cuda_malloc_timed(&device.ptr, bytes, weight.info->name, tracker_ != nullptr, malloc_ms);
+    double h2d_ms = 0.0;
+    memcpy_h2d_timed(device.ptr, weight.data, bytes, weight.info->name, tracker_ != nullptr, h2d_ms);
     auto [it, inserted] = items_.emplace(weight.info->name, std::move(device));
     bytes_ += bytes;
     (void) inserted;
+    if (tracker_) {
+        // 分配与拷贝拆成两条事件，用 kind 区分（resident 均为本次入驻后的累计量）。
+        tracker_->record(WeightLoadEventKind::Alloc, weight.info->name, bytes, malloc_ms, bytes_);
+        tracker_->record(WeightLoadEventKind::Upload, weight.info->name, bytes, h2d_ms, bytes_);
+    }
     return &it->second;
 }
 
@@ -121,6 +171,9 @@ CudaWeight *CudaWeightPool::cached_concat_weight(const std::string &name,
         return nullptr;
     }
     if (bytes_ + bytes > limit) {
+        if (tracker_) {
+            tracker_->record(WeightLoadEventKind::EvictAll, "", bytes_, 0.0, 0);
+        }
         items_.clear();
         bytes_ = 0;
     }
@@ -137,11 +190,16 @@ CudaWeight *CudaWeightPool::cached_concat_weight(const std::string &name,
     CudaWeight device;
     device.bytes = bytes;
     device.type = cuda_type_for(weights[0]);
-    check_cuda(cudaMalloc(&device.ptr, bytes), "cudaMalloc concat weight 失败 " + name);
-    check_cuda(cudaMemcpy(device.ptr, host.data(), bytes, cudaMemcpyHostToDevice),
-               "cudaMemcpy concat weight 失败 " + name);
+    double malloc_ms = 0.0;
+    cuda_malloc_timed(&device.ptr, bytes, name, tracker_ != nullptr, malloc_ms);
+    double h2d_ms = 0.0;
+    memcpy_h2d_timed(device.ptr, host.data(), bytes, name, tracker_ != nullptr, h2d_ms);
     auto [it, inserted] = items_.emplace(name, std::move(device));
     bytes_ += bytes;
     (void) inserted;
+    if (tracker_) {
+        tracker_->record(WeightLoadEventKind::Alloc, name, bytes, malloc_ms, bytes_);
+        tracker_->record(WeightLoadEventKind::Upload, name, bytes, h2d_ms, bytes_);
+    }
     return &it->second;
 }

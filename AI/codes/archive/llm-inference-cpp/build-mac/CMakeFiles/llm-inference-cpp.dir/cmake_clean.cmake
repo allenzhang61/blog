@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/llm-inference-cpp.dir/src/core/cli.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/cli.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/common.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/common.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/config.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/config.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/profile.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/profile.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/tokenizer.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/core/tokenizer.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/dtype.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/dtype.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/elementwise.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/elementwise.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/embedding.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/embedding.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/matvec.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/matvec.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/rmsnorm.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cpu/rmsnorm.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cuda/cuda_ops_stub.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/kernels/cuda/cuda_ops_stub.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/main.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/main.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/model/QwenModel.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/model/QwenModel.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/model/weights.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/model/weights.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/ops/ops.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/ops/ops.cpp.o.d"
+  "CMakeFiles/llm-inference-cpp.dir/src/safetensors/safetensors.cpp.o"
+  "CMakeFiles/llm-inference-cpp.dir/src/safetensors/safetensors.cpp.o.d"
+  "llm-inference-cpp"
+  "llm-inference-cpp.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/llm-inference-cpp.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

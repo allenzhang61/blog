@@ -29,9 +29,13 @@ class CudaWeight;
 
 // 批量投影：Y[out_dim,tokens] = W[out_dim,in_dim] · X[in_dim,tokens]。
 // tokens=1 即单 token 情形。
+// name 非空时，用 ScopedGpuTimer 以该名埋点，并以 weight.bytes 作为访存字节数
+// （decode 为访存瓶颈，投影耗时主体即读取权重），供 Profiler 算有效带宽；
+// 传空串（默认）则不埋点、零开销。
 void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
                  int out_dim, int in_dim,
-                 const void *d_x, cudaDataType_t x_type, int tokens, float *d_y);
+                 const void *d_x, cudaDataType_t x_type, int tokens, float *d_y,
+                 const char *name = "");
 
 // 把 float 激活转成权重 dtype（BF16/F16）写入 d_x_lowp，供后续 gemm_weight 使用。
 // cublasGemmEx 要求激活与权重同 dtype，本函数封装这一步，屏蔽 cuBLAS dtype 到 kernel 约定的映射。

@@ -8,6 +8,7 @@
 
 #include "QwenForwardScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
+#include "utils/stats/MemoryUsageProvider.h"
 
 class QwenConfig;
 
@@ -32,7 +33,7 @@ struct LinearAttnRecurrentState {
 // 一次推理请求的资源作用域（per-request RAII scope）：
 // 持有跨 token 存活的 KV cache / recurrent state，析构时随成员自动释放显存。
 // 前向过程中反复覆盖的临时中间结果（激活 / logits 等）不放这里，交由前向 scratch 管理。
-class QwenSession {
+class QwenSession : public MemoryUsageProvider {
 public:
     // 按 config 为每一层分配对应的 KV cache / recurrent state。
     // max_seq_len = inputs.size() + max_output_tokens。
@@ -56,6 +57,13 @@ public:
 
     // 本次请求的最大序列长度（prefill 输入 + 最大生成）。
     int max_seq_len = 0;
+
+    // === MemoryUsageProvider ===
+    // 跨 token 状态字节数：所有 full attention KV cache + linear attention
+    // recurrent / conv state 之和（随 max_seq_len 增长）。
+    size_t kv_state_bytes() const override;
+    // 前向临时激活峰值字节数：forwardScratch 各 buffer 之和。
+    size_t scratch_bytes() const override { return forwardScratch.total_bytes(); }
 };
 
 
