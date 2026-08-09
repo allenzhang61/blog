@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.2)
+cmake_minimum_required(VERSION 3.22.1)
 project(local_llm)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -27,6 +27,8 @@ add_executable(local_llm main.cpp
         src/backend/cuda/mem/CudaWeight.h
         src/backend/cuda/mem/CudaScratchBuffer.cpp
         src/backend/cuda/mem/CudaScratchBuffer.h
+        src/llm/qwen/QwenSession.cpp
+        src/llm/qwen/QwenSession.h
 )
 
 target_include_directories(local_llm PRIVATE src)
@@ -52,5 +54,28 @@ endif()
 target_compile_definitions(local_llm PRIVATE PCRE2_CODE_UNIT_WIDTH=8)
 target_include_directories(local_llm PRIVATE ${PCRE2_INCLUDE_DIR} ${UTF8PROC_INCLUDE_DIR})
 target_link_libraries(local_llm PRIVATE ${PCRE2_LIBRARY} ${UTF8PROC_LIBRARY})
+
+# CUDA：当前 CUDA 相关 .cpp 只用 host 端 runtime / cuBLAS API（无 .cu kernel），
+# 因此用普通编译器编译，只需补上 CUDA toolkit 的头文件与链接库路径。
+# 允许通过 -DCUDA_TOOLKIT_ROOT_DIR=/path 覆盖，默认探测常见安装位置。
+find_path(CUDA_INCLUDE_DIR NAMES cublas_v2.h cuda_runtime.h
+        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
+        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8
+        PATH_SUFFIXES include)
+find_library(CUDART_LIBRARY NAMES cudart
+        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
+        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8
+        PATH_SUFFIXES lib64 lib)
+find_library(CUBLAS_LIBRARY NAMES cublas
+        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
+        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8
+        PATH_SUFFIXES lib64 lib)
+
+if(NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY OR NOT CUBLAS_LIBRARY)
+    message(FATAL_ERROR "未找到 CUDA toolkit（cublas_v2.h / libcudart / libcublas）。可用 -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda 指定")
+endif()
+
+target_include_directories(local_llm PRIVATE ${CUDA_INCLUDE_DIR})
+target_link_libraries(local_llm PRIVATE ${CUDART_LIBRARY} ${CUBLAS_LIBRARY})
 
 

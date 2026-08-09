@@ -6,6 +6,8 @@
 
 #include "utils/log/Log.h"
 
+#include <stdexcept>
+
 Args::Args(const int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         std::string key = argv[i];
@@ -18,10 +20,13 @@ Args::Args(const int argc, char **argv) {
 
         if (key == "--model-dir") {
             this->model_dir = get_value(key);
+        } else if (key == "--max-output-tokens") {
+            this->max_output_tokens = std::stoi(get_value(key));
         }
     }
 }
 
 void Args::DebugDump() {
     Log::debug("model_dir: " + this->model_dir);
+    Log::debug("max_output_tokens: " + std::to_string(this->max_output_tokens));
 }

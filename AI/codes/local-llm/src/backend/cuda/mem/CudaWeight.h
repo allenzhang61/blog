@@ -6,6 +6,7 @@
 #define LOCAL_LLM_CUDAWEIGHT_H
 
 #include <cstddef>
+#include <string>
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -22,6 +23,9 @@ public:
     cudaDataType_t type = CUDA_R_32F;
 
     CudaWeight() = default;
+    // 在 device 上分配 bytes 字节内存；zero 为 true 时清零。
+    // what 用于分配失败时的错误信息上下文。
+    CudaWeight(size_t bytes, cudaDataType_t type, bool zero, const std::string &what);
     // 释放 device 端数据。
     ~CudaWeight();
 

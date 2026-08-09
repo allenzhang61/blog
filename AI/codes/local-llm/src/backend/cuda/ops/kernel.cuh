@@ -1,0 +1,124 @@
+//
+// Created by zhangyoulun on 9/8/2026.
+//
+
+#ifndef LOCAL_LLM_KERNEL_CUH
+#define LOCAL_LLM_KERNEL_CUH
+
+#include <cstdint>
+
+// 手写 CUDA kernel 的 launch 接口。矩阵乘不在此处（走 cuBLAS，见 gemm.h），
+// 这里只放 cuBLAS 覆盖不到的逐元素 / 归一化 / 采样等算子。
+//
+// stream 用 void* 传递以避免让 .cpp 侧被 nvcc 编译：实现内部按 cudaStream_t 使用，
+// nullptr 表示默认流。
+//
+// 低精度类型约定：lowp_type 0 = bfloat16，1 = float16（与权重 dtype 对应）。
+
+// ---- 精度转换 ----
+// float -> bfloat16，n 个元素。
+void launch_float_to_bf16(const float *input, uint16_t *output, int n, void *stream);
+// float -> float16，n 个元素。
+void launch_float_to_f16(const float *input, uint16_t *output, int n, void *stream);
+
+// ---- 逐元素 ----
+// 残差加：out = a + b，n 个元素（out 可与 a 或 b 相同做原位）。
+void launch_add(const float *a, const float *b, float *out, int n, void *stream);
+
+// SwiGLU 门控：out = SiLU(gate) * up，n 个元素。
+void launch_silu_mul(const float *gate, const float *up, float *out, int n, void *stream);
+
+// ---- Embedding ----
+// 批量查表：按 token_ids 从低精度权重表 [vocab, hidden] 取行转 float 到 output[tokens, hidden]。
+void launch_embedding_lookup(const uint16_t *table, const int *token_ids, float *output,
+                             int tokens, int vocab, int hidden, int lowp_type, void *stream);
+
+// ---- RMSNorm ----
+// weight_type 指明 norm 权重（gamma）的 dtype：0=bf16，1=f16，2=f32。
+// Qwen 的 norm 权重通常为 bf16，故 weight 以 void* 传入并按 weight_type 解读。
+//
+// RMSNorm 输出 float：对每行 [hidden] 归一化后乘以 weight，写回 output[rows, hidden]。
+// one_plus 为 true 时使用 (1 + weight) 作为缩放（部分 Qwen norm 的约定）。
+void launch_rms_norm(const float *input, const void *weight, int weight_type, float *output,
+                     int rows, int hidden, float eps, bool one_plus, void *stream);
+
+// RMSNorm 输出 bfloat16/float16：归一化后转低精度，供后续 gemm 直接使用。
+// lowp_type 指明输出 dtype：0=bf16，1=f16。
+void launch_rms_norm_to_lowp(const float *input, const void *weight, int weight_type, uint16_t *output,
+                             int rows, int hidden, float eps, bool one_plus,
+                             int lowp_type, void *stream);
+
+// ---- 采样 ----
+// 对 logits [vocab] 求 argmax，返回的 token id 写入 device 端 out_index（单元素 int）。
+// block_values / block_indices 为分块归约的中间 buffer（长度 >= grid 大小）。
+void launch_argmax(const float *logits, int vocab,
+                   float *block_values, int *block_indices,
+                   float *best_value, int *best_index, void *stream);
+
+// ================= full attention =================
+// q_norm / k_norm 权重按 (1 + w) 缩放（Qwen 约定），以 bf16 传入（q_norm_weight[head_dim]）。
+// q_and_gate 布局：每个 query head 连续 [head_dim(q), head_dim(gate)]，故长度 tokens * n_heads * head_dim * 2。
+// 输出 q / gate 拆分为 [tokens, n_heads * head_dim]。RoPE 仅作用前 head_dim*partial_rotary_factor 维。
+
+// 单 token：处理位置 pos。
+void launch_full_attention_q(const float *q_and_gate, const uint16_t *q_norm_weight,
+                             float *q, float *gate,
+                             int n_heads, int head_dim, int pos,
+                             float rope_theta, float partial_rotary_factor, float eps,
+                             void *stream);
+// 批量：start_pos 为本段第一个 token 的绝对位置。
+void launch_full_attention_q_batch(const float *q_and_gate, const uint16_t *q_norm_weight,
+                                   float *q, float *gate,
+                                   int tokens, int n_heads, int head_dim, int start_pos,
+                                   float rope_theta, float partial_rotary_factor, float eps,
+                                   void *stream);
+
+// k/v：归一化 + RoPE(k) 后写入 KV cache（cache 布局 [max_seq_len, kv_heads * head_dim]）。
+void launch_full_attention_kv(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
+                              float *key_cache, float *value_cache,
+                              int kv_heads, int head_dim, int max_seq_len, int pos,
+                              float rope_theta, float partial_rotary_factor, float eps,
+                              void *stream);
+void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
+                                    float *key_cache, float *value_cache,
+                                    int tokens, int kv_heads, int head_dim, int max_seq_len, int start_pos,
+                                    float rope_theta, float partial_rotary_factor, float eps,
+                                    void *stream);
+
+// causal attention + 输出门控（out = softmax(qk/sqrt(d)) · v * sigmoid(gate)）。
+void launch_full_attention_attend(const float *q, const float *gate,
+                                  const float *key_cache, const float *value_cache, float *attn,
+                                  int n_heads, int kv_heads, int head_dim, int max_seq_len, int pos,
+                                  void *stream);
+void launch_full_attention_attend_batch(const float *q, const float *gate,
+                                        const float *key_cache, const float *value_cache, float *attn,
+                                        int tokens, int n_heads, int kv_heads, int head_dim,
+                                        int max_seq_len, int start_pos, void *stream);
+
+// ================= linear attention =================
+// depthwise 因果卷积（kernel=4）+ SiLU，conv_weight bf16，布局 [conv_dim, kernel]。
+// conv_state 为跨 token 的滑动窗口，布局 [conv_dim, kernel]。
+void launch_linear_attention_conv(const float *mixed, const uint16_t *conv_weight,
+                                  float *conv_state, float *conv_out,
+                                  int conv_dim, int kernel, void *stream);
+void launch_linear_attention_conv_batch(const float *mixed, const uint16_t *conv_weight,
+                                        float *conv_state, float *conv_out,
+                                        int tokens, int conv_dim, int kernel, void *stream);
+
+// gated delta 递归：更新 recurrent_state 并输出 gated（value_total）。
+// a_log 为 float [value_heads]，dt_bias 为 bf16 [value_heads]，norm_weight 为 float [v_dim]。
+void launch_linear_attention_recurrent(const float *conv_out, const float *z, const float *b,
+                                       const float *a, const float *a_log, const uint16_t *dt_bias,
+                                       const float *norm_weight, float *recurrent_state, float *gated,
+                                       int key_heads, int value_heads, int k_dim, int v_dim,
+                                       float eps, void *stream);
+void launch_linear_attention_recurrent_batch(const float *conv_out, const float *z, const float *b,
+                                             const float *a, const float *a_log, const uint16_t *dt_bias,
+                                             const float *norm_weight, float *recurrent_state, float *gated,
+                                             int tokens, int key_heads, int value_heads, int k_dim, int v_dim,
+                                             float eps, void *stream);
+
+// float -> 低精度（lowp_type 0=bf16, 1=f16），供 out_proj 输入。
+void launch_float_to_lowp(const float *input, uint16_t *output, int n, int lowp_type, void *stream);
+
+#endif // LOCAL_LLM_KERNEL_CUH

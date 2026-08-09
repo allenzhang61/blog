@@ -10,6 +10,7 @@
 class Args {
 public:
     std::string model_dir;
+    int max_output_tokens = 1;
     Device device = Device::CPU;
 
     Args(int argc, char **argv);
