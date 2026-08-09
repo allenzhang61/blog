@@ -28,10 +28,6 @@ add_executable(local_llm main.cpp
         src/backend/common.h
         src/utils/log/Log.cpp
         src/utils/log/Log.h
-        src/llm/qwen/QwenLLM.cpp
-        src/llm/qwen/QwenLLM.h
-        src/llm/deepseek/DeepseekLLM.cpp
-        src/llm/deepseek/DeepseekLLM.h
         src/llm/qwen/QwenConfig.cpp
         src/llm/qwen/QwenConfig.h
         src/llm/qwen/QwenWeights.cpp
