@@ -36,15 +36,23 @@ void SwiGLUMlp::forward(const float *d_in, float *d_out, int rows, int hidden_si
     float *d_up = scratch.up_buffer.ensure(n, "mlp up");
     float *d_prod = scratch.prod_buffer.ensure(n, "mlp prod");
 
-    // 激活以 float 直接参与 gemm（x_type=CUDA_R_32F）。
-    gemm_weight(pool_->handle, *gate, intermediate, hidden_size, d_in, CUDA_R_32F, rows, d_gate);
-    gemm_weight(pool_->handle, *up, intermediate, hidden_size, d_in, CUDA_R_32F, rows, d_up);
+    // 输入激活转成权重 dtype（BF16/F16）后再投影；gate/up 同 dtype，只需转一次。
+    uint16_t *d_in_lowp =
+        scratch.input_lowp_buffer.ensure(static_cast<size_t>(rows) * hidden_size, "mlp in lowp");
+    to_weight_lowp(d_in, d_in_lowp, rows * hidden_size, *gate, nullptr);
+
+    gemm_weight(pool_->handle, *gate, intermediate, hidden_size, d_in_lowp, gate->type, rows, d_gate);
+    gemm_weight(pool_->handle, *up, intermediate, hidden_size, d_in_lowp, up->type, rows, d_up);
 
     // prod = SiLU(gate) * up。
     launch_silu_mul(d_gate, d_up, d_prod, static_cast<int>(n), /*stream=*/nullptr);
 
+    // prod 转成 down 权重 dtype 后做 down 投影。
+    uint16_t *d_prod_lowp = scratch.prod_lowp_buffer.ensure(n, "mlp prod lowp");
+    to_weight_lowp(d_prod, d_prod_lowp, static_cast<int>(n), *down, nullptr);
+
     // down：[hidden, intermediate] · prod[intermediate, rows] -> [hidden, rows]。
-    gemm_weight(pool_->handle, *down, hidden_size, intermediate, d_prod, CUDA_R_32F, rows, d_out);
+    gemm_weight(pool_->handle, *down, hidden_size, intermediate, d_prod_lowp, down->type, rows, d_out);
 
     check_cuda(cudaDeviceSynchronize(), "SwiGLUMlp 同步失败");
 }

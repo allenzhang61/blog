@@ -27,8 +27,12 @@ int LMHead::forward(const float *d_hidden, int hidden_size, QwenForwardScratch &
     // 复用 embed_tokens 权重 [vocab, hidden] 作为输出投影。
     const int vocab = static_cast<int>(weight_.info->shape[0]);
 
+    // 输入激活转成权重 dtype（BF16/F16）后再投影（cublasGemmEx 要求同 dtype）。
+    uint16_t *d_in_lowp = scratch.input_lowp_buffer.ensure(hidden_size, "lm_head in lowp");
+    to_weight_lowp(d_hidden, d_in_lowp, hidden_size, *w, nullptr);
+
     float *d_logits = scratch.y_buffer.ensure(static_cast<size_t>(vocab), "lm_head logits");
-    gemm_weight(pool_->handle, *w, vocab, hidden_size, d_hidden, CUDA_R_32F, /*tokens=*/1, d_logits);
+    gemm_weight(pool_->handle, *w, vocab, hidden_size, d_in_lowp, w->type, /*tokens=*/1, d_logits);
 
     // argmax：分块归约。block_values/indices 上限 1024（与 kernel 内一致）。
     float *d_block_val = scratch.argmax_block_values.ensure(1024, "argmax block values");

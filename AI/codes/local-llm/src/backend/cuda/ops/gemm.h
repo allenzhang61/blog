@@ -5,6 +5,8 @@
 #ifndef LOCAL_LLM_GEMM_H
 #define LOCAL_LLM_GEMM_H
 
+#include <cstdint>
+
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
@@ -30,5 +32,13 @@ class CudaWeight;
 void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
                  int out_dim, int in_dim,
                  const void *d_x, cudaDataType_t x_type, int tokens, float *d_y);
+
+// 把 float 激活转成权重 dtype（BF16/F16）写入 d_x_lowp，供后续 gemm_weight 使用。
+// cublasGemmEx 要求激活与权重同 dtype，本函数封装这一步，屏蔽 cuBLAS dtype 到 kernel 约定的映射。
+// 共享同一输入的多次投影（如 q/k/v、gate/up）只需调用一次，再多次 gemm_weight，避免重复转换。
+//   d_x      : float 激活，元素数 n；
+//   d_x_lowp : 低精度输出 buffer（元素数 >= n，通常取自 scratch）。
+void to_weight_lowp(const float *d_x, uint16_t *d_x_lowp, int n,
+                    const CudaWeight &weight, void *stream);
 
 #endif // LOCAL_LLM_GEMM_H

@@ -6,6 +6,10 @@
 
 #include "../common.h"
 #include "../mem/CudaWeight.h"
+#include "kernel.cuh"
+
+// cublasGemmEx 要求激活与权重同 dtype；把权重 dtype 翻译成 kernel 约定的 lowp_type（0=bf16, 1=f16）。
+static int lowp_of(cudaDataType_t type) { return type == CUDA_R_16F ? 1 : 0; }
 
 void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
                  int out_dim, int in_dim,
@@ -36,4 +40,9 @@ void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
             CUBLAS_COMPUTE_32F,
             CUBLAS_GEMM_DEFAULT),
         "cublasGemmEx 投影失败");
+}
+
+void to_weight_lowp(const float *d_x, uint16_t *d_x_lowp, int n,
+                    const CudaWeight &weight, void *stream) {
+    launch_float_to_lowp(d_x, d_x_lowp, n, lowp_of(weight.type), stream);
 }

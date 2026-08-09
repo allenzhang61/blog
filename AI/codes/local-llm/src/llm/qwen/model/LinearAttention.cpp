@@ -22,11 +22,6 @@ LinearAttention::LinearAttention(const LinearAttnWeights &weights, const TextCon
                                  CudaWeightPool *pool)
     : weights_(weights), config_(config), pool_(pool) {}
 
-namespace {
-// out_proj 输入的低精度类型：0=bf16, 1=f16。
-int lowp_of(cudaDataType_t type) { return type == CUDA_R_16F ? 1 : 0; }
-} // namespace
-
 void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
                               LinearAttnRecurrentState &state, QwenForwardScratch &scratch) {
     const int hidden = config_.hidden_size;
@@ -62,10 +57,15 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
     uint16_t *d_gated_lowp =
         scratch.linear_gated_lowp.ensure(static_cast<size_t>(tokens) * value_total, "lin gated lowp");
 
-    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_hidden, CUDA_R_32F, tokens, d_mixed);
-    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_hidden, CUDA_R_32F, tokens, d_z);
-    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_hidden, CUDA_R_32F, tokens, d_b);
-    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_hidden, CUDA_R_32F, tokens, d_a);
+    // 输入激活转成权重 dtype（BF16/F16）后再做各投影。
+    uint16_t *d_in_lowp =
+        scratch.input_lowp_buffer.ensure(static_cast<size_t>(tokens) * hidden, "lin in lowp");
+    to_weight_lowp(d_hidden, d_in_lowp, tokens * hidden, *qkv, nullptr);
+
+    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_in_lowp, qkv->type, tokens, d_mixed);
+    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_in_lowp, z_w->type, tokens, d_z);
+    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_in_lowp, b_w->type, tokens, d_b);
+    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_in_lowp, a_w->type, tokens, d_a);
 
     float *conv_state = static_cast<float *>(state.conv_state.ptr);
     float *recurrent_state = static_cast<float *>(state.recurrent_state.ptr);
@@ -77,7 +77,7 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
         static_cast<const uint16_t *>(dt_bias->ptr), static_cast<const float *>(norm->ptr),
         recurrent_state, d_gated, tokens, key_heads, value_heads, k_dim, v_dim, eps, nullptr);
 
-    launch_float_to_lowp(d_gated, d_gated_lowp, tokens * value_total, lowp_of(out_proj->type), nullptr);
+    to_weight_lowp(d_gated, d_gated_lowp, tokens * value_total, *out_proj, nullptr);
 
     // out_proj：[hidden, value_total] · gated[value_total, tokens] -> [hidden, tokens]。
     gemm_weight(pool_->handle, *out_proj, hidden, value_total, d_gated_lowp, out_proj->type, tokens, d_out);
@@ -119,10 +119,13 @@ void LinearAttention::decode(const float *d_hidden, float *d_out,
     float *d_gated = scratch.linear_gated.ensure(value_total, "lin gated");
     uint16_t *d_gated_lowp = scratch.linear_gated_lowp.ensure(value_total, "lin gated lowp");
 
-    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_hidden, CUDA_R_32F, 1, d_mixed);
-    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_hidden, CUDA_R_32F, 1, d_z);
-    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_hidden, CUDA_R_32F, 1, d_b);
-    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_hidden, CUDA_R_32F, 1, d_a);
+    uint16_t *d_in_lowp = scratch.input_lowp_buffer.ensure(hidden, "lin in lowp");
+    to_weight_lowp(d_hidden, d_in_lowp, hidden, *qkv, nullptr);
+
+    gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_in_lowp, qkv->type, 1, d_mixed);
+    gemm_weight(pool_->handle, *z_w, value_total, hidden, d_in_lowp, z_w->type, 1, d_z);
+    gemm_weight(pool_->handle, *b_w, value_heads, hidden, d_in_lowp, b_w->type, 1, d_b);
+    gemm_weight(pool_->handle, *a_w, value_heads, hidden, d_in_lowp, a_w->type, 1, d_a);
 
     float *conv_state = static_cast<float *>(state.conv_state.ptr);
     float *recurrent_state = static_cast<float *>(state.recurrent_state.ptr);
@@ -134,7 +137,7 @@ void LinearAttention::decode(const float *d_hidden, float *d_out,
         static_cast<const uint16_t *>(dt_bias->ptr), static_cast<const float *>(norm->ptr),
         recurrent_state, d_gated, key_heads, value_heads, k_dim, v_dim, eps, nullptr);
 
-    launch_float_to_lowp(d_gated, d_gated_lowp, value_total, lowp_of(out_proj->type), nullptr);
+    to_weight_lowp(d_gated, d_gated_lowp, value_total, *out_proj, nullptr);
 
     gemm_weight(pool_->handle, *out_proj, hidden, value_total, d_gated_lowp, out_proj->type, 1, d_out);
 
