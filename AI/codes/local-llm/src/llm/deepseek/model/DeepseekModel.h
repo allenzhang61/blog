@@ -12,6 +12,7 @@
 #include "llm/deepseek/DeepseekTokenizer.h"
 #include "llm/deepseek/DeepseekWeights.h"
 #include "llm/deepseek/model/DeepseekSession.h"
+#include "llm/sampling/Sampler.h"
 
 #include <memory>
 #include <string>
@@ -20,7 +21,7 @@
 // DeepSeek-V2-Lite（MLA + DeepSeekMoE，Q4_K 量化，GGUF 权重）推理模型，实现 BaseModel。
 class DeepseekModel : public BaseModel {
 public:
-    DeepseekModel(const std::string &model_dir, int max_output_tokens);
+    DeepseekModel(const std::string &model_dir, int max_output_tokens, const SamplingConfig &sampling);
     ~DeepseekModel() override;
 
     const char *name() const override { return "deepseek"; }
@@ -57,6 +58,7 @@ private:
     DeepseekTokenizer tokenizer_;
     CudaWeightPool pool_;
     int max_output_tokens_ = 0;
+    Sampler sampler_;
     std::unique_ptr<DeepseekSession> session_;
 };
 

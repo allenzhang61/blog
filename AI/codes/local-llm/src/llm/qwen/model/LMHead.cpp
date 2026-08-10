@@ -10,6 +10,7 @@
 
 #include "llm/qwen/QwenWeights.h"
 #include "llm/qwen/QwenForwardScratch.h"
+#include "llm/sampling/Sampler.h"
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
@@ -19,7 +20,8 @@
 LMHead::LMHead(const WeightData &weight, CudaWeightPool *pool)
     : weight_(weight), pool_(pool) {}
 
-int LMHead::forward(const float *d_hidden, int hidden_size, QwenForwardScratch &scratch) {
+int LMHead::forward(const float *d_hidden, int hidden_size, QwenForwardScratch &scratch,
+                    Sampler &sampler, const std::vector<int> &prev_tokens) {
     CudaWeight *w = pool_->cached_weight(weight_);
     if (!w) {
         throw std::runtime_error("LMHead 权重上传失败：" + weight_.info->name);
@@ -34,17 +36,10 @@ int LMHead::forward(const float *d_hidden, int hidden_size, QwenForwardScratch &
     float *d_logits = scratch.y_buffer.ensure(static_cast<size_t>(vocab), "lm_head logits");
     gemm_weight(pool_->handle, *w, vocab, hidden_size, d_in_lowp, w->type, /*tokens=*/1, d_logits, "lm_head");
 
-    // argmax：分块归约。block_values/indices 上限 1024（与 kernel 内一致）。
-    float *d_block_val = scratch.argmax_block_values.ensure(1024, "argmax block values");
-    int *d_block_idx = scratch.argmax_block_indices.ensure(1024, "argmax block indices");
-    float *d_best_val = scratch.argmax_best_value.ensure(1, "argmax best value");
-    int *d_best_idx = scratch.argmax_best_index.ensure(1, "argmax best index");
-
-    launch_argmax(d_logits, vocab, d_block_val, d_block_idx, d_best_val, d_best_idx,
-                  /*stream=*/nullptr);
-
-    int h_token_id = 0;
-    check_cuda(cudaMemcpy(&h_token_id, d_best_idx, sizeof(int), cudaMemcpyDeviceToHost),
-               "cudaMemcpy argmax token id 失败");
-    return h_token_id;
+    // logits 拷回 host，交由 Sampler 做温度/top-k/top-p/重复惩罚（greedy 时内部走 argmax）。
+    scratch.h_logits.resize(static_cast<size_t>(vocab));
+    check_cuda(cudaMemcpy(scratch.h_logits.data(), d_logits, static_cast<size_t>(vocab) * sizeof(float),
+                          cudaMemcpyDeviceToHost),
+               "cudaMemcpy lm_head logits d2h 失败");
+    return sampler.sample(scratch.h_logits.data(), vocab, prev_tokens);
 }

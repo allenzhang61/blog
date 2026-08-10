@@ -19,6 +19,7 @@
 #include "llm/qwen/QwenConfig.h"
 #include "llm/qwen/QwenWeights.h"
 #include "llm/qwen/QwenTokenizer.h"
+#include "llm/sampling/Sampler.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 
 class QwenSession;
@@ -34,7 +35,8 @@ class QwenModel : public Module, public BaseModel {
 public:
     // 从模型目录加载 config / weights / tokenizer，并建立各子 Module。
     // max_output_tokens 用于每次 prefill 时按需分配 session 的 KV cache 容量。
-    QwenModel(const std::string &model_dir, int max_output_tokens);
+    // sampling 为采样配置（默认贪心）。
+    QwenModel(const std::string &model_dir, int max_output_tokens, const SamplingConfig &sampling);
     // session_ 持有前向声明的 QwenSession，析构需在 QwenSession 完整定义处（.cpp）生成。
     ~QwenModel() override;
 
@@ -68,6 +70,7 @@ private:
     QwenTokenizer tokenizer_;
     CudaWeightPool pool_;
     int max_output_tokens_ = 0;
+    Sampler sampler_;
 
     Embedding embed_tokens_;
     std::vector<DecoderLayer> layers_;

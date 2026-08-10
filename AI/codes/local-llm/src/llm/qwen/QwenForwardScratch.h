@@ -6,6 +6,7 @@
 #define LOCAL_LLM_QWENFORWARDSCRATCH_H
 
 #include <cstdint>
+#include <vector>
 
 #include "backend/cuda/mem/CudaScratchBuffer.h"
 
@@ -99,6 +100,11 @@ public:
     // 最终最大值 / token id 的单元素 device buffer。
     CudaScratchBuffer<float> argmax_best_value;
     CudaScratchBuffer<int> argmax_best_index;
+
+    // ---- host 端采样 ----
+    // logits 从 device 拷回 host 的暂存（长度 vocab），供 Sampler 做温度/top-k/
+    // top-p/重复惩罚。不计入 device 显存统计。
+    std::vector<float> h_logits;
 
     // 所有 grow-only buffer 当前容量（即峰值）字节数之和，供显存统计用。
     size_t total_bytes() const {

@@ -5,6 +5,8 @@
 #ifndef LOCAL_LLM_DEEPSEEKFORWARDSCRATCH_H
 #define LOCAL_LLM_DEEPSEEKFORWARDSCRATCH_H
 
+#include <vector>
+
 #include "backend/cuda/mem/CudaScratchBuffer.h"
 
 // DeepSeek 前向的临时激活缓冲（grow-only，随 Session 存活，保证并发隔离）。
@@ -47,6 +49,9 @@ struct DeepseekForwardScratch {
     CudaScratchBuffer<int> argmax_idx;
     CudaScratchBuffer<float> best_val;
     CudaScratchBuffer<int> best_idx;
+
+    // host 端采样：logits 拷回主机后交给 Sampler（不计入 device 显存）。
+    std::vector<float> h_logits;
 
     size_t total_bytes() const {
         return hidden.bytes() + normed.bytes() + normed_lowp.bytes() + deq_a.bytes() + deq_b.bytes() +

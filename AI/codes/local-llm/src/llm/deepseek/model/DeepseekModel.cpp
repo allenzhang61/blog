@@ -27,12 +27,13 @@ int64_t num_elements(const TensorView *t) {
 }
 } // namespace
 
-DeepseekModel::DeepseekModel(const std::string &model_dir, int max_output_tokens)
+DeepseekModel::DeepseekModel(const std::string &model_dir, int max_output_tokens, const SamplingConfig &sampling)
     : gguf_(model_dir), // model_dir 直接是 .gguf 文件路径
       config_(gguf_),
       weights_(gguf_, config_),
       tokenizer_(gguf_),
-      max_output_tokens_(max_output_tokens) {
+      max_output_tokens_(max_output_tokens),
+      sampler_(sampling) {
     config_.DebugDump();
 }
 
@@ -357,17 +358,12 @@ int DeepseekModel::forward(DeepseekSession &session, const std::vector<int> &tok
     to_weight_lowp(d_normed, xlow, H, w, nullptr);
     gemm_weight(pool_.handle, w, vocab, H, xlow, w.type, 1, d_logits, "ds.gemm.lm_head");
 
-    // argmax
-    const int grid = (vocab + 255) / 256;
-    float *bv = s.argmax_vals.ensure(static_cast<size_t>(grid), "ds.argmax_vals");
-    int *bi = s.argmax_idx.ensure(static_cast<size_t>(grid), "ds.argmax_idx");
-    float *best_v = s.best_val.ensure(1, "ds.best_val");
-    int *best_i = s.best_idx.ensure(1, "ds.best_idx");
-    launch_argmax(d_logits, vocab, bv, bi, best_v, best_i, nullptr);
-    check_cuda(cudaDeviceSynchronize(), "ds.forward.sync");
-    int token = 0;
-    check_cuda(cudaMemcpy(&token, best_i, sizeof(int), cudaMemcpyDeviceToHost), "ds.argmax.d2h");
-    return token;
+    // logits 拷回 host，交由 Sampler 采样（greedy 时内部走 argmax）。
+    s.h_logits.resize(static_cast<size_t>(vocab));
+    check_cuda(cudaMemcpy(s.h_logits.data(), d_logits, static_cast<size_t>(vocab) * sizeof(float),
+                          cudaMemcpyDeviceToHost),
+               "ds.logits.d2h");
+    return sampler_.sample(s.h_logits.data(), vocab, session.h_outputs);
 }
 
 int DeepseekModel::prefill(const std::vector<int> &input_ids) {

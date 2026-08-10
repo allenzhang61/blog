@@ -16,11 +16,12 @@ namespace {
 const TextConfig &text_of(const QwenConfig &config) { return config.data.text; }
 } // namespace
 
-QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens)
+QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens, const SamplingConfig &sampling)
     : config_(model_dir + "/config.json"),
       weights_(model_dir, config_),
       tokenizer_(model_dir + "/tokenizer.json"),
       max_output_tokens_(max_output_tokens),
+      sampler_(sampling),
       embed_tokens_(weights_.embed_tokens, &pool_),
       final_norm_(weights_.final_norm, &pool_, config_.data.text.rms_norm_eps),
       // tie_word_embeddings=true：LMHead 复用 embed_tokens 权重。
@@ -82,7 +83,7 @@ int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &h_i
     float *d_normed = scratch.token_hidden_a.ensure(hidden, "prefill final normed");
     final_norm_.forward(d_last, d_normed, 1, hidden);
 
-    return lm_head_.forward(d_normed, hidden, scratch);
+    return lm_head_.forward(d_normed, hidden, scratch, sampler_, session.h_outputs);
 }
 
 int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) {
@@ -100,5 +101,5 @@ int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) 
     float *d_normed = scratch.token_hidden_a.ensure(hidden, "decode final normed");
     final_norm_.forward(d_hidden, d_normed, 1, hidden);
 
-    return lm_head_.forward(d_normed, hidden, scratch);
+    return lm_head_.forward(d_normed, hidden, scratch, sampler_, session.h_outputs);
 }

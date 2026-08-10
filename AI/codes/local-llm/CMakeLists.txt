@@ -60,6 +60,8 @@ add_executable(local_llm main.cpp
         src/llm/BaseModel.h
         src/llm/ModelFactory.cpp
         src/llm/ModelFactory.h
+        src/llm/sampling/Sampler.cpp
+        src/llm/sampling/Sampler.h
         src/llm/qwen/model/Module.h
         src/llm/qwen/model/RMSNorm.cpp
         src/llm/qwen/model/RMSNorm.h

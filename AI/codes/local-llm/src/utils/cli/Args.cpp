@@ -24,6 +24,16 @@ Args::Args(const int argc, char **argv) {
             this->model_dir = get_value(key);
         } else if (key == "--max-output-tokens") {
             this->max_output_tokens = std::stoi(get_value(key));
+        } else if (key == "--temperature") {
+            this->sampling.temperature = std::stof(get_value(key));
+        } else if (key == "--top-k") {
+            this->sampling.top_k = std::stoi(get_value(key));
+        } else if (key == "--top-p") {
+            this->sampling.top_p = std::stof(get_value(key));
+        } else if (key == "--repetition-penalty") {
+            this->sampling.repetition_penalty = std::stof(get_value(key));
+        } else if (key == "--seed") {
+            this->sampling.seed = std::stoull(get_value(key));
         } else if (key == "--profile") {
             this->profile = true;
         } else if (key == "--profile-dir") {
@@ -36,6 +46,7 @@ void Args::DebugDump() {
     Log::debug("model: " + this->model);
     Log::debug("model_dir: " + this->model_dir);
     Log::debug("max_output_tokens: " + std::to_string(this->max_output_tokens));
+    Log::debug("sampling: " + this->sampling.DebugString());
     Log::debug("profile: " + std::string(this->profile ? "true" : "false"));
     Log::debug("profile_dir: " + this->profile_dir);
 }

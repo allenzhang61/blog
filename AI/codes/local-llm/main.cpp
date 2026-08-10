@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
     args.DebugDump();
 
     // 经工厂按 --model 构造具体模型；主循环之后只依赖 BaseModel 接口。
-    std::unique_ptr<BaseModel> model = create_model(args.model, args.model_dir, args.max_output_tokens);
+    std::unique_ptr<BaseModel> model = create_model(args.model, args.model_dir, args.max_output_tokens, args.sampling);
     CudaWeightPool &pool = model->weight_pool();
 
     std::vector<int> inputs = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
