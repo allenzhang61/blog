@@ -121,4 +121,63 @@ void launch_linear_attention_recurrent_batch(const float *conv_out, const float 
 // float -> 低精度（lowp_type 0=bf16, 1=f16），供 out_proj 输入。
 void launch_float_to_lowp(const float *input, uint16_t *output, int n, int lowp_type, void *stream);
 
+// ================= 量化反量化 =================
+// Q4_K 反量化：把 GGUF 的 Q4_K super-block（256 元素/144 字节）解到 f16 输出。
+//   src           : device 端 Q4_K 原始字节（连续 BlockQ4K）；
+//   out           : device 端 f16 输出（uint16_t 位模式），长度 >= num_elements；
+//   num_elements  : 必须是 256 的整数倍。
+// 埋点 dequant.q4k。用于“Q4_K 常驻 + gemm 前按需反量化到临时 f16 buffer”。
+void launch_dequantize_q4k_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
+
+// 其它 GGUF 量化类型反量化到 f16（均按 num_elements 计块）。
+// Q8_0：block=32（34B），y=d*qs。Q5_0：block=32（22B），y=d*((q&0x1F)-16)。
+// Q6_K：super-block=256（210B）。F32->f16 直转（norm/gate_inp 等 F32 权重上传用）。
+void launch_dequantize_q80_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
+void launch_dequantize_q50_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
+void launch_dequantize_q6k_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
+void launch_f32_to_f16_copy(const float *src, uint16_t *out, int64_t num_elements, void *stream);
+
+// ================= MLA（多头潜在注意力，DeepSeek-V2-Lite）=================
+// 维度约定：n_heads=16，qk_nope=128，qk_rope=64（解耦 RoPE 只旋转这 64 维），
+//   qk_head=qk_nope+qk_rope=192，v_head=128，kv_lora=512。
+// q 布局：[tokens, n_heads*qk_head]，每 head 前 qk_nope 为 nope、后 qk_rope 为 rope。
+// kv_a 布局：[tokens, kv_lora + qk_rope]，前 kv_lora 为 latent、后 qk_rope 为共享 k_rope。
+// inv_freq：device 端预计算的 RoPE 频率数组，长度 qk_rope/2（含 YARN 缩放），host 侧一次算好上传。
+//
+// (1) 对 kv_a 的 latent 段做 RMSNorm、对 k_rope 段做 RoPE，然后把 [latent||k_rope]
+//     写入 latent KV cache（布局 [max_seq_len, kv_lora+qk_rope]）。
+void launch_mla_kv_a(const float *kv_a, const float *kv_a_norm_weight,
+                     float *kv_cache, int kv_lora, int qk_rope, int max_seq_len, int pos,
+                     const float *inv_freq, float eps, void *stream);
+void launch_mla_kv_a_batch(const float *kv_a, const float *kv_a_norm_weight,
+                           float *kv_cache, int tokens, int kv_lora, int qk_rope,
+                           int max_seq_len, int start_pos, const float *inv_freq, float eps, void *stream);
+
+// (2) 对 q 的每个 head 的 rope 段做 RoPE（nope 段不动）。q 原位更新。
+void launch_mla_rope_q(float *q, int n_heads, int qk_nope, int qk_rope, int pos,
+                       const float *inv_freq, void *stream);
+void launch_mla_rope_q_batch(float *q, int tokens, int n_heads, int qk_nope, int qk_rope,
+                             int start_pos, const float *inv_freq, void *stream);
+
+// (3) attend：kv_b_out 为已由 kv_b 投影解出的 per-(pos,head) k_nope||v，布局
+//     [seq, n_heads*(qk_nope+v_head)]；k_rope 从 kv_cache 的 k_rope 段取（所有 head 共享）。
+//     scores = (q_nope·k_nope + q_rope·k_rope)*softmax_scale，causal softmax，加权 v -> attn[tokens,n_heads*v_head]。
+//     softmax_scale 已含 YARN 的 mscale^2（host 侧算好）。
+void launch_mla_attend(const float *q, const float *kv_b_out, const float *kv_cache,
+                       float *attn, int n_heads, int qk_nope, int qk_rope, int v_head,
+                       int kv_lora, int max_seq_len, int pos, float softmax_scale, void *stream);
+void launch_mla_attend_batch(const float *q, const float *kv_b_out, const float *kv_cache,
+                             float *attn, int tokens, int n_heads, int qk_nope, int qk_rope,
+                             int v_head, int kv_lora, int max_seq_len, int start_pos,
+                             float softmax_scale, void *stream);
+
+// ================= MoE（DeepSeekMoE 路由）=================
+// router_logits[tokens, n_experts] -> 每 token 选 top-k，对被选专家的 gate 值做 softmax
+// 归一化并乘 routed_scaling_factor，输出 top_idx[tokens,k]（int）与 top_w[tokens,k]（float）。
+void launch_moe_router_topk(const float *router_logits, int *top_idx, float *top_w,
+                            int tokens, int n_experts, int k, float routed_scaling, void *stream);
+
+// 把专家输出按权重累加到 hidden：out[token] += weight * expert_out[token]，n=hidden。
+void launch_moe_accumulate(const float *expert_out, float weight, float *out, int n, void *stream);
+
 #endif // LOCAL_LLM_KERNEL_CUH

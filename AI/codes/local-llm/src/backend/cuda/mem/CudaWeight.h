@@ -26,8 +26,12 @@ public:
     // 在 device 上分配 bytes 字节内存；zero 为 true 时清零。
     // what 用于分配失败时的错误信息上下文。
     CudaWeight(size_t bytes, cudaDataType_t type, bool zero, const std::string &what);
-    // 释放 device 端数据。
+    // 释放 device 端数据（仅当拥有所有权时）。
     ~CudaWeight();
+
+    // 构造一个“非拥有”视图：包装一段已存在的 device 内存（如 scratch 反量化结果），
+    // 析构时不释放。用于把临时 f16 buffer 传给 gemm_weight（后者只读 ptr/type/bytes）。
+    static CudaWeight make_view(void *ptr, size_t bytes, cudaDataType_t type);
 
     // 独占所有权，禁止拷贝。
     CudaWeight(const CudaWeight &) = delete;
@@ -40,6 +44,10 @@ public:
 
     // 释放当前 device 内存并清零。
     void reset();
+
+private:
+    // 是否拥有 ptr 的所有权：true 时析构/reset 会 cudaFree；视图（make_view）为 false。
+    bool owns_ = true;
 };
 
 #endif // LOCAL_LLM_CUDAWEIGHT_H

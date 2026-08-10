@@ -18,10 +18,20 @@ CudaWeight::~CudaWeight() {
     reset();
 }
 
+CudaWeight CudaWeight::make_view(void *ptr, size_t bytes, cudaDataType_t type) {
+    CudaWeight w;
+    w.ptr = ptr;
+    w.bytes = bytes;
+    w.type = type;
+    w.owns_ = false; // 视图不拥有内存，析构不释放。
+    return w;
+}
+
 CudaWeight::CudaWeight(CudaWeight &&other) noexcept
-    : ptr(other.ptr), bytes(other.bytes), type(other.type) {
+    : ptr(other.ptr), bytes(other.bytes), type(other.type), owns_(other.owns_) {
     other.ptr = nullptr;
     other.bytes = 0;
+    other.owns_ = true;
 }
 
 CudaWeight &CudaWeight::operator=(CudaWeight &&other) noexcept {
@@ -30,16 +40,19 @@ CudaWeight &CudaWeight::operator=(CudaWeight &&other) noexcept {
         ptr = other.ptr;
         bytes = other.bytes;
         type = other.type;
+        owns_ = other.owns_;
         other.ptr = nullptr;
         other.bytes = 0;
+        other.owns_ = true;
     }
     return *this;
 }
 
 void CudaWeight::reset() {
-    if (ptr) {
+    if (ptr && owns_) {
         cudaFree(ptr);
-        ptr = nullptr;
     }
+    ptr = nullptr;
     bytes = 0;
+    owns_ = true;
 }

@@ -12,12 +12,12 @@
 #include "backend/cuda/ops/kernel.cuh"
 
 namespace {
-// safetensors dtype -> kernel weight_type：0=bf16，1=f16，2=f32。
-int weight_type_of(const std::string &dtype) {
-    if (dtype == "BF16") return 0;
-    if (dtype == "F16") return 1;
-    if (dtype == "F32") return 2;
-    throw std::runtime_error("RMSNorm 不支持的 norm dtype：" + dtype);
+// DType -> kernel weight_type：0=bf16，1=f16，2=f32。
+int weight_type_of(DType dtype) {
+    if (dtype == DType::BF16) return 0;
+    if (dtype == DType::F16) return 1;
+    if (dtype == DType::F32) return 2;
+    throw std::runtime_error(std::string("RMSNorm 不支持的 norm dtype：") + dtype_name(dtype));
 }
 } // namespace
 

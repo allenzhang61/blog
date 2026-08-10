@@ -1,12 +1,10 @@
 #include <fstream>
 #include <iostream>
+#include <cstdlib>
 
 #include "utils/cli/Args.h"
-#include "llm/qwen/QwenConfig.h"
-#include "llm/qwen/QwenSession.h"
-#include "llm/qwen/QwenTokenizer.h"
-#include "llm/qwen/QwenWeights.h"
-#include "llm/qwen/model/QwenModel.h"
+#include "llm/BaseModel.h"
+#include "llm/ModelFactory.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "utils/stats/DeviceMonitor.h"
 #include "utils/stats/MemoryReporter.h"
@@ -18,24 +16,12 @@ int main(int argc, char **argv) {
     Args args(argc, argv);
     args.DebugDump();
 
-    QwenConfig config(args.model_dir + "/config.json");
-    config.DebugDump();
+    // 经工厂按 --model 构造具体模型；主循环之后只依赖 BaseModel 接口。
+    std::unique_ptr<BaseModel> model = create_model(args.model, args.model_dir, args.max_output_tokens);
+    CudaWeightPool &pool = model->weight_pool();
 
-    QwenWeights weights(args.model_dir, config);
-    weights.DebugDump();
-
-    QwenTokenizer tokenizer(args.model_dir + "/tokenizer.json");
-    tokenizer.DebugDump();
-
-    std::vector<int> inputs = tokenizer.Encode("法国的首都是");
-
-    QwenSession session(config, inputs, args.max_output_tokens);
-
-    // device 权重缓存（惰性上传）+ 模型（串起各 Module，无 per-request 状态）。
-    CudaWeightPool pool;
-    QwenModel model(config, weights, &pool);
-
-    const int eos = config.data.text.eos_token_id;
+    std::vector<int> inputs = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
+    const int eos = model->eos_token_id();
 
     // 性能采集：仅 --profile 时开启，所有埋点否则零开销。
     Profiler::instance().enable(args.profile);
@@ -49,15 +35,15 @@ int main(int argc, char **argv) {
     // 显存分层时间线：prefill / 每个 decode step 采一条，看清 KV cache 增长曲线。
     MemoryReporter mem_reporter;
 
-    // warmup：正式计时前跑一遍完整前向（独立 session），触发权重惰性上传、
-    // CUDA context / cuBLAS 初始化与 kernel 首次启动，避免首步冷启动污染稳态计时。
+    // warmup：正式计时前跑一遍完整前向，触发权重惰性上传、CUDA context / cuBLAS
+    // 初始化与 kernel 首次启动，避免首步冷启动污染稳态计时。
+    // BaseModel::prefill 每次会重建内部 session，因此 warmup 与正式跑天然隔离。
     {
-        QwenSession warm(config, inputs, 4);
-        int wnext = model.prefill(warm, inputs);
+        int wnext = model->prefill(inputs);
         int wpos = static_cast<int>(inputs.size());
         for (int i = 0; i < 4 && wnext != eos; ++i) {
-            warm.h_outputs.push_back(wnext);
-            wnext = model.decode(warm, wnext, wpos);
+            model->append_output(wnext);
+            wnext = model->decode(wnext, wpos);
             ++wpos;
         }
     }
@@ -68,14 +54,14 @@ int main(int argc, char **argv) {
         device_monitor.start(100);
     }
 
-    // prefill：喂入整段 prompt，跑完 32 层，返回首个生成 token。
+    // prefill：喂入整段 prompt，跑完各层，返回首个生成 token。
     int next;
     {
         ScopedCpuTimer t("prefill");
-        next = model.prefill(session, inputs);
+        next = model->prefill(inputs);
     }
     if (args.profile) {
-        mem_reporter.sample(pool, session, "prefill");
+        mem_reporter.sample(pool, model->memory_usage(), "prefill");
     }
 
     // decode：从 prompt 之后的位置开始逐 token 生成。
@@ -85,15 +71,15 @@ int main(int argc, char **argv) {
         ScopedCpuTimer t("decode_total");
         for (int step = 0; step < args.max_output_tokens; ++step) {
             if (next == eos) break;
-            session.h_outputs.push_back(next);
+            model->append_output(next);
             {
                 ScopedCpuTimer td("decode_token");
-                next = model.decode(session, next, pos);
+                next = model->decode(next, pos);
             }
             ++pos;
             ++decode_tokens;
             if (args.profile) {
-                mem_reporter.sample(pool, session, "decode");
+                mem_reporter.sample(pool, model->memory_usage(), "decode");
             }
         }
     }
@@ -102,16 +88,19 @@ int main(int argc, char **argv) {
         device_monitor.stop();
     }
 
-    std::cout << "生成结果：" << tokenizer.Decode(session.h_outputs) << std::endl;
+    std::cout << "生成结果：" << model->decode_text(model->outputs()) << std::endl;
 
     if (!args.profile) {
         return 0;
     }
 
+    // 报告文件名加模型 name 区分，便于多模型对比：profile_<name>.{jsonl,_summary.json,_summary.md}。
+    const std::string prefix = args.profile_dir + "/profile_" + model->name();
+
     // === 三类报告落盘 ===
     // 1) JSONL 原始日志：各采集器的明细时间线逐行追加到同一文件。
     {
-        std::ofstream jsonl(args.profile_dir + "/profile.jsonl");
+        std::ofstream jsonl(prefix + ".jsonl");
         Profiler::instance().write_jsonl(jsonl);
         weight_tracker.write_jsonl(jsonl);
         device_monitor.write_jsonl(jsonl);
@@ -119,7 +108,7 @@ int main(int argc, char **argv) {
     }
     // 2) JSON summary：各采集器聚合结论逐行写入（每行一个 JSON 对象）。
     {
-        std::ofstream json(args.profile_dir + "/profile_summary.json");
+        std::ofstream json(prefix + "_summary.json");
         Profiler::instance().write_json_summary(json);
         weight_tracker.write_json_summary(json);
         device_monitor.write_json_summary(json);
@@ -127,8 +116,8 @@ int main(int argc, char **argv) {
     }
     // 3) Markdown summary：人类可读汇总，可直接贴进 doc / MR。
     {
-        std::ofstream md(args.profile_dir + "/profile_summary.md");
-        md << "# Profile summary\n\n";
+        std::ofstream md(prefix + "_summary.md");
+        md << "# Profile summary (" << model->name() << ")\n\n";
         Profiler::instance().write_markdown_summary(md);
         mem_reporter.write_markdown_summary(md);
         device_monitor.write_markdown_summary(md);
@@ -136,9 +125,10 @@ int main(int argc, char **argv) {
     }
 
     // 同时在 stdout 打印稳态端到端指标，便于快速查看。
-    std::cout << "PROFILE input_tokens=" << inputs.size()
+    std::cout << "PROFILE model=" << model->name()
+              << " input_tokens=" << inputs.size()
               << " decode_tokens=" << decode_tokens
-              << " reports=" << args.profile_dir << "/profile.{jsonl,_summary.json,_summary.md}"
+              << " reports=" << prefix << ".{jsonl,_summary.json,_summary.md}"
               << std::endl;
     return 0;
 }

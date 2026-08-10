@@ -50,6 +50,16 @@ add_executable(local_llm main.cpp
         src/backend/cuda/ops/kernel.cuh
         src/backend/cuda/ops/gemm.cpp
         src/backend/cuda/ops/gemm.h
+        src/format/gguf/GgufFile.cpp
+        src/format/gguf/GgufFile.h
+        src/format/gguf/Q4K.cpp
+        src/format/gguf/Q4K.h
+        src/format/TensorContainer.h
+        src/format/safetensors/SafeTensorsFile.cpp
+        src/format/safetensors/SafeTensorsFile.h
+        src/llm/BaseModel.h
+        src/llm/ModelFactory.cpp
+        src/llm/ModelFactory.h
         src/llm/qwen/model/Module.h
         src/llm/qwen/model/RMSNorm.cpp
         src/llm/qwen/model/RMSNorm.h
@@ -67,6 +77,17 @@ add_executable(local_llm main.cpp
         src/llm/qwen/model/DecoderLayer.h
         src/llm/qwen/model/QwenModel.cpp
         src/llm/qwen/model/QwenModel.h
+        src/llm/deepseek/DeepseekConfig.cpp
+        src/llm/deepseek/DeepseekConfig.h
+        src/llm/deepseek/DeepseekWeights.cpp
+        src/llm/deepseek/DeepseekWeights.h
+        src/llm/deepseek/DeepseekTokenizer.cpp
+        src/llm/deepseek/DeepseekTokenizer.h
+        src/llm/deepseek/model/DeepseekForwardScratch.h
+        src/llm/deepseek/model/DeepseekSession.cpp
+        src/llm/deepseek/model/DeepseekSession.h
+        src/llm/deepseek/model/DeepseekModel.cpp
+        src/llm/deepseek/model/DeepseekModel.h
         src/utils/stats/StatsReport.h
         src/utils/stats/MemoryUsageProvider.h
         src/utils/stats/Profiler.cpp

@@ -24,7 +24,7 @@ void Embedding::forward(const std::vector<int> &h_token_ids, float *d_out, int h
     }
     // 权重形状 [vocab, hidden]，dtype bf16/f16。
     const int vocab = static_cast<int>(weight_.info->shape[0]);
-    const int lowp_type = (weight_.info->dtype == "F16") ? 1 : 0;
+    const int lowp_type = (weight_.info->dtype == DType::F16) ? 1 : 0;
     const int tokens = static_cast<int>(h_token_ids.size());
 
     // token id 搬到 device（一次前向的小临时缓冲，用完即释放）。

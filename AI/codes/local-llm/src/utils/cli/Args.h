@@ -9,6 +9,8 @@
 
 class Args {
 public:
+    // 模型名（决定加载哪种模型 + 报告文件名后缀）。默认 qwen。
+    std::string model = "qwen";
     std::string model_dir;
     int max_output_tokens = 20;
     Device device = Device::CPU;

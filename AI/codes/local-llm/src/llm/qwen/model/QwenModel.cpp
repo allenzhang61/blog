@@ -8,8 +8,6 @@
 
 #include <cuda_runtime.h>
 
-#include "llm/qwen/QwenConfig.h"
-#include "llm/qwen/QwenWeights.h"
 #include "llm/qwen/QwenSession.h"
 #include "llm/qwen/QwenForwardScratch.h"
 #include "backend/cuda/common.h"
@@ -18,21 +16,54 @@ namespace {
 const TextConfig &text_of(const QwenConfig &config) { return config.data.text; }
 } // namespace
 
-QwenModel::QwenModel(const QwenConfig &config, const QwenWeights &weights, CudaWeightPool *pool)
-    : config_(config),
-      pool_(pool),
-      embed_tokens_(weights.embed_tokens, pool),
-      final_norm_(weights.final_norm, pool, config.data.text.rms_norm_eps),
+QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens)
+    : config_(model_dir + "/config.json"),
+      weights_(model_dir, config_),
+      tokenizer_(model_dir + "/tokenizer.json"),
+      max_output_tokens_(max_output_tokens),
+      embed_tokens_(weights_.embed_tokens, &pool_),
+      final_norm_(weights_.final_norm, &pool_, config_.data.text.rms_norm_eps),
       // tie_word_embeddings=true：LMHead 复用 embed_tokens 权重。
-      lm_head_(weights.embed_tokens, pool) {
-    const TextConfig &t = text_of(config);
-    layers_.reserve(weights.layers.size());
-    for (int i = 0; i < static_cast<int>(weights.layers.size()); ++i) {
-        layers_.emplace_back(weights.layers[i], t, pool, i);
+      lm_head_(weights_.embed_tokens, &pool_) {
+    const TextConfig &t = text_of(config_);
+    layers_.reserve(weights_.layers.size());
+    for (int i = 0; i < static_cast<int>(weights_.layers.size()); ++i) {
+        layers_.emplace_back(weights_.layers[i], t, &pool_, i);
     }
 }
 
-int QwenModel::prefill(QwenSession &session, const std::vector<int> &h_input_ids) {
+// 在 QwenSession 完整定义可见处生成析构，供 unique_ptr<QwenSession> 正确销毁。
+QwenModel::~QwenModel() = default;
+
+int QwenModel::prefill(const std::vector<int> &input_ids) {
+    // 为一次新生成重建 session（丢弃上一次请求的 KV cache / recurrent state）。
+    session_ = std::make_unique<QwenSession>(config_, input_ids, max_output_tokens_);
+    return prefill_session(*session_, input_ids);
+}
+
+int QwenModel::decode(int prev_token_id, int pos) {
+    if (!session_) {
+        throw std::runtime_error("QwenModel::decode 在 prefill 之前被调用");
+    }
+    return decode_session(*session_, prev_token_id, pos);
+}
+
+const MemoryUsageProvider &QwenModel::memory_usage() const {
+    if (!session_) {
+        throw std::runtime_error("QwenModel::memory_usage 在 prefill 之前被调用");
+    }
+    return *session_;
+}
+
+void QwenModel::append_output(int token_id) {
+    session_->h_outputs.push_back(token_id);
+}
+
+const std::vector<int> &QwenModel::outputs() const {
+    return session_->h_outputs;
+}
+
+int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &h_input_ids) {
     const TextConfig &t = text_of(config_);
     const int hidden = t.hidden_size;
     const int tokens = static_cast<int>(h_input_ids.size());
@@ -54,7 +85,7 @@ int QwenModel::prefill(QwenSession &session, const std::vector<int> &h_input_ids
     return lm_head_.forward(d_normed, hidden, scratch);
 }
 
-int QwenModel::decode(QwenSession &session, int prev_token_id, int pos) {
+int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) {
     const TextConfig &t = text_of(config_);
     const int hidden = t.hidden_size;
     QwenForwardScratch &scratch = session.forwardScratch;

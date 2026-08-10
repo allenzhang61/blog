@@ -6,52 +6,24 @@
 #define LOCAL_LLM_QWENWEIGHTS_H
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "format/TensorContainer.h"
+
 class QwenConfig;
 
-// mmap 打开的权重文件，负责持有 fd 和映射内存生命周期。
-struct MmapFile {
-    // 文件路径。
-    std::filesystem::path path;
-    // 打开的文件描述符，-1 表示无效。
-    int fd = -1;
-    // 文件总字节数。
-    size_t size = 0;
-    // mmap 后的只读数据起始地址。
-    const uint8_t *data = nullptr;
-
-    MmapFile() = default;
-
-    MmapFile(const MmapFile &) = delete;
-
-    MmapFile &operator=(const MmapFile &) = delete;
-
-    MmapFile(MmapFile &&other) noexcept;
-
-    MmapFile &operator=(MmapFile &&other) noexcept;
-
-    ~MmapFile();
-
-    // 释放 mmap 和文件描述符。
-    void close();
-};
-
-// 单个模型权重在 safetensors 文件中的 metadata。
+// 单个模型权重在张量容器中的 metadata。
 struct WeightMeta {
     // 权重名称。
     std::string name;
     // 权重 dtype，例如 BF16/F16/F32。
-    std::string dtype;
+    DType dtype = DType::UNKNOWN;
     // 权重 shape。
     std::vector<int64_t> shape;
-    // 权重数据在文件数据区内的起始偏移。
-    size_t data_begin = 0;
-    // 权重数据在文件数据区内的结束偏移。
-    size_t data_end = 0;
-    // 权重所在的 files 下标。
-    size_t file_index = 0;
+    // 权重数据字节数。
+    size_t nbytes = 0;
 };
 
 // 指向已 mmap 权重数据的轻量引用，不拥有内存。
@@ -175,7 +147,8 @@ public:
     MtpWeights mtp;
 
 private:
-    std::vector<MmapFile> mmapFiles;
+    // 张量容器（safetensors 格式；负责 mmap、header 解析、按名取张量）。
+    std::unique_ptr<TensorContainer> st_;
     // 按权重名称索引的 metadata，持有 WeightMeta 生命周期。
     std::map<std::string, WeightMeta> metas;
     std::map<std::string, WeightData> weights;
@@ -183,10 +156,7 @@ private:
     // 校验 Qwen3.5 推理路径需要的 tensor 是否齐全。
     void validate_qwen_tensors(int num_hidden_layers, const std::vector<std::string> &layer_types) const;
 
-    // 解析单个 safetensors 文件 header 并填充 tensor 索引。
-    void parse_safetensors_header(size_t file_index);
-
-    // 构建 name -> WeightData 索引，data 指向已 mmap 内存。
+    // 从张量容器构建 name -> WeightMeta/WeightData 索引，data 指向已 mmap 内存。
     void build_weight_index();
 
     // 解析视觉塔（model.visual.*）权重到 this->vision；当前未使用。
@@ -197,18 +167,6 @@ private:
 
     // 按名称返回权重数据引用；不存在时抛出异常。
     WeightData weight_data(const std::string &name) const;
-
-    // mmap 打开单个 safetensors 文件。
-    static MmapFile mmap_file(const std::filesystem::path &path);
-
-    // 从 safetensors 文件头读取 little-endian uint64 header 长度。
-    static uint64_t read_u64_le(const uint8_t *data);
-
-    // 解析 JSON 片段中的 int64 数组，例如 tensor shape。
-    static std::vector<int64_t> parse_i64_array(const std::string &text);
-
-    // 查找模型目录下所有 .safetensors 权重文件并排序。
-    static std::vector<std::filesystem::path> find_safetensors_files(const std::filesystem::path &model_dir);
 
     // 将 shape 转为日志/错误信息中使用的可读字符串。
     static std::string shape_to_string(const std::vector<int64_t> &shape);

@@ -5,145 +5,24 @@
 #include "QwenWeights.h"
 
 #include "QwenConfig.h"
+#include "format/safetensors/SafeTensorsFile.h"
 #include "utils/log/Log.h"
 
-#include <algorithm>
-#include <cerrno>
-#include <cstring>
-#include <regex>
 #include <sstream>
 #include <stdexcept>
 
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 namespace fs = std::filesystem;
 
-
-MmapFile::MmapFile(MmapFile &&other) noexcept {
-    *this = std::move(other);
-}
-
-MmapFile &MmapFile::operator=(MmapFile &&other) noexcept {
-    if (this != &other) {
-        close();
-        path = std::move(other.path);
-        fd = other.fd;
-        size = other.size;
-        data = other.data;
-        other.fd = -1;
-        other.size = 0;
-        other.data = nullptr;
-    }
-    return *this;
-}
-
-MmapFile::~MmapFile() {
-    close();
-}
-
-void MmapFile::close() {
-    if (data != nullptr && size > 0) {
-        munmap(const_cast<uint8_t *>(data), size);
-    }
-    if (fd >= 0) {
-        ::close(fd);
-    }
-    data = nullptr;
-    fd = -1;
-    size = 0;
-}
-
-MmapFile QwenWeights::mmap_file(const fs::path &path) {
-    MmapFile file;
-    file.path = path;
-    file.fd = ::open(path.c_str(), O_RDONLY);
-    if (file.fd < 0) {
-        throw std::runtime_error("open 失败：" + path.string() + "，" + std::strerror(errno));
-    }
-
-    struct stat st {};
-    if (fstat(file.fd, &st) != 0) {
-        throw std::runtime_error("fstat 失败：" + path.string() + "，" + std::strerror(errno));
-    }
-    file.size = static_cast<size_t>(st.st_size);
-    if (file.size < 8) {
-        throw std::runtime_error("safetensors 文件太小：" + path.string());
-    }
-
-    void *ptr = mmap(nullptr, file.size, PROT_READ, MAP_PRIVATE, file.fd, 0);
-    if (ptr == MAP_FAILED) {
-        throw std::runtime_error("mmap 失败：" + path.string() + "，" + std::strerror(errno));
-    }
-    file.data = static_cast<const uint8_t *>(ptr);
-    return file;
-}
-
-uint64_t QwenWeights::read_u64_le(const uint8_t *data) {
-    uint64_t value = 0;
-    for (int i = 0; i < 8; ++i) {
-        value |= static_cast<uint64_t>(data[i]) << (8 * i);
-    }
-    return value;
-}
-
-std::vector<int64_t> QwenWeights::parse_i64_array(const std::string &text) {
-    std::vector<int64_t> values;
-    const std::regex number("-?[0-9]+");
-    for (auto it = std::sregex_iterator(text.begin(), text.end(), number); it != std::sregex_iterator(); ++it) {
-        values.push_back(std::stoll((*it).str()));
-    }
-    return values;
-}
-
-void QwenWeights::parse_safetensors_header(size_t file_index) {
-    const MmapFile &file = mmapFiles[file_index];
-    const uint64_t header_len = read_u64_le(file.data);
-    if (8 + header_len > file.size) {
-        throw std::runtime_error("safetensors header 长度异常：" + file.path.string());
-    }
-
-    const std::string header(reinterpret_cast<const char *>(file.data + 8), static_cast<size_t>(header_len));
-    const size_t data_base = 8 + static_cast<size_t>(header_len);
-    const std::regex tensor_pattern(
-        R"REGEX("([^"]+)"\s*:\s*\{\s*"dtype"\s*:\s*"([^"]+)"\s*,\s*"shape"\s*:\s*\[([^\]]*)\]\s*,\s*"data_offsets"\s*:\s*\[\s*([0-9]+)\s*,\s*([0-9]+)\s*\])REGEX");
-
-    for (auto it = std::sregex_iterator(header.begin(), header.end(), tensor_pattern);
-         it != std::sregex_iterator();
-         ++it) {
-        WeightMeta info;
-        info.name = (*it)[1].str();
-        info.dtype = (*it)[2].str();
-        info.shape = parse_i64_array((*it)[3].str());
-        info.data_begin = data_base + static_cast<size_t>(std::stoull((*it)[4].str()));
-        info.data_end = data_base + static_cast<size_t>(std::stoull((*it)[5].str()));
-        info.file_index = file_index;
-        if (info.data_begin > info.data_end || info.data_end > file.size) {
-            throw std::runtime_error("tensor data_offsets 越界：" + info.name);
-        }
-        metas.emplace(info.name, std::move(info));
-    }
-}
-
-std::vector<fs::path> QwenWeights::find_safetensors_files(const fs::path &model_dir) {
-    std::vector<fs::path> found;
-    for (const auto &entry : fs::directory_iterator(model_dir)) {
-        if (entry.is_regular_file() && entry.path().extension() == ".safetensors") {
-            found.push_back(entry.path());
-        }
-    }
-    std::sort(found.begin(), found.end());
-    if (found.empty()) {
-        throw std::runtime_error("模型目录下没有 .safetensors 文件：" + model_dir.string());
-    }
-    return found;
-}
-
 void QwenWeights::build_weight_index() {
-    for (const auto &[name, info] : metas) {
-        weights.emplace(name, WeightData{ &info, mmapFiles[info.file_index].data + info.data_begin });
+    for (const std::string &name : st_->tensor_names()) {
+        const TensorView &tv = st_->tensor(name);
+        WeightMeta meta;
+        meta.name = tv.name;
+        meta.dtype = tv.dtype;
+        meta.shape = tv.shape;
+        meta.nbytes = tv.nbytes;
+        auto [it, _] = metas.emplace(name, std::move(meta));
+        weights.emplace(name, WeightData{ &it->second, tv.data });
     }
 }
 
@@ -226,14 +105,9 @@ void QwenWeights::validate_qwen_tensors(int num_hidden_layers, const std::vector
 }
 
 QwenWeights::QwenWeights(const std::string &model_dir, const QwenConfig &config) {
-    const fs::path dir(model_dir);
-
-    // mmap 打开目录下的所有 safetensors 文件，并解析其 header 填充 tensor 索引。
-    for (const fs::path &file_path : find_safetensors_files(dir)) {
-        mmapFiles.push_back(mmap_file(file_path));
-        parse_safetensors_header(mmapFiles.size() - 1);
-    }
-    // 建立 name -> WeightData 索引（data 指向已 mmap 内存，不拷贝权重数据）。
+    // 交由 SafeTensorsFile 完成 mmap 与 header 解析。
+    st_ = std::make_unique<SafeTensorsFile>(model_dir);
+    // 建立 name -> WeightMeta/WeightData 索引（data 指向已 mmap 内存，不拷贝权重数据）。
     build_weight_index();
 
     const int num_hidden_layers = config.data.text.num_hidden_layers;
@@ -341,10 +215,7 @@ void QwenWeights::parse_mtp_weights(const QwenConfig &config) {
 void QwenWeights::DebugDump() {
     std::ostringstream out;
     out << "QwenWeights:\n";
-    out << "  mapped_files=" << mmapFiles.size() << " tensors=" << metas.size() << "\n";
-    for (const MmapFile &file : mmapFiles) {
-        out << "  file=" << file.path.filename().string() << " bytes=" << file.size << "\n";
-    }
+    out << "  tensors=" << metas.size() << "\n";
 
     auto dump_one = [&](const std::string &label, const WeightData &w) {
         out << "  " << label << ": ";
@@ -353,9 +224,9 @@ void QwenWeights::DebugDump() {
             return;
         }
         out << w.info->name
-            << " dtype=" << w.info->dtype
+            << " dtype=" << dtype_name(w.info->dtype)
             << " shape=" << shape_to_string(w.info->shape)
-            << " bytes=" << (w.info->data_end - w.info->data_begin) << "\n";
+            << " bytes=" << w.info->nbytes << "\n";
     };
 
     dump_one("embed_tokens", embed_tokens);

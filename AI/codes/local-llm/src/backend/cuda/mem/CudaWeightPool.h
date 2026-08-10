@@ -45,6 +45,26 @@ public:
     // 要求各权重 dtype 相同、列数（shape[1]）一致；不满足或超限时返回 nullptr。
     CudaWeight *cached_concat_weight(const std::string &name, const std::vector<WeightData> &weights);
 
+    // 将一段 GGUF Q4_K 原始字节常驻上传并缓存（按 name 复用）。返回的 CudaWeight
+    // 以 type=CUDA_R_8I 标记“原始量化字节”（非可直接 gemm 的 dtype）；src_bytes 为字节数。
+    // 超过上限时返回 nullptr。使用时先经 dequantize_q4k_to_f16 反量化到临时 f16 buffer。
+    CudaWeight *cached_q4k_weight(const std::string &name, const uint8_t *host_src, size_t src_bytes);
+
+    // 把常驻的 Q4_K 权重反量化到 device 端 f16 输出（d_out_f16，元素数 >= num_elements），
+    // 返回一个包装该 f16 buffer 的非拥有 CudaWeight 视图，可直接传给 gemm_weight。
+    // d_out_f16 通常取自 CudaScratchBuffer<uint16_t>（grow-only，跨调用复用）。
+    static CudaWeight dequantize_q4k_to_f16(const CudaWeight &q4k, uint16_t *d_out_f16,
+                                            int64_t num_elements);
+
+    // 通用量化字节常驻上传：与 cached_q4k_weight 相同（type=CUDA_R_8I 标记原始字节），
+    // 但不限定量化类型，适用于 Q4_K/Q6_K/Q8_0/Q5_0/F32 等任意 GGUF 原始张量字节。
+    CudaWeight *cached_quant_weight(const std::string &name, const uint8_t *host_src, size_t src_bytes);
+
+    // 按 GGML 类型码把常驻量化权重反量化到 device f16（d_out_f16 元素数 >= num_elements），
+    // 返回非拥有 f16 视图。ggml_type：0=F32,6=Q5_0,8=Q8_0,12=Q4_K,14=Q6_K。stream 为 CUDA stream。
+    static CudaWeight dequantize_to_f16(const CudaWeight &quant, uint16_t *d_out_f16,
+                                        int64_t num_elements, int ggml_type, void *stream = nullptr);
+
     // 已缓存权重的总字节数。
     size_t cached_bytes() const { return bytes_; }
 

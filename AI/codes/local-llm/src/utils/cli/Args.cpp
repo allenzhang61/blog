@@ -18,7 +18,9 @@ Args::Args(const int argc, char **argv) {
             return argv[++i];
         };
 
-        if (key == "--model-dir") {
+        if (key == "--model") {
+            this->model = get_value(key);
+        } else if (key == "--model-dir") {
             this->model_dir = get_value(key);
         } else if (key == "--max-output-tokens") {
             this->max_output_tokens = std::stoi(get_value(key));
@@ -31,6 +33,7 @@ Args::Args(const int argc, char **argv) {
 }
 
 void Args::DebugDump() {
+    Log::debug("model: " + this->model);
     Log::debug("model_dir: " + this->model_dir);
     Log::debug("max_output_tokens: " + std::to_string(this->max_output_tokens));
     Log::debug("profile: " + std::string(this->profile ? "true" : "false"));
