@@ -1,6 +1,9 @@
 #include <fstream>
 #include <iostream>
 #include <cstdlib>
+#include <chrono>
+
+#include <cuda_runtime.h>
 
 #include "utils/cli/Args.h"
 #include "llm/BaseModel.h"
@@ -67,6 +70,8 @@ int main(int argc, char **argv) {
     // decode：从 prompt 之后的位置开始逐 token 生成。
     int pos = static_cast<int>(inputs.size());
     int decode_tokens = 0;
+    // 基础墙钟计时：与 profile 埋点无关，无 CUDA 同步、无落盘，恒定开销可忽略。
+    const auto decode_wall_start = std::chrono::steady_clock::now();
     {
         ScopedCpuTimer t("decode_total");
         for (int step = 0; step < args.max_output_tokens; ++step) {
@@ -83,12 +88,26 @@ int main(int argc, char **argv) {
             }
         }
     }
+    // 确保所有 decode kernel 落地后再停表，得到真实稳态墙钟。
+    cudaDeviceSynchronize();
+    const double decode_wall_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decode_wall_start).count();
 
     if (args.profile) {
         device_monitor.stop();
     }
 
     std::cout << "生成结果：" << model->decode_text(model->outputs()) << std::endl;
+
+    // 基础耗时：无论是否 profile 都打印（仅墙钟，无逐算子埋点/同步/落盘）。
+    if (decode_tokens > 0 && decode_wall_ms > 0.0) {
+        const double avg_ms = decode_wall_ms / decode_tokens;
+        const double tps = decode_tokens / decode_wall_ms * 1000.0;
+        std::cout << "[decode] tokens=" << decode_tokens
+                  << " wall_ms=" << decode_wall_ms
+                  << " avg_ms_per_token=" << avg_ms
+                  << " tokens_per_sec=" << tps << std::endl;
+    }
 
     if (!args.profile) {
         return 0;
