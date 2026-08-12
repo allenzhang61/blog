@@ -15,12 +15,6 @@
 //
 // 低精度类型约定：lowp_type 0 = bfloat16，1 = float16（与权重 dtype 对应）。
 
-// ---- 精度转换 ----
-// float -> bfloat16，n 个元素。
-void launch_float_to_bf16(const float *input, uint16_t *output, int n, void *stream);
-// float -> float16，n 个元素。
-void launch_float_to_f16(const float *input, uint16_t *output, int n, void *stream);
-
 // ---- 逐元素 ----
 // 残差加：out = a + b，n 个元素（out 可与 a 或 b 相同做原位）。
 void launch_add(const float *a, const float *b, float *out, int n, void *stream);
@@ -41,19 +35,6 @@ void launch_embedding_lookup(const uint16_t *table, const int *token_ids, float 
 // one_plus 为 true 时使用 (1 + weight) 作为缩放（部分 Qwen norm 的约定）。
 void launch_rms_norm(const float *input, const void *weight, int weight_type, float *output,
                      int rows, int hidden, float eps, bool one_plus, void *stream);
-
-// RMSNorm 输出 bfloat16/float16：归一化后转低精度，供后续 gemm 直接使用。
-// lowp_type 指明输出 dtype：0=bf16，1=f16。
-void launch_rms_norm_to_lowp(const float *input, const void *weight, int weight_type, uint16_t *output,
-                             int rows, int hidden, float eps, bool one_plus,
-                             int lowp_type, void *stream);
-
-// ---- 采样 ----
-// 对 logits [vocab] 求 argmax，返回的 token id 写入 device 端 out_index（单元素 int）。
-// block_values / block_indices 为分块归约的中间 buffer（长度 >= grid 大小）。
-void launch_argmax(const float *logits, int vocab,
-                   float *block_values, int *block_indices,
-                   float *best_value, int *best_index, void *stream);
 
 // ================= full attention =================
 // q_norm / k_norm 权重按 (1 + w) 缩放（Qwen 约定），以 bf16 传入（q_norm_weight[head_dim]）。

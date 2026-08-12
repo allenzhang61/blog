@@ -5,6 +5,6 @@
 #ifndef LOCAL_LLM_COMMON_H
 #define LOCAL_LLM_COMMON_H
 
-enum class Device { CPU, CUDA };
+enum class Device { CUDA };
 
 #endif //LOCAL_LLM_COMMON_H

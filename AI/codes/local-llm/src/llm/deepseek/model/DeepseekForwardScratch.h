@@ -45,10 +45,6 @@ struct DeepseekForwardScratch {
     // logits
     CudaScratchBuffer<float> logits;       // [vocab]
     CudaScratchBuffer<uint16_t> logits_in_lowp;
-    CudaScratchBuffer<float> argmax_vals;
-    CudaScratchBuffer<int> argmax_idx;
-    CudaScratchBuffer<float> best_val;
-    CudaScratchBuffer<int> best_idx;
 
     // host 端采样：logits 拷回主机后交给 Sampler（不计入 device 显存）。
     std::vector<float> h_logits;
@@ -59,8 +55,7 @@ struct DeepseekForwardScratch {
                attn_lowp.bytes() + attn_out.bytes() + ffn_in_lowp.bytes() + gate.bytes() + up.bytes() +
                act.bytes() + act_lowp.bytes() + ffn_out.bytes() + moe_out.bytes() +
                router_logits.bytes() + top_idx.bytes() + top_w.bytes() + expert_out.bytes() +
-               logits.bytes() + logits_in_lowp.bytes() + argmax_vals.bytes() + argmax_idx.bytes() +
-               best_val.bytes() + best_idx.bytes();
+               logits.bytes() + logits_in_lowp.bytes();
     }
 };
 

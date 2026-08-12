@@ -221,7 +221,6 @@
   - llama.cpp
 - [kv cache](chapter-03/03-026.md)
 
-
 #### 评测
 
 - 模型评测
@@ -278,8 +277,6 @@
   - LLM 训练优化
   - LLM 推理优化
 
-
-
 #### AGI
 
 - arc-agi-3
@@ -291,7 +288,6 @@
   - [MuZero](chapter-13/13-005.md)
 - competitions
   - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
-
 
 ## 低优
 

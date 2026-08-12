@@ -73,8 +73,6 @@ public:
     CudaScratchBuffer<float> gate_buffer;
     // MLP up projection 临时输出。
     CudaScratchBuffer<float> up_buffer;
-    // 合并 gate/up projection 后的 float 输出。
-    CudaScratchBuffer<float> gate_up_buffer;
     // MLP SiLU(gate) * up 的 float 临时结果。
     CudaScratchBuffer<float> prod_buffer;
     // MLP product 转成 BF16/F16 后的低精度输入。
@@ -88,19 +86,6 @@ public:
     // token hidden 双缓冲，用于 decode 层间传递。
     CudaScratchBuffer<float> token_hidden_a;
     CudaScratchBuffer<float> token_hidden_b;
-    // RMSNorm 输出的 BF16/F16 hidden。
-    CudaScratchBuffer<uint16_t> norm_lowp_buffer;
-    // post-attention RMSNorm 后的低精度 hidden。
-    CudaScratchBuffer<uint16_t> post_norm_lowp_buffer;
-
-    // ---- argmax 采样 ----
-    // 每个 block 的最大值 / 索引缓存。
-    CudaScratchBuffer<float> argmax_block_values;
-    CudaScratchBuffer<int> argmax_block_indices;
-    // 最终最大值 / token id 的单元素 device buffer。
-    CudaScratchBuffer<float> argmax_best_value;
-    CudaScratchBuffer<int> argmax_best_index;
-
     // ---- host 端采样 ----
     // logits 从 device 拷回 host 的暂存（长度 vocab），供 Sampler 做温度/top-k/
     // top-p/重复惩罚。不计入 device 显存统计。
@@ -113,12 +98,9 @@ public:
                linear_projection.bytes() + linear_z.bytes() + linear_b.bytes() + linear_a.bytes() +
                linear_conv_out.bytes() + linear_gated.bytes() + linear_gated_lowp.bytes() +
                input_lowp_buffer.bytes() + y_buffer.bytes() + gate_buffer.bytes() +
-               up_buffer.bytes() + gate_up_buffer.bytes() + prod_buffer.bytes() +
+               up_buffer.bytes() + prod_buffer.bytes() +
                prod_lowp_buffer.bytes() + mixer_buffer.bytes() + mlp_out_buffer.bytes() +
-               layer_out_buffer.bytes() + token_hidden_a.bytes() + token_hidden_b.bytes() +
-               norm_lowp_buffer.bytes() + post_norm_lowp_buffer.bytes() +
-               argmax_block_values.bytes() + argmax_block_indices.bytes() +
-               argmax_best_value.bytes() + argmax_best_index.bytes();
+               layer_out_buffer.bytes() + token_hidden_a.bytes() + token_hidden_b.bytes();
     }
 };
 

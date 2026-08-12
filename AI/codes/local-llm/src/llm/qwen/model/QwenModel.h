@@ -78,6 +78,16 @@ private:
     LMHead lm_head_;
 
     // 当前请求的 per-request 状态；prefill() 会重建，decode() 复用。
+    // 语法：
+    //  session_ 是一个指向 QwenSession 对象的独占所有权指针
+    //  std::unique_ptr<T> 表示“这个对象只被一个地方拥有”。它会在 QwenModel 析构时自动 delete 掉 QwenSession，避免手写 new/delete。
+    //  它不能被拷贝，只能移动
+    //      std::unique_ptr<QwenSession> a;
+    //      std::unique_ptr<QwenSession> b = a;             // 不允许
+    //      std::unique_ptr<QwenSession> b = std::move(a);  // 允许，所有权转移
+    // 比较：
+    //   QwenSession* session_;              // 原始指针，需要自己 delete
+    //   std::unique_ptr<QwenSession> session_; // 自动管理生命周期，更安全
     std::unique_ptr<QwenSession> session_;
 };
 

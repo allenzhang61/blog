@@ -14,7 +14,7 @@ public:
     std::string model = "qwen";
     std::string model_dir;
     int max_output_tokens = 20;
-    Device device = Device::CPU;
+    Device device = Device::CUDA;
 
     // 采样配置：默认 temperature=0 即贪心（argmax），与旧行为一致。
     SamplingConfig sampling;

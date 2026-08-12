@@ -7,7 +7,6 @@
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
-#include <cfloat>
 
 #include "utils/stats/ScopedTimer.h"
 
@@ -29,22 +28,6 @@ __device__ inline float lowp_to_float(uint16_t v, int lowp_type) {
     }
     __nv_bfloat16 b = *reinterpret_cast<const __nv_bfloat16 *>(&v);
     return __bfloat162float(b);
-}
-
-// ---- 精度转换 ----
-
-__global__ void float_to_bf16_kernel(const float *input, uint16_t *output, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    __nv_bfloat16 b = __float2bfloat16(input[i]);
-    output[i] = *reinterpret_cast<const uint16_t *>(&b);
-}
-
-__global__ void float_to_f16_kernel(const float *input, uint16_t *output, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    __half h = __float2half(input[i]);
-    output[i] = __half_as_ushort(h);
 }
 
 // ---- 逐元素 ----
@@ -120,67 +103,6 @@ __global__ void rms_norm_kernel(const float *input, const void *weight, int weig
             __nv_bfloat16 b = __float2bfloat16(y);
             dst[j] = *reinterpret_cast<const uint16_t *>(&b);
         }
-    }
-}
-
-// ---- 采样 ----
-// 阶段一：每个 block 求局部 argmax，写入 block_values / block_indices。
-__global__ void argmax_block_kernel(const float *logits, int vocab,
-                                    float *block_values, int *block_indices) {
-    extern __shared__ char smem[];
-    float *sval = reinterpret_cast<float *>(smem);
-    int *sidx = reinterpret_cast<int *>(sval + blockDim.x);
-
-    float best = -FLT_MAX;
-    int best_i = 0;
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < vocab; i += gridDim.x * blockDim.x) {
-        float v = logits[i];
-        if (v > best) { best = v; best_i = i; }
-    }
-    sval[threadIdx.x] = best;
-    sidx[threadIdx.x] = best_i;
-    __syncthreads();
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (threadIdx.x < s) {
-            if (sval[threadIdx.x + s] > sval[threadIdx.x]) {
-                sval[threadIdx.x] = sval[threadIdx.x + s];
-                sidx[threadIdx.x] = sidx[threadIdx.x + s];
-            }
-        }
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) {
-        block_values[blockIdx.x] = sval[0];
-        block_indices[blockIdx.x] = sidx[0];
-    }
-}
-
-// 阶段二：单 block 归约所有 block 的局部结果，得全局 argmax。
-__global__ void argmax_final_kernel(const float *block_values, const int *block_indices,
-                                    int num_blocks, float *best_value, int *best_index) {
-    float best = -FLT_MAX;
-    int best_i = 0;
-    for (int i = threadIdx.x; i < num_blocks; i += blockDim.x) {
-        if (block_values[i] > best) { best = block_values[i]; best_i = block_indices[i]; }
-    }
-    extern __shared__ char smem[];
-    float *sval = reinterpret_cast<float *>(smem);
-    int *sidx = reinterpret_cast<int *>(sval + blockDim.x);
-    sval[threadIdx.x] = best;
-    sidx[threadIdx.x] = best_i;
-    __syncthreads();
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (threadIdx.x < s) {
-            if (sval[threadIdx.x + s] > sval[threadIdx.x]) {
-                sval[threadIdx.x] = sval[threadIdx.x + s];
-                sidx[threadIdx.x] = sidx[threadIdx.x + s];
-            }
-        }
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) {
-        *best_value = sval[0];
-        *best_index = sidx[0];
     }
 }
 
@@ -974,16 +896,6 @@ __global__ void moe_accumulate_kernel(const float *expert_out, float weight, flo
 
 // ================= launch 封装 =================
 
-void launch_float_to_bf16(const float *input, uint16_t *output, int n, void *stream) {
-    ScopedGpuTimer timer("float_to_bf16", as_stream(stream));
-    float_to_bf16_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(input, output, n);
-}
-
-void launch_float_to_f16(const float *input, uint16_t *output, int n, void *stream) {
-    ScopedGpuTimer timer("float_to_f16", as_stream(stream));
-    float_to_f16_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(input, output, n);
-}
-
 void launch_add(const float *a, const float *b, float *out, int n, void *stream) {
     ScopedGpuTimer timer("add", as_stream(stream));
     add_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(a, b, out, n);
@@ -1006,26 +918,6 @@ void launch_rms_norm(const float *input, const void *weight, int weight_type, fl
     ScopedGpuTimer timer("rms_norm", as_stream(stream));
     rms_norm_kernel<float><<<rows, kBlock, kBlock * sizeof(float), as_stream(stream)>>>(
         input, weight, weight_type, output, hidden, eps, one_plus, 0);
-}
-
-void launch_rms_norm_to_lowp(const float *input, const void *weight, int weight_type, uint16_t *output,
-                             int rows, int hidden, float eps, bool one_plus,
-                             int lowp_type, void *stream) {
-    ScopedGpuTimer timer("rms_norm_to_lowp", as_stream(stream));
-    rms_norm_kernel<uint16_t><<<rows, kBlock, kBlock * sizeof(float), as_stream(stream)>>>(
-        input, weight, weight_type, output, hidden, eps, one_plus, lowp_type);
-}
-
-void launch_argmax(const float *logits, int vocab,
-                   float *block_values, int *block_indices,
-                   float *best_value, int *best_index, void *stream) {
-    ScopedGpuTimer timer("argmax", as_stream(stream));
-    cudaStream_t s = as_stream(stream);
-    int blocks = grid_for(vocab);
-    if (blocks > 1024) blocks = 1024; // 上限，避免 block_values 过大
-    size_t smem = kBlock * (sizeof(float) + sizeof(int));
-    argmax_block_kernel<<<blocks, kBlock, smem, s>>>(logits, vocab, block_values, block_indices);
-    argmax_final_kernel<<<1, kBlock, smem, s>>>(block_values, block_indices, blocks, best_value, best_index);
 }
 
 // ---- full attention ----
