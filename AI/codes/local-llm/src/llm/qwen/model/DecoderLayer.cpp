@@ -28,25 +28,25 @@ int type_index_of(const TextConfig &config, int layer_index, const std::string &
 }
 } // namespace
 
-DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &config,
+DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &text_config,
                            CudaWeightPool *pool, int layer_index)
-    : config_(config),
+    : text_config_(text_config),
       layer_index_(layer_index),
       is_full_(weights.type == "full_attention"),
-      input_norm_(weights.input_norm, pool, config.rms_norm_eps),
-      post_norm_(weights.post_norm, pool, config.rms_norm_eps),
+      input_norm_(weights.input_norm, pool, text_config.rms_norm_eps),
+      post_norm_(weights.post_norm, pool, text_config.rms_norm_eps),
       mlp_(weights.mlp, pool) {
-    type_index_ = type_index_of(config, layer_index, weights.type);
+    type_index_ = type_index_of(text_config, layer_index, weights.type);
     if (is_full_) {
-        attn_ = std::make_unique<FullAttention>(weights.full, config, pool);
+        attn_ = std::make_unique<FullAttention>(weights.full, text_config, pool);
     } else {
-        attn_ = std::make_unique<LinearAttention>(weights.lin, config, pool);
+        attn_ = std::make_unique<LinearAttention>(weights.lin, text_config, pool);
     }
 }
 
 void DecoderLayer::prefill(float *d_hidden, int tokens, QwenSession &session,
                            QwenForwardScratch &scratch) {
-    const int hidden = config_.hidden_size;
+    const int hidden = text_config_.hidden_size;
     const size_t n = static_cast<size_t>(tokens) * hidden;
 
     float *d_normed = scratch.token_hidden_a.ensure(n, "layer normed");
@@ -75,7 +75,7 @@ void DecoderLayer::prefill(float *d_hidden, int tokens, QwenSession &session,
 
 void DecoderLayer::decode(float *d_hidden, int pos, QwenSession &session,
                           QwenForwardScratch &scratch) {
-    const int hidden = config_.hidden_size;
+    const int hidden = text_config_.hidden_size;
 
     float *d_normed = scratch.token_hidden_a.ensure(hidden, "layer normed");
     float *d_attn = scratch.mixer_buffer.ensure(hidden, "layer attn out");

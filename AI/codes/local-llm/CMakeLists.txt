@@ -48,6 +48,8 @@ add_executable(local_llm main.cpp
         src/llm/qwen/QwenForwardScratch.h
         src/backend/cuda/ops/kernel.cu
         src/backend/cuda/ops/kernel.cuh
+        src/backend/cuda/ops/kernel_internal.cuh
+        src/backend/cuda/ops/launch.cu
         src/backend/cuda/ops/gemm.cpp
         src/backend/cuda/ops/gemm.h
         src/format/gguf/GgufFile.cpp
@@ -161,5 +163,4 @@ if(NOT NVML_LIBRARY)
     message(FATAL_ERROR "未找到 NVML（libnvidia-ml）。可用 -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda 指定，或安装 NVIDIA 驱动")
 endif()
 target_link_libraries(local_llm PRIVATE ${NVML_LIBRARY})
-
 

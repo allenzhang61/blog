@@ -12,10 +12,6 @@
 #include "llm/qwen/QwenForwardScratch.h"
 #include "backend/cuda/common.h"
 
-namespace {
-const TextConfig &text_of(const QwenConfig &config) { return config.data.text; }
-} // namespace
-
 QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens, const SamplingConfig &sampling)
     : config_(model_dir + "/config.json"),
       weights_(model_dir, config_),
@@ -26,10 +22,10 @@ QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens, const 
       final_norm_(weights_.final_norm, &pool_, config_.data.text.rms_norm_eps),
       // tie_word_embeddings=true：LMHead 复用 embed_tokens 权重。
       lm_head_(weights_.embed_tokens, &pool_) {
-    const TextConfig &t = text_of(config_);
+    const TextConfig &text_config = config_.data.text;
     layers_.reserve(weights_.layers.size());
     for (int i = 0; i < static_cast<int>(weights_.layers.size()); ++i) {
-        layers_.emplace_back(weights_.layers[i], t, &pool_, i);
+        layers_.emplace_back(weights_.layers[i], text_config, &pool_, i);
     }
 }
 
@@ -65,8 +61,8 @@ const std::vector<int> &QwenModel::outputs() const {
 }
 
 int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &h_input_ids) {
-    const TextConfig &t = text_of(config_);
-    const int hidden = t.hidden_size;
+    const TextConfig &text_config = config_.data.text;
+    const int hidden = text_config.hidden_size;
     const int tokens = static_cast<int>(h_input_ids.size());
     QwenForwardScratch &scratch = session.forwardScratch;
 
@@ -87,7 +83,7 @@ int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &h_i
 }
 
 int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) {
-    const TextConfig &t = text_of(config_);
+    const TextConfig &t = config_.data.text;
     const int hidden = t.hidden_size;
     QwenForwardScratch &scratch = session.forwardScratch;
 

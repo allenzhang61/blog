@@ -25,7 +25,7 @@ class CudaWeightPool;
 class DecoderLayer : public Module {
 public:
     // layer_index：本层在 32 层中的下标，用于从 QwenSession 取对应 KV/state。
-    DecoderLayer(const LayerWeights &weights, const TextConfig &config, CudaWeightPool *pool,
+    DecoderLayer(const LayerWeights &weights, const TextConfig &text_config, CudaWeightPool *pool,
                  int layer_index);
 
     // prefill：处理整段输入 [tokens, hidden_size]，原位更新隐状态。
@@ -38,7 +38,7 @@ public:
     bool is_full_attention() const { return is_full_; }
 
 private:
-    const TextConfig &config_;
+    const TextConfig &text_config_;
     int layer_index_ = 0;
     // 本层在同类型层中的下标，用于索引 QwenSession 的 fullAttnKVCaches / linearAttnRecurrentStates。
     int type_index_ = 0;
