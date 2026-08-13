@@ -4,6 +4,7 @@
 
 #include "DecoderLayer.h"
 
+#include <cstddef>
 #include <stdexcept>
 
 #include <cuda_runtime.h>
@@ -19,9 +20,9 @@
 
 namespace {
 // 统计 layer_index 之前同类型层的数量，得到本层在同类型序列中的下标。
-int type_index_of(const TextConfig &config, int layer_index, const std::string &type) {
-    int idx = 0;
-    for (int i = 0; i < layer_index; ++i) {
+size_t type_index_of(const TextConfig &config, size_t layer_index, const std::string &type) {
+    size_t idx = 0;
+    for (size_t i = 0; i < layer_index; ++i) {
         if (config.layer_types[i] == type) ++idx;
     }
     return idx;
@@ -29,7 +30,7 @@ int type_index_of(const TextConfig &config, int layer_index, const std::string &
 } // namespace
 
 DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &text_config,
-                           CudaWeightPool *pool, int layer_index)
+                           CudaWeightPool *pool, size_t layer_index)
     : text_config_(text_config),
       layer_index_(layer_index),
       is_full_(weights.type == "full_attention"),
@@ -44,10 +45,10 @@ DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &text_c
     }
 }
 
-void DecoderLayer::prefill(float *d_hidden, int tokens, QwenSession &session,
+void DecoderLayer::prefill(float *d_hidden, size_t tokens, QwenSession &session,
                            QwenForwardScratch &scratch) {
     const int hidden = text_config_.hidden_size;
-    const size_t n = static_cast<size_t>(tokens) * hidden;
+    const size_t n = tokens * static_cast<size_t>(hidden);
 
     float *d_normed = scratch.token_hidden_a.ensure(n, "layer normed");
     float *d_attn = scratch.mixer_buffer.ensure(n, "layer attn out");

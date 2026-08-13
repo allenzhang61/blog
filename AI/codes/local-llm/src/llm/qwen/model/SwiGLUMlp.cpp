@@ -4,6 +4,7 @@
 
 #include "SwiGLUMlp.h"
 
+#include <cstddef>
 #include <stdexcept>
 
 #include <cuda_runtime.h>
@@ -19,7 +20,7 @@
 SwiGLUMlp::SwiGLUMlp(const MlpWeights &weights, CudaWeightPool *pool)
     : weights_(weights), pool_(pool) {}
 
-void SwiGLUMlp::forward(const float *d_in, float *d_out, int rows, int hidden_size,
+void SwiGLUMlp::forward(const float *d_in, float *d_out, size_t rows, int hidden_size,
                         QwenForwardScratch &scratch) {
     CudaWeight *gate = pool_->cached_weight(weights_.gate);
     CudaWeight *up = pool_->cached_weight(weights_.up);
@@ -29,8 +30,8 @@ void SwiGLUMlp::forward(const float *d_in, float *d_out, int rows, int hidden_si
     }
 
     // gate / up：[intermediate, hidden]；down：[hidden, intermediate]。
-    const int intermediate = static_cast<int>(weights_.gate.info->shape[0]);
-    const size_t n = static_cast<size_t>(rows) * intermediate;
+    const int intermediate = static_cast<int>(weights_.gate.shape[0]);
+    const size_t n = rows * static_cast<size_t>(intermediate);
 
     float *d_gate = scratch.gate_buffer.ensure(n, "mlp gate");
     float *d_up = scratch.up_buffer.ensure(n, "mlp up");
@@ -38,8 +39,8 @@ void SwiGLUMlp::forward(const float *d_in, float *d_out, int rows, int hidden_si
 
     // 输入激活转成权重 dtype（BF16/F16）后再投影；gate/up 同 dtype，只需转一次。
     uint16_t *d_in_lowp =
-        scratch.input_lowp_buffer.ensure(static_cast<size_t>(rows) * hidden_size, "mlp in lowp");
-    to_weight_lowp(d_in, d_in_lowp, rows * hidden_size, *gate, nullptr);
+        scratch.input_lowp_buffer.ensure(rows * static_cast<size_t>(hidden_size), "mlp in lowp");
+    to_weight_lowp(d_in, d_in_lowp, rows * static_cast<size_t>(hidden_size), *gate, nullptr);
 
     gemm_weight(pool_->handle, *gate, intermediate, hidden_size, d_in_lowp, gate->type, rows, d_gate, "mlp.gate");
     gemm_weight(pool_->handle, *up, intermediate, hidden_size, d_in_lowp, up->type, rows, d_up, "mlp.up");
@@ -49,7 +50,7 @@ void SwiGLUMlp::forward(const float *d_in, float *d_out, int rows, int hidden_si
 
     // prod 转成 down 权重 dtype 后做 down 投影。
     uint16_t *d_prod_lowp = scratch.prod_lowp_buffer.ensure(n, "mlp prod lowp");
-    to_weight_lowp(d_prod, d_prod_lowp, static_cast<int>(n), *down, nullptr);
+    to_weight_lowp(d_prod, d_prod_lowp, n, *down, nullptr);
 
     // down：[hidden, intermediate] · prod[intermediate, rows] -> [hidden, rows]。
     gemm_weight(pool_->handle, *down, hidden_size, intermediate, d_prod_lowp, down->type, rows, d_out, "mlp.down");

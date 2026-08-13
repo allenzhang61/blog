@@ -58,9 +58,6 @@ public:
 
     std::vector<DeepseekLayerWeights> layers;
 
-private:
-    const TensorView *get(const TensorContainer &tensors, const std::string &name);
-    const TensorView *opt(const TensorContainer &tensors, const std::string &name);
 };
 
 #endif // LOCAL_LLM_DEEPSEEKWEIGHTS_H

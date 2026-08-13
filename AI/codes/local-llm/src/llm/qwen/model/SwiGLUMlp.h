@@ -5,6 +5,8 @@
 #ifndef LOCAL_LLM_SWIGLUMLP_H
 #define LOCAL_LLM_SWIGLUMLP_H
 
+#include <cstddef>
+
 #include "Module.h"
 
 struct MlpWeights;
@@ -22,7 +24,7 @@ public:
 
     // 对 rows 行隐状态做 MLP（prefill 时 rows=tokens，decode 时 rows=1）。
     // d_in / d_out：[rows, hidden_size]，允许原位。
-    void forward(const float *d_in, float *d_out, int rows, int hidden_size,
+    void forward(const float *d_in, float *d_out, size_t rows, int hidden_size,
                  QwenForwardScratch &scratch);
 
 private:

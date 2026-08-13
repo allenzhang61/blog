@@ -4,6 +4,7 @@
 
 #include "FullAttention.h"
 
+#include <cstddef>
 #include <stdexcept>
 
 #include <cuda_runtime.h>
@@ -22,7 +23,7 @@ FullAttention::FullAttention(const FullAttnWeights &weights, const TextConfig &c
                              CudaWeightPool *pool)
     : weights_(weights), config_(config), pool_(pool) {}
 
-void FullAttention::prefill(const float *d_hidden, float *d_out, int tokens,
+void FullAttention::prefill(const float *d_hidden, float *d_out, size_t tokens,
                             FullAttnKVCache &kv, QwenForwardScratch &scratch) {
     const int n_heads = config_.num_attention_heads;
     const int kv_heads = config_.num_key_value_heads;
@@ -34,6 +35,7 @@ void FullAttention::prefill(const float *d_hidden, float *d_out, int tokens,
     const float theta = config_.rope_parameters.rope_theta;
     const float partial = config_.rope_parameters.partial_rotary_factor;
     const int start_pos = kv.seq_len;
+    const int token_count = static_cast<int>(tokens);
 
     CudaWeight *q_proj = pool_->cached_weight(weights_.q_proj);
     CudaWeight *k_proj = pool_->cached_weight(weights_.k_proj);
@@ -46,17 +48,17 @@ void FullAttention::prefill(const float *d_hidden, float *d_out, int tokens,
     }
 
     // q_proj 输出 q_total*2（每 head 交错 [q, gate]）；k/v_proj 输出 kv_total。
-    float *d_qgate = scratch.full_projection.ensure(static_cast<size_t>(tokens) * q_total * 2, "full qgate");
-    float *d_k = scratch.full_k.ensure(static_cast<size_t>(tokens) * kv_total, "full k");
-    float *d_v = scratch.full_v.ensure(static_cast<size_t>(tokens) * kv_total, "full v");
-    float *d_q = scratch.full_q.ensure(static_cast<size_t>(tokens) * q_total, "full q");
-    float *d_g = scratch.full_gate.ensure(static_cast<size_t>(tokens) * q_total, "full gate");
-    float *d_attn = scratch.full_attn.ensure(static_cast<size_t>(tokens) * q_total, "full attn");
+    float *d_qgate = scratch.full_projection.ensure(tokens * static_cast<size_t>(q_total) * 2, "full qgate");
+    float *d_k = scratch.full_k.ensure(tokens * static_cast<size_t>(kv_total), "full k");
+    float *d_v = scratch.full_v.ensure(tokens * static_cast<size_t>(kv_total), "full v");
+    float *d_q = scratch.full_q.ensure(tokens * static_cast<size_t>(q_total), "full q");
+    float *d_g = scratch.full_gate.ensure(tokens * static_cast<size_t>(q_total), "full gate");
+    float *d_attn = scratch.full_attn.ensure(tokens * static_cast<size_t>(q_total), "full attn");
 
     // 输入激活转成权重 dtype（BF16/F16）后再投影。
     uint16_t *d_in_lowp =
-        scratch.input_lowp_buffer.ensure(static_cast<size_t>(tokens) * hidden, "full in lowp");
-    to_weight_lowp(d_hidden, d_in_lowp, tokens * hidden, *q_proj, nullptr);
+        scratch.input_lowp_buffer.ensure(tokens * static_cast<size_t>(hidden), "full in lowp");
+    to_weight_lowp(d_hidden, d_in_lowp, tokens * static_cast<size_t>(hidden), *q_proj, nullptr);
 
     gemm_weight(pool_->handle, *q_proj, q_total * 2, hidden, d_in_lowp, q_proj->type, tokens, d_qgate, "fullattn.q_proj");
     gemm_weight(pool_->handle, *k_proj, kv_total, hidden, d_in_lowp, k_proj->type, tokens, d_k, "fullattn.k_proj");
@@ -66,21 +68,21 @@ void FullAttention::prefill(const float *d_hidden, float *d_out, int tokens,
     float *value_cache = static_cast<float *>(kv.value_cache.ptr);
 
     launch_full_attention_q_batch(d_qgate, static_cast<const uint16_t *>(q_norm->ptr), d_q, d_g,
-                                  tokens, n_heads, head_dim, start_pos, theta, partial, eps, nullptr);
+                                  token_count, n_heads, head_dim, start_pos, theta, partial, eps, nullptr);
     launch_full_attention_kv_batch(d_k, d_v, static_cast<const uint16_t *>(k_norm->ptr),
-                                   key_cache, value_cache, tokens, kv_heads, head_dim,
+                                   key_cache, value_cache, token_count, kv_heads, head_dim,
                                    /*max_seq_len=*/0, start_pos, theta, partial, eps, nullptr);
-    launch_full_attention_attend_batch(d_q, d_g, key_cache, value_cache, d_attn, tokens, n_heads,
+    launch_full_attention_attend_batch(d_q, d_g, key_cache, value_cache, d_attn, token_count, n_heads,
                                        kv_heads, head_dim, /*max_seq_len=*/0, start_pos, nullptr);
 
     // attn 转成 o_proj 权重 dtype 后做输出投影。
     uint16_t *d_attn_lowp =
-        scratch.full_attn_lowp.ensure(static_cast<size_t>(tokens) * q_total, "full attn lowp");
-    to_weight_lowp(d_attn, d_attn_lowp, tokens * q_total, *o_proj, nullptr);
+        scratch.full_attn_lowp.ensure(tokens * static_cast<size_t>(q_total), "full attn lowp");
+    to_weight_lowp(d_attn, d_attn_lowp, tokens * static_cast<size_t>(q_total), *o_proj, nullptr);
     // o_proj：[hidden, q_total] · attn[q_total, tokens] -> [hidden, tokens]。
     gemm_weight(pool_->handle, *o_proj, hidden, q_total, d_attn_lowp, o_proj->type, tokens, d_out, "fullattn.o_proj");
 
-    kv.seq_len += tokens;
+    kv.seq_len += token_count;
     check_cuda(cudaDeviceSynchronize(), "FullAttention prefill 同步失败");
 }
 

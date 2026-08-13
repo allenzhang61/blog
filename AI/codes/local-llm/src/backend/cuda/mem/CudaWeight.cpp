@@ -4,6 +4,8 @@
 
 #include "CudaWeight.h"
 
+#include <cstddef>
+
 #include "../common.h"
 
 CudaWeight::CudaWeight(size_t bytes, cudaDataType_t type, bool zero, const std::string &what)

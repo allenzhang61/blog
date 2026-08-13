@@ -7,6 +7,8 @@
 #include "utils/log/Log.h"
 
 #include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
@@ -208,7 +210,7 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     }
 
     // 对齐：general.alignment（默认 32）。
-    if (metadata_.count("general.alignment")) {
+    if (metadata_.contains("general.alignment")) {
         alignment_ = static_cast<uint32_t>(metadata_i64("general.alignment"));
         if (alignment_ == 0) {
             alignment_ = 32;
@@ -219,7 +221,7 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     tensors_.reserve(tensor_count);
     for (uint64_t i = 0; i < tensor_count; ++i) {
         GgufTensorInfo info;
-        info.name = read_string(c);
+        info.view.name = read_string(c);
         const uint32_t n_dims = read_u32(c);
         info.dims.resize(n_dims);
         for (uint32_t d = 0; d < n_dims; ++d) {
@@ -243,12 +245,14 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     // 回填每个张量的数据指针与字节数，并建立名称索引。
     for (size_t i = 0; i < tensors_.size(); ++i) {
         GgufTensorInfo &t = tensors_[i];
-        t.nbytes = type_nbytes(t.type, t.num_elements());
-        t.data = data_base + t.offset;
-        if (t.data + t.nbytes > data_ + size_) {
-            throw std::runtime_error("张量数据越界: " + t.name);
+        t.view.shape.assign(t.dims.rbegin(), t.dims.rend());
+        t.view.dtype = gguf_type_to_dtype(t.type);
+        t.view.nbytes = type_nbytes(t.type, t.num_elements());
+        t.view.data = data_base + t.offset;
+        if (t.view.data + t.view.nbytes > data_ + size_) {
+            throw std::runtime_error("张量数据越界: " + t.view.name);
         }
-        tensor_index_[t.name] = i;
+        tensor_index_[t.view.name] = i;
     }
 }
 
@@ -369,7 +373,7 @@ size_t GgufFile::type_nbytes(GgmlType type, int64_t num_elements) {
 }
 
 bool GgufFile::has_metadata(const std::string &key) const {
-    return metadata_.count(key) > 0;
+    return metadata_.contains(key);
 }
 
 const GgufValue &GgufFile::metadata(const std::string &key) const {
@@ -396,8 +400,8 @@ bool GgufFile::metadata_bool(const std::string &key) const {
     return metadata(key).boolean;
 }
 
-bool GgufFile::has_tensor(const std::string &name) const {
-    return tensor_index_.count(name) > 0;
+bool GgufFile::contains(const std::string &name) const {
+    return tensor_index_.contains(name);
 }
 
 const GgufTensorInfo &GgufFile::tensor_info(const std::string &name) const {
@@ -429,28 +433,15 @@ DType GgufFile::gguf_type_to_dtype(GgmlType t) {
     }
 }
 
-const TensorView &GgufFile::tensor(const std::string &name) const {
-    auto cached = view_cache_.find(name);
-    if (cached != view_cache_.end()) {
-        return cached->second;
-    }
-    const GgufTensorInfo &info = tensor_info(name);
-    TensorView view;
-    view.name = info.name;
-    // GGUF dims 以最内连续维在前；统一约定 shape 为行主序 [out, in]，故反转。
-    view.shape.assign(info.dims.rbegin(), info.dims.rend());
-    view.dtype = gguf_type_to_dtype(info.type);
-    view.data = info.data;
-    view.nbytes = info.nbytes;
-    auto [it, _] = view_cache_.emplace(name, std::move(view));
-    return it->second;
+const TensorView &GgufFile::get(const std::string &name) const {
+    return tensor_info(name).view;
 }
 
-std::vector<std::string> GgufFile::tensor_names() const {
+std::vector<std::string> GgufFile::names() const {
     std::vector<std::string> names;
     names.reserve(tensors_.size());
     for (const GgufTensorInfo &t : tensors_) {
-        names.push_back(t.name);
+        names.push_back(t.view.name);
     }
     return names;
 }
@@ -482,9 +473,9 @@ void GgufFile::DebugDump() const {
     Log::debug("  === tensors (" + std::to_string(tensors_.size()) + ") ===");
     for (const auto &t : tensors_) {
         std::ostringstream os;
-        os << "    " << t.name << "  dims=" << dims_to_string(t.dims)
+        os << "    " << t.view.name << "  dims=" << dims_to_string(t.dims)
            << " type=" << ggml_type_name(t.type) << " offset=" << t.offset
-           << " nbytes=" << t.nbytes;
+           << " nbytes=" << t.view.nbytes;
         Log::debug(os.str());
     }
 }

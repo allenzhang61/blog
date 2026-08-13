@@ -4,6 +4,7 @@
 
 #include "RMSNorm.h"
 
+#include <cstddef>
 #include <stdexcept>
 
 #include "llm/qwen/QwenWeights.h"
@@ -24,12 +25,12 @@ int weight_type_of(DType dtype) {
 RMSNorm::RMSNorm(const WeightData &weight, CudaWeightPool *pool, float eps, bool one_plus)
     : weight_(weight), pool_(pool), eps_(eps), one_plus_(one_plus) {}
 
-void RMSNorm::forward(const float *d_in, float *d_out, int rows, int hidden_size) {
+void RMSNorm::forward(const float *d_in, float *d_out, size_t rows, int hidden_size) {
     CudaWeight *w = pool_->cached_weight(weight_);
     if (!w) {
-        throw std::runtime_error("RMSNorm 权重上传失败：" + weight_.info->name);
+        throw std::runtime_error("RMSNorm 权重上传失败：" + weight_.name);
     }
-    const int wtype = weight_type_of(weight_.info->dtype);
-    launch_rms_norm(d_in, w->ptr, wtype, d_out, rows, hidden_size, eps_,
+    const int wtype = weight_type_of(weight_.dtype);
+    launch_rms_norm(d_in, w->ptr, wtype, d_out, static_cast<int>(rows), hidden_size, eps_,
                     /*one_plus=*/one_plus_, /*stream=*/nullptr);
 }

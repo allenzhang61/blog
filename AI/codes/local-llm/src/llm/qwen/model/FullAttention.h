@@ -5,6 +5,8 @@
 #ifndef LOCAL_LLM_FULLATTENTION_H
 #define LOCAL_LLM_FULLATTENTION_H
 
+#include <cstddef>
+
 #include "Module.h"
 
 struct FullAttnWeights;
@@ -25,7 +27,7 @@ public:
 
     // prefill：一次处理 tokens 个位置，写满 KV cache 并算出注意力输出。
     // d_hidden：输入隐状态 [tokens, hidden_size]；d_out：注意力输出 [tokens, hidden_size]。
-    void prefill(const float *d_hidden, float *d_out, int tokens,
+    void prefill(const float *d_hidden, float *d_out, size_t tokens,
                  FullAttnKVCache &kv, QwenForwardScratch &scratch);
 
     // decode：处理位置 pos 的单个 token，追加写入 KV cache 并算出注意力输出。

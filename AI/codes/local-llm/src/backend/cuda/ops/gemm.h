@@ -6,6 +6,7 @@
 #define LOCAL_LLM_GEMM_H
 
 #include <cstdint>
+#include <cstddef>
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -23,7 +24,7 @@ class CudaWeight;
 // 得到 Y[out_dim,tokens]。计算精度固定 CUBLAS_COMPUTE_32F，输出恒为 CUDA_R_32F。
 //
 // 维度需显式传入：CudaWeight 只记录字节数与 dtype，不含 shape，
-// 调用方从 WeightData.info->shape 取 out_dim / in_dim。
+// 调用方从 WeightData.shape 取 out_dim / in_dim。
 // x_type 指明激活数据类型（CUDA_R_32F 或 CUDA_R_16BF / CUDA_R_16F）；
 // 权重类型取自 weight.type。
 
@@ -34,7 +35,7 @@ class CudaWeight;
 // 传空串（默认）则不埋点、零开销。
 void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
                  int out_dim, int in_dim,
-                 const void *d_x, cudaDataType_t x_type, int tokens, float *d_y,
+                 const void *d_x, cudaDataType_t x_type, size_t tokens, float *d_y,
                  const char *name = "");
 
 // 把 float 激活转成权重 dtype（BF16/F16）写入 d_x_lowp，供后续 gemm_weight 使用。
@@ -42,7 +43,7 @@ void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
 // 共享同一输入的多次投影（如 q/k/v、gate/up）只需调用一次，再多次 gemm_weight，避免重复转换。
 //   d_x      : float 激活，元素数 n；
 //   d_x_lowp : 低精度输出 buffer（元素数 >= n，通常取自 scratch）。
-void to_weight_lowp(const float *d_x, uint16_t *d_x_lowp, int n,
+void to_weight_lowp(const float *d_x, uint16_t *d_x_lowp, size_t n,
                     const CudaWeight &weight, void *stream);
 
 #endif // LOCAL_LLM_GEMM_H

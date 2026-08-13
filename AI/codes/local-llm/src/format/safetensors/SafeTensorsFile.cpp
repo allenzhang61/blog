@@ -4,12 +4,14 @@
 
 #include "SafeTensorsFile.h"
 
+#include "thirdparty/nlohmann/json.hpp"
 #include "utils/log/Log.h"
 
 #include <algorithm>
 #include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
-#include <regex>
 #include <sstream>
 #include <stdexcept>
 
@@ -22,9 +24,9 @@ namespace fs = std::filesystem;
 
 SafeTensorsFile::SafeTensorsFile(const std::string &model_dir) {
     const fs::path dir(model_dir);
-    for (const fs::path &shard_path : find_shards(dir)) {
-        open_shard(shard_path);
-        parse_shard_header(shards_.size() - 1);
+    for (const fs::path &shard_path: find_shards(dir)) {
+        const size_t shard_index = open_shard(shard_path);
+        parse_shard_header(shard_index);
     }
 }
 
@@ -33,7 +35,7 @@ SafeTensorsFile::~SafeTensorsFile() {
 }
 
 void SafeTensorsFile::close() {
-    for (MappedShard &shard : shards_) {
+    for (MappedShard &shard: shards_) {
         if (shard.data != nullptr && shard.size > 0) {
             munmap(const_cast<uint8_t *>(shard.data), shard.size);
         }
@@ -47,7 +49,8 @@ void SafeTensorsFile::close() {
     shards_.clear();
 }
 
-void SafeTensorsFile::open_shard(const fs::path &path) {
+// 将 safetensors文件以 mmap的方式记录到shards_数组中
+size_t SafeTensorsFile::open_shard(const fs::path &path) {
     MappedShard shard;
     shard.path = path;
     shard.fd = ::open(path.c_str(), O_RDONLY);
@@ -55,7 +58,7 @@ void SafeTensorsFile::open_shard(const fs::path &path) {
         throw std::runtime_error("open 失败：" + path.string() + "，" + std::strerror(errno));
     }
 
-    struct stat st {};
+    struct stat st{};
     if (fstat(shard.fd, &st) != 0) {
         ::close(shard.fd);
         throw std::runtime_error("fstat 失败：" + path.string() + "，" + std::strerror(errno));
@@ -73,6 +76,7 @@ void SafeTensorsFile::open_shard(const fs::path &path) {
     }
     shard.data = static_cast<const uint8_t *>(ptr);
     shards_.push_back(shard);
+    return shards_.size() - 1;
 }
 
 uint64_t SafeTensorsFile::read_u64_le(const uint8_t *data) {
@@ -83,61 +87,63 @@ uint64_t SafeTensorsFile::read_u64_le(const uint8_t *data) {
     return value;
 }
 
-std::vector<int64_t> SafeTensorsFile::parse_i64_array(const std::string &text) {
-    std::vector<int64_t> values;
-    const std::regex number("-?[0-9]+");
-    for (auto it = std::sregex_iterator(text.begin(), text.end(), number); it != std::sregex_iterator(); ++it) {
-        values.push_back(std::stoll((*it).str()));
-    }
-    return values;
-}
-
 DType SafeTensorsFile::dtype_from_string(const std::string &s) {
+    //todo 待支持其他类型，低优
     if (s == "F32") return DType::F32;
     if (s == "F16") return DType::F16;
     if (s == "BF16") return DType::BF16;
     throw std::runtime_error("safetensors 不支持的 dtype: " + s);
 }
 
+//解析safetensors文件中的 header 信息到 infos_ 数组中
 void SafeTensorsFile::parse_shard_header(size_t shard_index) {
     const MappedShard &shard = shards_[shard_index];
     const uint64_t header_len = read_u64_le(shard.data);
-    if (8 + header_len > shard.size) {
+    if (header_len > shard.size - 8) {//8代表 u64 解析出的前 8 个字节
         throw std::runtime_error("safetensors header 长度异常：" + shard.path.string());
     }
 
     const std::string header(reinterpret_cast<const char *>(shard.data + 8), static_cast<size_t>(header_len));
     const size_t data_base = 8 + static_cast<size_t>(header_len);
-    const std::regex tensor_pattern(
-        R"REGEX("([^"]+)"\s*:\s*\{\s*"dtype"\s*:\s*"([^"]+)"\s*,\s*"shape"\s*:\s*\[([^\]]*)\]\s*,\s*"data_offsets"\s*:\s*\[\s*([0-9]+)\s*,\s*([0-9]+)\s*\])REGEX");
 
-    for (auto it = std::sregex_iterator(header.begin(), header.end(), tensor_pattern);
-         it != std::sregex_iterator();
-         ++it) {
-        const std::string name = (*it)[1].str();
-        const std::string dtype = (*it)[2].str();
-        const std::vector<int64_t> shape = parse_i64_array((*it)[3].str());
-        const size_t data_begin = data_base + static_cast<size_t>(std::stoull((*it)[4].str()));
-        const size_t data_end = data_base + static_cast<size_t>(std::stoull((*it)[5].str()));
+    nlohmann::json root;
+    try {
+        root = nlohmann::json::parse(header);
+    } catch (const nlohmann::json::exception &e) {
+        throw std::runtime_error("safetensors header JSON 解析失败：" + shard.path.string() + "，" + e.what());
+    }
+
+    for (const auto &[name, tensor_json] : root.items()) {
+        if (name == "__metadata__") {
+            continue;
+        }
+
+        const std::string dtype = tensor_json.at("dtype").get<std::string>();
+        const std::vector<int64_t> shape = tensor_json.at("shape").get<std::vector<int64_t>>();
+        const std::vector<size_t> offsets = tensor_json.at("data_offsets").get<std::vector<size_t>>();
+        if (offsets.size() != 2) {
+            throw std::runtime_error("tensor data_offsets 数量异常：" + name);
+        }
+
+        const size_t data_begin = data_base + offsets[0];
+        const size_t data_end = data_base + offsets[1];
         if (data_begin > data_end || data_end > shard.size) {
             throw std::runtime_error("tensor data_offsets 越界：" + name);
         }
-        // 提前校验 dtype 合法（未支持类型此处抛异常）。
-        (void) dtype_from_string(dtype);
-
-        SafeTensorInfo info;
-        info.name = name;
-        info.dtype = dtype;
-        info.shape = shape;
-        info.data = shard.data + data_begin;
-        info.nbytes = data_end - data_begin;
-        infos_.emplace(name, std::move(info));
+        TensorView view;
+        view.name = name;
+        view.shape = shape; // safetensors 本就是行主序 [out, in]
+        view.dtype = dtype_from_string(dtype);
+        view.data = shard.data + data_begin;
+        view.nbytes = data_end - data_begin;
+        views_.emplace(name, std::move(view));
     }
 }
 
+// 找到所有的*.safetensors文件，并根据文件名排序
 std::vector<fs::path> SafeTensorsFile::find_shards(const fs::path &model_dir) {
     std::vector<fs::path> found;
-    for (const auto &entry : fs::directory_iterator(model_dir)) {
+    for (const auto &entry: fs::directory_iterator(model_dir)) {
         if (entry.is_regular_file() && entry.path().extension() == ".safetensors") {
             found.push_back(entry.path());
         }
@@ -160,38 +166,22 @@ std::string SafeTensorsFile::shape_to_string(const std::vector<int64_t> &shape) 
     return out.str();
 }
 
-bool SafeTensorsFile::has_tensor(const std::string &name) const {
-    return infos_.count(name) > 0;
+bool SafeTensorsFile::contains(const std::string &name) const {
+    return views_.contains(name);
 }
 
-const SafeTensorInfo &SafeTensorsFile::info(const std::string &name) const {
-    auto it = infos_.find(name);
-    if (it == infos_.end()) {
+const TensorView &SafeTensorsFile::get(const std::string &name) const {
+    auto it = views_.find(name);
+    if (it == views_.end()) {
         throw std::runtime_error("safetensors 缺少张量：" + name);
     }
     return it->second;
 }
 
-const TensorView &SafeTensorsFile::tensor(const std::string &name) const {
-    auto cached = view_cache_.find(name);
-    if (cached != view_cache_.end()) {
-        return cached->second;
-    }
-    const SafeTensorInfo &st = info(name);
-    TensorView view;
-    view.name = st.name;
-    view.shape = st.shape; // safetensors 本就是行主序 [out, in]
-    view.dtype = dtype_from_string(st.dtype);
-    view.data = st.data;
-    view.nbytes = st.nbytes;
-    auto [it, _] = view_cache_.emplace(name, std::move(view));
-    return it->second;
-}
-
-std::vector<std::string> SafeTensorsFile::tensor_names() const {
+std::vector<std::string> SafeTensorsFile::names() const {
     std::vector<std::string> names;
-    names.reserve(infos_.size());
-    for (const auto &[name, _] : infos_) {
+    names.reserve(views_.size());
+    for (const auto &[name, _]: views_) {
         names.push_back(name);
     }
     return names;
@@ -200,16 +190,16 @@ std::vector<std::string> SafeTensorsFile::tensor_names() const {
 void SafeTensorsFile::DebugDump() const {
     std::ostringstream out;
     out << "SafeTensorsFile:\n";
-    out << "  shards=" << shards_.size() << " tensors=" << infos_.size() << "\n";
-    for (const MappedShard &shard : shards_) {
+    out << "  shards=" << shards_.size() << " tensors=" << views_.size() << "\n";
+    for (const MappedShard &shard: shards_) {
         out << "  shard=" << shard.path.filename().string() << " bytes=" << shard.size << "\n";
     }
-    out << "  === tensors (" << infos_.size() << ") ===\n";
-    for (const auto &[name, st] : infos_) {
+    out << "  === tensors (" << views_.size() << ") ===\n";
+    for (const auto &[name, view]: views_) {
         out << "  " << name
-            << " dtype=" << st.dtype
-            << " shape=" << shape_to_string(st.shape)
-            << " nbytes=" << st.nbytes << "\n";
+                << " dtype=" << dtype_name(view.dtype)
+                << " shape=" << shape_to_string(view.shape)
+                << " nbytes=" << view.nbytes << "\n";
     }
     Log::debug(out.str());
 }

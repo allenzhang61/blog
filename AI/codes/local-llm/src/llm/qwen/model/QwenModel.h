@@ -15,6 +15,7 @@
 #include "RMSNorm.h"
 #include "LMHead.h"
 
+#include "format/safetensors/SafeTensorsFile.h"
 #include "llm/BaseModel.h"
 #include "llm/qwen/QwenConfig.h"
 #include "llm/qwen/QwenWeights.h"
@@ -47,7 +48,7 @@ public:
     std::string decode_text(const std::vector<int> &ids) const override { return tokenizer_.Decode(ids); }
 
     // prefill：为一次新生成开启内部 session（喂入整段 prompt），跑完各层，返回首个生成 token id。
-    int prefill(const std::vector<int> &input_ids) override;
+    int prefill(const std::vector<int> &inputs) override;
     // decode：喂入上一个 token（位置 pos），返回下一个 token id，复用 prefill 建立的 session。
     int decode(int prev_token_id, int pos) override;
 
@@ -61,11 +62,12 @@ public:
 
 private:
     // 内部前向：喂入整段 prompt token，跑完各层，返回首个生成 token id。
-    int prefill_session(QwenSession &session, const std::vector<int> &h_input_ids);
+    int prefill_session(QwenSession &session, const std::vector<int> &inputs);
     // 内部前向：喂入上一个 token（位置 pos），跑完各层，返回下一个 token id。
     int decode_session(QwenSession &session, int prev_token_id, int pos);
 
     QwenConfig config_;
+    SafeTensorsFile tensors_;
     QwenWeights weights_;
     QwenTokenizer tokenizer_;
     CudaWeightPool pool_;

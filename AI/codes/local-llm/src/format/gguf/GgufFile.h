@@ -77,17 +77,12 @@ struct GgufValue {
 
 // 单个张量在 GGUF 文件中的信息。
 struct GgufTensorInfo {
-    std::string name;
+    TensorView view;
     // 维度（ggml 约定：dims[0] 为最内层/连续维）。二维权重通常为 [in_dim, out_dim]。
     std::vector<int64_t> dims;
     GgmlType type = GgmlType::F32;
     // 张量数据相对“数据段起始”的偏移（已按 alignment 对齐）。
     uint64_t offset = 0;
-
-    // 指向 mmap 内的张量数据起始地址（= data_base + offset），解析后填充。
-    const uint8_t *data = nullptr;
-    // 该张量数据的字节数（按量化类型与元素数计算）。
-    size_t nbytes = 0;
 
     // 元素总数（各维乘积）。
     int64_t num_elements() const;
@@ -115,15 +110,15 @@ public:
 
     // === GGUF 原生张量访问（保留既有 API，DeepSeek 加载路径使用）===
     // 是否存在某张量（同时满足 TensorContainer 接口）。
-    bool has_tensor(const std::string &name) const override;
+    bool contains(const std::string &name) const override;
     // 按名返回 GGUF 原生张量信息（含量化类型、offset 等）；不存在时抛异常。
     const GgufTensorInfo &tensor_info(const std::string &name) const;
     // 全部张量（保持文件中出现顺序）。
     const std::vector<GgufTensorInfo> &tensors() const { return tensors_; }
 
     // === TensorContainer 接口 ===
-    const TensorView &tensor(const std::string &name) const override;
-    std::vector<std::string> tensor_names() const override;
+    const TensorView &get(const std::string &name) const override;
+    std::vector<std::string> names() const override;
 
     // 打印基础信息（版本、张量数、元数据数、对齐、部分关键 KV）。
     void DebugDump() const override;
@@ -141,9 +136,6 @@ private:
     std::map<std::string, GgufValue> metadata_;
     std::vector<GgufTensorInfo> tensors_;
     std::map<std::string, size_t> tensor_index_; // name -> tensors_ 下标
-
-    // TensorContainer::tensor() 需返回引用，这里惰性缓存由 GgufTensorInfo 适配出的 TensorView。
-    mutable std::map<std::string, TensorView> view_cache_;
 
     // GGUF 量化类型 -> 统一 DType。
     static DType gguf_type_to_dtype(GgmlType t);

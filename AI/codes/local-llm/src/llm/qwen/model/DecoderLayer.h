@@ -5,6 +5,7 @@
 #ifndef LOCAL_LLM_DECODERLAYER_H
 #define LOCAL_LLM_DECODERLAYER_H
 
+#include <cstddef>
 #include <memory>
 
 #include "Module.h"
@@ -26,10 +27,10 @@ class DecoderLayer : public Module {
 public:
     // layer_index：本层在 32 层中的下标，用于从 QwenSession 取对应 KV/state。
     DecoderLayer(const LayerWeights &weights, const TextConfig &text_config, CudaWeightPool *pool,
-                 int layer_index);
+                 size_t layer_index);
 
     // prefill：处理整段输入 [tokens, hidden_size]，原位更新隐状态。
-    void prefill(float *d_hidden, int tokens, QwenSession &session, QwenForwardScratch &scratch);
+    void prefill(float *d_hidden, size_t tokens, QwenSession &session, QwenForwardScratch &scratch);
 
     // decode：处理位置 pos 的单个 token [1, hidden_size]，原位更新隐状态。
     void decode(float *d_hidden, int pos, QwenSession &session, QwenForwardScratch &scratch);
@@ -39,9 +40,9 @@ public:
 
 private:
     const TextConfig &text_config_;
-    int layer_index_ = 0;
+    size_t layer_index_ = 0;
     // 本层在同类型层中的下标，用于索引 QwenSession 的 fullAttnKVCaches / linearAttnRecurrentStates。
-    int type_index_ = 0;
+    size_t type_index_ = 0;
     bool is_full_ = false;
 
     RMSNorm input_norm_;

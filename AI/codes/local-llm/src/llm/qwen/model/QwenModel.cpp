@@ -4,6 +4,7 @@
 
 #include "QwenModel.h"
 
+#include <cstddef>
 #include <stdexcept>
 
 #include <cuda_runtime.h>
@@ -14,7 +15,8 @@
 
 QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens, const SamplingConfig &sampling)
     : config_(model_dir + "/config.json"),
-      weights_(model_dir, config_),
+      tensors_(model_dir),
+      weights_(tensors_, config_),
       tokenizer_(model_dir + "/tokenizer.json"),
       max_output_tokens_(max_output_tokens),
       sampler_(sampling),
@@ -24,7 +26,7 @@ QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens, const 
       lm_head_(weights_.embed_tokens, &pool_) {
     const TextConfig &text_config = config_.data.text;
     layers_.reserve(weights_.layers.size());
-    for (int i = 0; i < static_cast<int>(weights_.layers.size()); ++i) {
+    for (size_t i = 0; i < weights_.layers.size(); ++i) {
         layers_.emplace_back(weights_.layers[i], text_config, &pool_, i);
     }
 }
@@ -32,10 +34,10 @@ QwenModel::QwenModel(const std::string &model_dir, int max_output_tokens, const 
 // 在 QwenSession 完整定义可见处生成析构，供 unique_ptr<QwenSession> 正确销毁。
 QwenModel::~QwenModel() = default;
 
-int QwenModel::prefill(const std::vector<int> &input_ids) {
+int QwenModel::prefill(const std::vector<int> &inputs) {
     // 为一次新生成重建 session（丢弃上一次请求的 KV cache / recurrent state）。
-    session_ = std::make_unique<QwenSession>(config_, input_ids, max_output_tokens_);
-    return prefill_session(*session_, input_ids);
+    session_ = std::make_unique<QwenSession>(config_, inputs, max_output_tokens_);
+    return prefill_session(*session_, inputs);
 }
 
 int QwenModel::decode(int prev_token_id, int pos) {
@@ -53,49 +55,49 @@ const MemoryUsageProvider &QwenModel::memory_usage() const {
 }
 
 void QwenModel::append_output(int token_id) {
-    session_->h_outputs.push_back(token_id);
+    session_->outputs.push_back(token_id);
 }
 
 const std::vector<int> &QwenModel::outputs() const {
-    return session_->h_outputs;
+    return session_->outputs;
 }
 
-int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &h_input_ids) {
+int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &inputs) {
     const TextConfig &text_config = config_.data.text;
-    const int hidden = text_config.hidden_size;
-    const int tokens = static_cast<int>(h_input_ids.size());
+    const int hidden_size = text_config.hidden_size;
+    const size_t input_size = inputs.size();
     QwenForwardScratch &scratch = session.forwardScratch;
 
     // 隐状态 buffer [tokens, hidden]，逐层原位更新。
-    float *d_hidden = scratch.layer_out_buffer.ensure(static_cast<size_t>(tokens) * hidden, "prefill hidden");
-    embed_tokens_.forward(h_input_ids, d_hidden, hidden);
+    float *d_hidden = scratch.layer_out_buffer.ensure(input_size * static_cast<size_t>(hidden_size), "prefill hidden");
+    embed_tokens_.forward(inputs, d_hidden, hidden_size, scratch);
 
     for (DecoderLayer &layer : layers_) {
-        layer.prefill(d_hidden, tokens, session, scratch);
+        layer.prefill(d_hidden, input_size, session, scratch);
     }
 
     // final_norm 仅作用于最后一个 token（下一步预测只需末位隐状态）。
-    float *d_last = d_hidden + static_cast<size_t>(tokens - 1) * hidden;
-    float *d_normed = scratch.token_hidden_a.ensure(hidden, "prefill final normed");
-    final_norm_.forward(d_last, d_normed, 1, hidden);
+    float *d_last = d_hidden + (input_size - 1) * static_cast<size_t>(hidden_size);
+    float *d_normed = scratch.token_hidden_a.ensure(hidden_size, "prefill final normed");
+    final_norm_.forward(d_last, d_normed, 1, hidden_size);
 
-    return lm_head_.forward(d_normed, hidden, scratch, sampler_, session.h_outputs);
+    return lm_head_.forward(d_normed, hidden_size, scratch, sampler_, session.outputs);
 }
 
 int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) {
-    const TextConfig &t = config_.data.text;
-    const int hidden = t.hidden_size;
+    const TextConfig &text_config = config_.data.text;
+    const int hidden_size = text_config.hidden_size;
     QwenForwardScratch &scratch = session.forwardScratch;
 
-    float *d_hidden = scratch.layer_out_buffer.ensure(hidden, "decode hidden");
-    embed_tokens_.forward(std::vector<int>{prev_token_id}, d_hidden, hidden);
+    float *d_hidden = scratch.layer_out_buffer.ensure(hidden_size, "decode hidden");
+    embed_tokens_.forward(std::vector<int>{prev_token_id}, d_hidden, hidden_size, scratch);
 
     for (DecoderLayer &layer : layers_) {
         layer.decode(d_hidden, pos, session, scratch);
     }
 
-    float *d_normed = scratch.token_hidden_a.ensure(hidden, "decode final normed");
-    final_norm_.forward(d_hidden, d_normed, 1, hidden);
+    float *d_normed = scratch.token_hidden_a.ensure(hidden_size, "decode final normed");
+    final_norm_.forward(d_hidden, d_normed, 1, hidden_size);
 
-    return lm_head_.forward(d_normed, hidden, scratch, sampler_, session.h_outputs);
+    return lm_head_.forward(d_normed, hidden_size, scratch, sampler_, session.outputs);
 }

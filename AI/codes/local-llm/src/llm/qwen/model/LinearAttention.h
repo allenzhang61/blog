@@ -5,6 +5,8 @@
 #ifndef LOCAL_LLM_LINEARATTENTION_H
 #define LOCAL_LLM_LINEARATTENTION_H
 
+#include <cstddef>
+
 #include "Module.h"
 
 struct LinearAttnWeights;
@@ -27,7 +29,7 @@ public:
 
     // prefill：一次处理 tokens 个位置，扫描更新 recurrent state 并算出输出。
     // d_hidden：[tokens, hidden_size]；d_out：[tokens, hidden_size]。
-    void prefill(const float *d_hidden, float *d_out, int tokens,
+    void prefill(const float *d_hidden, float *d_out, size_t tokens,
                  LinearAttnRecurrentState &state, QwenForwardScratch &scratch);
 
     // decode：处理单个新 token，基于已有 recurrent state 递推一步。

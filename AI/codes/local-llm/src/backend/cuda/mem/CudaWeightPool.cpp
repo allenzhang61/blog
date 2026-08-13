@@ -64,7 +64,7 @@ size_t CudaWeightPool::cache_limit_bytes() {
 }
 
 cudaDataType_t CudaWeightPool::cuda_type_for(const WeightData &weight) {
-    const DType dtype = weight.info->dtype;
+    const DType dtype = weight.dtype;
     if (dtype == DType::BF16) {
         return CUDA_R_16BF;
     }
@@ -75,11 +75,11 @@ cudaDataType_t CudaWeightPool::cuda_type_for(const WeightData &weight) {
         return CUDA_R_32F;
     }
     throw std::runtime_error(std::string("暂不支持 CUDA dtype：") + dtype_name(dtype) +
-                             " tensor=" + weight.info->name);
+                             " tensor=" + weight.name);
 }
 
 size_t CudaWeightPool::dtype_size_for(const WeightData &weight) {
-    const DType dtype = weight.info->dtype;
+    const DType dtype = weight.dtype;
     if (dtype == DType::BF16 || dtype == DType::F16) {
         return sizeof(uint16_t);
     }
@@ -87,7 +87,7 @@ size_t CudaWeightPool::dtype_size_for(const WeightData &weight) {
         return sizeof(float);
     }
     throw std::runtime_error(std::string("暂不支持 dtype：") + dtype_name(dtype) +
-                             " tensor=" + weight.info->name);
+                             " tensor=" + weight.name);
 }
 
 CudaWeightPool::CudaWeightPool() {
@@ -101,13 +101,13 @@ CudaWeightPool::~CudaWeightPool() {
 }
 
 CudaWeight *CudaWeightPool::cached_weight(const WeightData &weight) {
-    auto found = items_.find(weight.info->name);
+    auto found = items_.find(weight.name);
     if (found != items_.end()) {
         return &found->second;
     }
 
     size_t elems = 1;
-    for (int64_t dim : weight.info->shape) {
+    for (int64_t dim : weight.shape) {
         elems *= static_cast<size_t>(dim);
     }
     const size_t bytes = elems * dtype_size_for(weight);
@@ -127,16 +127,16 @@ CudaWeight *CudaWeightPool::cached_weight(const WeightData &weight) {
     device.bytes = bytes;
     device.type = cuda_type_for(weight);
     double malloc_ms = 0.0;
-    cuda_malloc_timed(&device.ptr, bytes, weight.info->name, tracker_ != nullptr, malloc_ms);
+    cuda_malloc_timed(&device.ptr, bytes, weight.name, tracker_ != nullptr, malloc_ms);
     double h2d_ms = 0.0;
-    memcpy_h2d_timed(device.ptr, weight.data, bytes, weight.info->name, tracker_ != nullptr, h2d_ms);
-    auto [it, inserted] = items_.emplace(weight.info->name, std::move(device));
+    memcpy_h2d_timed(device.ptr, weight.data, bytes, weight.name, tracker_ != nullptr, h2d_ms);
+    auto [it, inserted] = items_.emplace(weight.name, std::move(device));
     bytes_ += bytes;
     (void) inserted;
     if (tracker_) {
         // 分配与拷贝拆成两条事件，用 kind 区分（resident 均为本次入驻后的累计量）。
-        tracker_->record(WeightLoadEventKind::Alloc, weight.info->name, bytes, malloc_ms, bytes_);
-        tracker_->record(WeightLoadEventKind::Upload, weight.info->name, bytes, h2d_ms, bytes_);
+        tracker_->record(WeightLoadEventKind::Alloc, weight.name, bytes, malloc_ms, bytes_);
+        tracker_->record(WeightLoadEventKind::Upload, weight.name, bytes, h2d_ms, bytes_);
     }
     return &it->second;
 }
@@ -152,19 +152,19 @@ CudaWeight *CudaWeightPool::cached_concat_weight(const std::string &name,
     }
 
     // 要求：各权重均为二维、dtype 一致、列数一致，按行（shape[0]）拼接。
-    const DType dtype = weights[0].info->dtype;
-    if (weights[0].info->shape.size() != 2) {
+    const DType dtype = weights[0].dtype;
+    if (weights[0].shape.size() != 2) {
         return nullptr;
     }
-    const int64_t in_dim = weights[0].info->shape[1];
+    const int64_t in_dim = weights[0].shape[1];
     const size_t elem_bytes = dtype_size_for(weights[0]);
     int64_t total_rows = 0;
     for (const WeightData &weight : weights) {
-        if (weight.info->dtype != dtype || weight.info->shape.size() != 2 ||
-            weight.info->shape[1] != in_dim) {
+        if (weight.dtype != dtype || weight.shape.size() != 2 ||
+            weight.shape[1] != in_dim) {
             return nullptr;
         }
-        total_rows += weight.info->shape[0];
+        total_rows += weight.shape[0];
     }
 
     const size_t elems = static_cast<size_t>(total_rows) * static_cast<size_t>(in_dim);
@@ -186,7 +186,7 @@ CudaWeight *CudaWeightPool::cached_concat_weight(const std::string &name,
     host.reserve(bytes);
     for (const WeightData &weight : weights) {
         const size_t weight_bytes =
-            static_cast<size_t>(weight.info->shape[0]) * static_cast<size_t>(in_dim) * elem_bytes;
+            static_cast<size_t>(weight.shape[0]) * static_cast<size_t>(in_dim) * elem_bytes;
         host.insert(host.end(), weight.data, weight.data + weight_bytes);
     }
 

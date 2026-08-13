@@ -4,6 +4,7 @@
 
 #include "LinearAttention.h"
 
+#include <cstddef>
 #include <stdexcept>
 
 #include <cuda_runtime.h>
@@ -22,7 +23,7 @@ LinearAttention::LinearAttention(const LinearAttnWeights &weights, const TextCon
                                  CudaWeightPool *pool)
     : weights_(weights), config_(config), pool_(pool) {}
 
-void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
+void LinearAttention::prefill(const float *d_hidden, float *d_out, size_t tokens,
                               LinearAttnRecurrentState &state, QwenForwardScratch &scratch) {
     const int hidden = config_.hidden_size;
     const int key_heads = config_.linear_num_key_heads;
@@ -34,6 +35,7 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
     const int value_total = value_heads * v_dim;
     const int conv_dim = key_total * 2 + value_total;
     const float eps = config_.rms_norm_eps;
+    const int token_count = static_cast<int>(tokens);
 
     CudaWeight *qkv = pool_->cached_weight(weights_.in_proj_qkv);
     CudaWeight *z_w = pool_->cached_weight(weights_.in_proj_z);
@@ -48,19 +50,19 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
         throw std::runtime_error("LinearAttention 权重上传失败");
     }
 
-    float *d_mixed = scratch.linear_projection.ensure(static_cast<size_t>(tokens) * conv_dim, "lin mixed");
-    float *d_z = scratch.linear_z.ensure(static_cast<size_t>(tokens) * value_total, "lin z");
-    float *d_b = scratch.linear_b.ensure(static_cast<size_t>(tokens) * value_heads, "lin b");
-    float *d_a = scratch.linear_a.ensure(static_cast<size_t>(tokens) * value_heads, "lin a");
-    float *d_conv = scratch.linear_conv_out.ensure(static_cast<size_t>(tokens) * conv_dim, "lin conv");
-    float *d_gated = scratch.linear_gated.ensure(static_cast<size_t>(tokens) * value_total, "lin gated");
+    float *d_mixed = scratch.linear_projection.ensure(tokens * static_cast<size_t>(conv_dim), "lin mixed");
+    float *d_z = scratch.linear_z.ensure(tokens * static_cast<size_t>(value_total), "lin z");
+    float *d_b = scratch.linear_b.ensure(tokens * static_cast<size_t>(value_heads), "lin b");
+    float *d_a = scratch.linear_a.ensure(tokens * static_cast<size_t>(value_heads), "lin a");
+    float *d_conv = scratch.linear_conv_out.ensure(tokens * static_cast<size_t>(conv_dim), "lin conv");
+    float *d_gated = scratch.linear_gated.ensure(tokens * static_cast<size_t>(value_total), "lin gated");
     uint16_t *d_gated_lowp =
-        scratch.linear_gated_lowp.ensure(static_cast<size_t>(tokens) * value_total, "lin gated lowp");
+        scratch.linear_gated_lowp.ensure(tokens * static_cast<size_t>(value_total), "lin gated lowp");
 
     // 输入激活转成权重 dtype（BF16/F16）后再做各投影。
     uint16_t *d_in_lowp =
-        scratch.input_lowp_buffer.ensure(static_cast<size_t>(tokens) * hidden, "lin in lowp");
-    to_weight_lowp(d_hidden, d_in_lowp, tokens * hidden, *qkv, nullptr);
+        scratch.input_lowp_buffer.ensure(tokens * static_cast<size_t>(hidden), "lin in lowp");
+    to_weight_lowp(d_hidden, d_in_lowp, tokens * static_cast<size_t>(hidden), *qkv, nullptr);
 
     gemm_weight(pool_->handle, *qkv, conv_dim, hidden, d_in_lowp, qkv->type, tokens, d_mixed, "linattn.in_proj_qkv");
     gemm_weight(pool_->handle, *z_w, value_total, hidden, d_in_lowp, z_w->type, tokens, d_z, "linattn.in_proj_z");
@@ -71,13 +73,13 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, int tokens,
     float *recurrent_state = static_cast<float *>(state.recurrent_state.ptr);
 
     launch_linear_attention_conv_batch(d_mixed, static_cast<const uint16_t *>(conv->ptr),
-                                       conv_state, d_conv, tokens, conv_dim, kernel, nullptr);
+                                       conv_state, d_conv, token_count, conv_dim, kernel, nullptr);
     launch_linear_attention_recurrent_batch(
         d_conv, d_z, d_b, d_a, static_cast<const float *>(a_log->ptr),
         static_cast<const uint16_t *>(dt_bias->ptr), static_cast<const float *>(norm->ptr),
-        recurrent_state, d_gated, tokens, key_heads, value_heads, k_dim, v_dim, eps, nullptr);
+        recurrent_state, d_gated, token_count, key_heads, value_heads, k_dim, v_dim, eps, nullptr);
 
-    to_weight_lowp(d_gated, d_gated_lowp, tokens * value_total, *out_proj, nullptr);
+    to_weight_lowp(d_gated, d_gated_lowp, tokens * static_cast<size_t>(value_total), *out_proj, nullptr);
 
     // out_proj：[hidden, value_total] · gated[value_total, tokens] -> [hidden, tokens]。
     gemm_weight(pool_->handle, *out_proj, hidden, value_total, d_gated_lowp, out_proj->type, tokens, d_out, "linattn.out_proj");

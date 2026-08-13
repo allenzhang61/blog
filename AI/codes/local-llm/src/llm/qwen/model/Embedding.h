@@ -7,10 +7,11 @@
 
 #include <vector>
 
+#include "llm/qwen/QwenWeights.h"
 #include "Module.h"
 
-struct WeightData;
 class CudaWeightPool;
+class QwenForwardScratch;
 
 // 词嵌入查表：token id -> hidden 向量。
 // 权重 embed_tokens 形状 [vocab_size, hidden_size]。
@@ -21,7 +22,8 @@ public:
 
     // 按 token id 逐行拷贝嵌入到 d_out（device），形状 [tokens, hidden_size]。
     // h_token_ids 为 host 端 token id；内部负责搬运到 device 查表。
-    void forward(const std::vector<int> &h_token_ids, float *d_out, int hidden_size);
+    void forward(const std::vector<int> &inputs, float *d_out, int hidden_size,
+                 QwenForwardScratch &scratch);
 
 private:
     const WeightData &weight_;

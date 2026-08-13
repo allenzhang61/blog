@@ -4,9 +4,6 @@
 
 #ifndef LOCAL_LLM_QWENWEIGHTS_H
 #define LOCAL_LLM_QWENWEIGHTS_H
-#include <filesystem>
-#include <map>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -14,25 +11,8 @@
 
 class QwenConfig;
 
-// 单个模型权重在张量容器中的 metadata。
-struct WeightMeta {
-    // 权重名称。
-    std::string name;
-    // 权重 dtype，例如 BF16/F16/F32。
-    DType dtype = DType::UNKNOWN;
-    // 权重 shape。
-    std::vector<int64_t> shape;
-    // 权重数据字节数。
-    size_t nbytes = 0;
-};
-
-// 指向已 mmap 权重数据的轻量引用，不拥有内存。
-struct WeightData {
-    // 权重 metadata 指针。
-    const WeightMeta *info = nullptr;
-    // 权重原始数据起始地址。
-    const uint8_t *data = nullptr;
-};
+// Qwen 层持有的权重视图；不拥有 data，data 指向 TensorContainer mmap 区域。
+using WeightData = TensorView;
 
 // linear attention 层一次性解析好的权重引用。
 struct LinearAttnWeights {
@@ -133,7 +113,7 @@ struct MtpWeights {
 
 class QwenWeights {
 public:
-    QwenWeights(const std::string &model_dir, const QwenConfig &config);
+    QwenWeights(const TensorContainer &tensor_container, const QwenConfig &config);
 
     void DebugDump();
 
@@ -147,26 +127,17 @@ public:
     MtpWeights mtp;
 
 private:
-    // 张量容器（safetensors 格式；负责 mmap、header 解析、按名取张量）。
-    std::unique_ptr<TensorContainer> st_;
-    // 按权重名称索引的 metadata，持有 WeightMeta 生命周期。
-    std::map<std::string, WeightMeta> metas;
-    std::map<std::string, WeightData> weights;
+    // 外部持有的张量容器；QwenWeights 不负责打开/关闭模型文件。
+    const TensorContainer &tensor_container_;
 
     // 校验 Qwen3.5 推理路径需要的 tensor 是否齐全。
     void validate_qwen_tensors(int num_hidden_layers, const std::vector<std::string> &layer_types) const;
-
-    // 从张量容器构建 name -> WeightMeta/WeightData 索引，data 指向已 mmap 内存。
-    void build_weight_index();
 
     // 解析视觉塔（model.visual.*）权重到 this->vision；当前未使用。
     void parse_vision_weights(const QwenConfig &config);
 
     // 解析 MTP（mtp.*）权重到 this->mtp；当前未使用。
     void parse_mtp_weights(const QwenConfig &config);
-
-    // 按名称返回权重数据引用；不存在时抛出异常。
-    WeightData weight_data(const std::string &name) const;
 
     // 将 shape 转为日志/错误信息中使用的可读字符串。
     static std::string shape_to_string(const std::vector<int64_t> &shape);

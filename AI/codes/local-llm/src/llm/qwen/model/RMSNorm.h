@@ -5,9 +5,11 @@
 #ifndef LOCAL_LLM_RMSNORM_H
 #define LOCAL_LLM_RMSNORM_H
 
+#include <cstddef>
+
+#include "llm/qwen/QwenWeights.h"
 #include "Module.h"
 
-struct WeightData;
 class CudaWeightPool;
 
 // RMSNorm（Qwen 使用，无 bias）：对最后一维做 RMS 归一化后乘以可学习权重。
@@ -22,7 +24,7 @@ public:
     // 原位或写出归一化结果。d_in / d_out 均为 device float 指针，
     // 形状 [rows, hidden_size]（prefill 时 rows=tokens，decode 时 rows=1）。
     // 允许 d_in == d_out 做原位归一化。
-    void forward(const float *d_in, float *d_out, int rows, int hidden_size);
+    void forward(const float *d_in, float *d_out, size_t rows, int hidden_size);
 
 private:
     const WeightData &weight_;

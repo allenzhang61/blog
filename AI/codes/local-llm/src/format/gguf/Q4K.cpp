@@ -7,6 +7,7 @@
 // 【注意】本文件当前未被任何代码调用（死代码），保留作为 Q4_K 反量化的 CPU 参考实现，
 // 用于对拍验证 CUDA kernel 的正确性。详见 Q4K.h 顶部说明。
 
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 

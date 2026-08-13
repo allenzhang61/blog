@@ -7,7 +7,7 @@
 
 #include "CudaWeight.h"
 
-#include "llm/qwen/QwenWeights.h" // 仅依赖其中通用的 WeightData / WeightMeta
+#include "llm/qwen/QwenWeights.h" // 仅依赖其中通用的 WeightData
 
 #include <cstddef>
 #include <string>

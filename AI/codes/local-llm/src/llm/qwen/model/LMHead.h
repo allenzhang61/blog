@@ -5,11 +5,11 @@
 #ifndef LOCAL_LLM_LMHEAD_H
 #define LOCAL_LLM_LMHEAD_H
 
+#include "llm/qwen/QwenWeights.h"
 #include "Module.h"
 
 #include <vector>
 
-struct WeightData;
 class QwenForwardScratch;
 class CudaWeightPool;
 class Sampler;

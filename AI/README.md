@@ -197,6 +197,7 @@
 
 - LLM的数据模型
   - [qwen](chapter-14/14-015.md)
+  - [Qwen3.5-4B-Base safetensors header](chapter-14/14-016.md)
 - 模型推理与性能优化
   - [开源推理服务器总结](chapter-14/14-011.md)
   - [mac studio 上可运行选项性能对比](chapter-14/14-012.md)

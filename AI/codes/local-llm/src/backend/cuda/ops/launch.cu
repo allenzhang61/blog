@@ -5,6 +5,9 @@
 #include "kernel.cuh"
 #include "kernel_internal.cuh"
 
+#include <cstddef>
+#include <cstdint>
+
 #include <cuda_runtime.h>
 
 #include "utils/stats/ScopedTimer.h"

@@ -24,10 +24,10 @@ int LMHead::forward(const float *d_hidden, int hidden_size, QwenForwardScratch &
                     Sampler &sampler, const std::vector<int> &prev_tokens) {
     CudaWeight *w = pool_->cached_weight(weight_);
     if (!w) {
-        throw std::runtime_error("LMHead 权重上传失败：" + weight_.info->name);
+        throw std::runtime_error("LMHead 权重上传失败：" + weight_.name);
     }
     // 复用 embed_tokens 权重 [vocab, hidden] 作为输出投影。
-    const int vocab = static_cast<int>(weight_.info->shape[0]);
+    const int vocab = static_cast<int>(weight_.shape[0]);
 
     // 输入激活转成权重 dtype（BF16/F16）后再投影（cublasGemmEx 要求同 dtype）。
     uint16_t *d_in_lowp = scratch.input_lowp_buffer.ensure(hidden_size, "lm_head in lowp");

@@ -83,11 +83,11 @@ public:
     virtual ~TensorContainer() = default;
 
     // 是否存在某张量。
-    virtual bool has_tensor(const std::string &name) const = 0;
+    virtual bool contains(const std::string &name) const = 0;
     // 按名返回张量视图；不存在时抛异常。
-    virtual const TensorView &tensor(const std::string &name) const = 0;
+    virtual const TensorView &get(const std::string &name) const = 0;
     // 全部张量名。
-    virtual std::vector<std::string> tensor_names() const = 0;
+    virtual std::vector<std::string> names() const = 0;
     // 打印容器元信息（不含原始权重数值）。
     virtual void DebugDump() const = 0;
 };

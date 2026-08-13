@@ -4,6 +4,7 @@
 
 #ifndef LOCAL_LLM_QWENSESSION_H
 #define LOCAL_LLM_QWENSESSION_H
+#include <cstddef>
 #include <vector>
 
 #include "QwenForwardScratch.h"
@@ -44,7 +45,7 @@ public:
     // CudaScratchBuffer<int> d_outputs;
 
     // 生成的 token id（host），逐步追加，请求结束返回给调用方。
-    std::vector<int> h_outputs;
+    std::vector<int> outputs;
 
     // 每个 full_attention 层一份 KV cache；顺序与 config.layer_types 中 full 层出现顺序一致。
     std::vector<FullAttnKVCache> fullAttnKVCaches;
@@ -56,7 +57,7 @@ public:
     QwenForwardScratch forwardScratch;
 
     // 本次请求的最大序列长度（prefill 输入 + 最大生成）。
-    int max_seq_len = 0;
+    size_t max_seq_len = 0;
 
     // === MemoryUsageProvider ===
     // 跨 token 状态字节数：所有 full attention KV cache + linear attention
