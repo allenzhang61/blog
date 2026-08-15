@@ -42,7 +42,7 @@ Args::Args(const int argc, char **argv) {
     }
 }
 
-void Args::DebugDump() {
+void Args::debug_dump() {
     Log::debug("model: " + this->model);
     Log::debug("model_dir: " + this->model_dir);
     Log::debug("max_output_tokens: " + std::to_string(this->max_output_tokens));

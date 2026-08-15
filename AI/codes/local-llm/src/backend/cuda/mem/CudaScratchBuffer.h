@@ -27,9 +27,6 @@ public:
     // 确保至少能容纳 count 个元素，返回 device 指针；已够大时复用旧内存。
     T *ensure(size_t count, const std::string &name);
 
-    // 确保至少分配 required_bytes 字节，适合 byte / staging 类 buffer。
-    T *ensure_bytes(size_t required_bytes, const std::string &name);
-
     // 当前已分配的字节数。
     size_t bytes() const { return bytes_; }
 

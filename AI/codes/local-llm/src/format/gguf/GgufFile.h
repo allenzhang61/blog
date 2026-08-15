@@ -5,13 +5,17 @@
 #ifndef LOCAL_LLM_GGUFFILE_H
 #define LOCAL_LLM_GGUFFILE_H
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
-#include "format/TensorContainer.h"
+#include "format/MF.h"
+
+class GGUFTokenizer;
 
 // GGUF（llama.cpp 的模型容器格式）只读解析器，与具体模型结构无关。
 // 负责：mmap 打开文件 -> 解析 header / 元数据 KV / 张量表 -> 按名定位张量数据。
@@ -75,20 +79,31 @@ struct GgufValue {
     std::vector<std::string> arr_str;
 };
 
-// 单个张量在 GGUF 文件中的信息。
-struct GgufTensorInfo {
-    TensorView view;
-    // 维度（ggml 约定：dims[0] 为最内层/连续维）。二维权重通常为 [in_dim, out_dim]。
-    std::vector<int64_t> dims;
-    GgmlType type = GgmlType::F32;
-    // 张量数据相对“数据段起始”的偏移（已按 alignment 对齐）。
-    uint64_t offset = 0;
+// 顺序读取的游标（相对 mmap 数据起始的字节偏移），解析 GGUF 各段时递进。
+class Cursor {
+public:
+    Cursor(const uint8_t *base, size_t size);
 
-    // 元素总数（各维乘积）。
-    int64_t num_elements() const;
+    size_t pos() const { return pos_; }
+
+    // 从 cursor 读取基础类型（little-endian），越界抛异常并前移游标。
+    uint8_t read_u8();
+    uint32_t read_u32();
+    uint64_t read_u64();
+    double read_f64_bits(GgufValueType type); // 供 f32/f64 复用
+
+    // GGUF 字符串：u64 长度 + 原始字节。
+    std::string read_string();
+    // 读取一个元数据值（含数组递归）。
+    GgufValue read_value(GgufValueType type);
+
+private:
+    const uint8_t *base_ = nullptr;
+    size_t size_ = 0;
+    size_t pos_ = 0;
 };
 
-class GgufFile : public TensorContainer {
+class GgufFile : public MF {
 public:
     // mmap 打开并解析整个 GGUF 文件（header + 元数据 + 张量表）。解析失败抛异常。
     explicit GgufFile(const std::string &path);
@@ -97,31 +112,21 @@ public:
     GgufFile(const GgufFile &) = delete;
     GgufFile &operator=(const GgufFile &) = delete;
 
-    // === 元数据访问（GGUF 独有，不属于 TensorContainer 接口）===
+    // === 元数据访问 ===
     // 是否存在某个元数据 key。
-    bool has_metadata(const std::string &key) const;
-    // 读取标量元数据；类型不匹配或不存在时抛异常。
-    int64_t metadata_i64(const std::string &key) const;
-    float metadata_f32(const std::string &key) const;
-    std::string metadata_str(const std::string &key) const;
-    bool metadata_bool(const std::string &key) const;
-    // 读取整个 KV（供数组等复杂类型访问）；不存在时抛异常。
-    const GgufValue &metadata(const std::string &key) const;
+    bool contain_metadata(const std::string &key) const override;
 
-    // === GGUF 原生张量访问（保留既有 API，DeepSeek 加载路径使用）===
-    // 是否存在某张量（同时满足 TensorContainer 接口）。
-    bool contains(const std::string &name) const override;
-    // 按名返回 GGUF 原生张量信息（含量化类型、offset 等）；不存在时抛异常。
-    const GgufTensorInfo &tensor_info(const std::string &name) const;
-    // 全部张量（保持文件中出现顺序）。
-    const std::vector<GgufTensorInfo> &tensors() const { return tensors_; }
+    // 是否存在某张量。
+    bool contain_tensor_view(const std::string &name) const override;
 
-    // === TensorContainer 接口 ===
-    const TensorView &get(const std::string &name) const override;
-    std::vector<std::string> names() const override;
+    // === MF tensor 接口 ===
+    const TensorView &get_tensor_view(const std::string &name) const override;
+    std::vector<std::string> tensor_view_names() const override;
+    std::vector<int> tokenizer_encode(const std::string &text) const override;
+    std::string tokenizer_decode(const std::vector<int> &ids) const override;
 
     // 打印基础信息（版本、张量数、元数据数、对齐、部分关键 KV）。
-    void DebugDump() const override;
+    void debug_dump() const override;
 
 private:
     // mmap 状态。
@@ -133,31 +138,15 @@ private:
     uint32_t version_ = 0;
     uint32_t alignment_ = 32;
 
-    std::map<std::string, GgufValue> metadata_;
-    std::vector<GgufTensorInfo> tensors_;
-    std::map<std::string, size_t> tensor_index_; // name -> tensors_ 下标
+    std::map<std::string, GgufValue> metadata_map_;
+    std::vector<TensorView> tensors_;
+    std::unique_ptr<GGUFTokenizer> tokenizer_;
 
     // GGUF 量化类型 -> 统一 DType。
     static DType gguf_type_to_dtype(GgmlType t);
+    Metadata metadata_value(const std::string &key) const override;
 
     void close();
-
-    // 顺序读取的游标（相对 data_ 的字节偏移），解析各段时递进。
-    struct Cursor {
-        const uint8_t *base;
-        size_t size;
-        size_t pos = 0;
-    };
-
-    // 从 cursor 读取基础类型（little-endian），越界抛异常并前移游标。
-    static uint8_t read_u8(Cursor &c);
-    static uint32_t read_u32(Cursor &c);
-    static uint64_t read_u64(Cursor &c);
-    static double read_f64_bits(Cursor &c, GgufValueType t); // 供 f32/f64 复用
-    // GGUF 字符串：u64 长度 + 原始字节。
-    static std::string read_string(Cursor &c);
-    // 读取一个元数据值（含数组递归）。
-    static GgufValue read_value(Cursor &c, GgufValueType type);
 
     // 按 ggml 量化类型计算给定元素数的字节数（block 对齐）。
     static size_t type_nbytes(GgmlType type, int64_t num_elements);

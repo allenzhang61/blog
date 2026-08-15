@@ -2,12 +2,16 @@
 #include <iostream>
 #include <cstdlib>
 #include <chrono>
+#include <memory>
 
 #include <cuda_runtime.h>
 
 #include "utils/cli/Args.h"
-#include "llm/BaseModel.h"
-#include "llm/ModelFactory.h"
+#include "format/MF.h"
+#include "format/MFFactory.h"
+#include "llm/model/BaseModel.h"
+#include "llm/model/ModelFactory.h"
+#include "backend/cuda/mem/CudaWeightDequantPool.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "utils/stats/DeviceMonitor.h"
 #include "utils/stats/MemoryReporter.h"
@@ -17,11 +21,19 @@
 
 int main(int argc, char **argv) {
     Args args(argc, argv);
-    args.DebugDump();
+    args.debug_dump();
 
+    CudaWeightDequantPool dequant_pool;
+    set_global_cuda_weight_dequant_pool(&dequant_pool);
+    CudaWeightPool weight_pool;
+    set_global_cuda_weight_pool(&weight_pool);
+
+    // main 负责打开具体模型文件格式；模型本身只接收 MF 抽象。
+    std::unique_ptr<MF> mf = open_mf(args.model_dir);
     // 经工厂按 --model 构造具体模型；主循环之后只依赖 BaseModel 接口。
-    std::unique_ptr<BaseModel> model = create_model(args.model, args.model_dir, args.max_output_tokens, args.sampling);
-    CudaWeightPool &pool = model->weight_pool();
+    std::unique_ptr<BaseModel> model = create_model(args.model, std::move(mf),
+                                                    args.max_output_tokens, args.sampling);
+    CudaWeightPool &pool = global_cuda_weight_pool();
 
     std::vector<int> inputs = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
     const int eos = model->eos_token_id();

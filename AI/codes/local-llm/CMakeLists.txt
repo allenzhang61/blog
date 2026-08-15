@@ -28,24 +28,25 @@ add_executable(local_llm main.cpp
         src/backend/common.h
         src/utils/log/Log.cpp
         src/utils/log/Log.h
-        src/llm/qwen/QwenConfig.cpp
-        src/llm/qwen/QwenConfig.h
-        src/llm/qwen/QwenWeights.cpp
-        src/llm/qwen/QwenWeights.h
-        src/llm/qwen/QwenTokenizer.cpp
-        src/llm/qwen/QwenTokenizer.h
+        src/llm/model/qwen/QwenConfig.cpp
+        src/llm/model/qwen/QwenConfig.h
+        src/llm/model/qwen/QwenWeights.cpp
+        src/llm/model/qwen/QwenWeights.h
         src/backend/cuda/common.cpp
         src/backend/cuda/common.h
         src/backend/cuda/mem/CudaWeightPool.cpp
         src/backend/cuda/mem/CudaWeightPool.h
         src/backend/cuda/mem/CudaWeight.cpp
         src/backend/cuda/mem/CudaWeight.h
+        src/backend/cuda/mem/CudaWeightDequantPool.cpp
+        src/backend/cuda/mem/CudaWeightDequantPool.h
         src/backend/cuda/mem/CudaScratchBuffer.cpp
         src/backend/cuda/mem/CudaScratchBuffer.h
-        src/llm/qwen/QwenSession.cpp
-        src/llm/qwen/QwenSession.h
-        src/llm/qwen/QwenForwardScratch.cpp
-        src/llm/qwen/QwenForwardScratch.h
+        src/backend/cuda/mem/Quant.cpp
+        src/backend/cuda/mem/Quant.h
+        src/llm/model/qwen/QwenSession.cpp
+        src/llm/model/qwen/QwenSession.h
+        src/llm/model/qwen/QwenForwardScratch.h
         src/backend/cuda/ops/kernel.cu
         src/backend/cuda/ops/kernel.cuh
         src/backend/cuda/ops/kernel_internal.cuh
@@ -54,44 +55,62 @@ add_executable(local_llm main.cpp
         src/backend/cuda/ops/gemm.h
         src/format/gguf/GgufFile.cpp
         src/format/gguf/GgufFile.h
-        src/format/gguf/Q4K.cpp
-        src/format/gguf/Q4K.h
-        src/format/TensorContainer.h
-        src/format/safetensors/SafeTensorsFile.cpp
-        src/format/safetensors/SafeTensorsFile.h
-        src/llm/BaseModel.h
-        src/llm/ModelFactory.cpp
-        src/llm/ModelFactory.h
-        src/llm/sampling/Sampler.cpp
-        src/llm/sampling/Sampler.h
-        src/llm/qwen/model/Module.h
-        src/llm/qwen/model/RMSNorm.cpp
-        src/llm/qwen/model/RMSNorm.h
-        src/llm/qwen/model/Embedding.cpp
-        src/llm/qwen/model/Embedding.h
-        src/llm/qwen/model/SwiGLUMlp.cpp
-        src/llm/qwen/model/SwiGLUMlp.h
-        src/llm/qwen/model/LMHead.cpp
-        src/llm/qwen/model/LMHead.h
-        src/llm/qwen/model/FullAttention.cpp
-        src/llm/qwen/model/FullAttention.h
-        src/llm/qwen/model/LinearAttention.cpp
-        src/llm/qwen/model/LinearAttention.h
-        src/llm/qwen/model/DecoderLayer.cpp
-        src/llm/qwen/model/DecoderLayer.h
-        src/llm/qwen/model/QwenModel.cpp
-        src/llm/qwen/model/QwenModel.h
-        src/llm/deepseek/DeepseekConfig.cpp
-        src/llm/deepseek/DeepseekConfig.h
-        src/llm/deepseek/DeepseekWeights.cpp
-        src/llm/deepseek/DeepseekWeights.h
-        src/llm/deepseek/DeepseekTokenizer.cpp
-        src/llm/deepseek/DeepseekTokenizer.h
-        src/llm/deepseek/model/DeepseekForwardScratch.h
-        src/llm/deepseek/model/DeepseekSession.cpp
-        src/llm/deepseek/model/DeepseekSession.h
-        src/llm/deepseek/model/DeepseekModel.cpp
-        src/llm/deepseek/model/DeepseekModel.h
+        src/format/MF.h
+        src/format/MFFactory.cpp
+        src/format/MFFactory.h
+        src/format/hf/HFFile.cpp
+        src/format/hf/HFFile.h
+        src/format/hf/HFTokenizer.cpp
+        src/format/hf/HFTokenizer.h
+        src/llm/model/BaseModel.h
+        src/llm/module/Module.h
+        src/llm/model/ModelFactory.cpp
+        src/llm/model/ModelFactory.h
+        src/utils/sampling/Sampler.cpp
+        src/utils/sampling/Sampler.h
+        src/llm/module/qwen/RMSNorm.cpp
+        src/llm/module/qwen/RMSNorm.h
+        src/llm/module/qwen/Embedding.cpp
+        src/llm/module/qwen/Embedding.h
+        src/llm/module/qwen/SwiGLUMlp.cpp
+        src/llm/module/qwen/SwiGLUMlp.h
+        src/llm/module/qwen/LMHead.cpp
+        src/llm/module/qwen/LMHead.h
+        src/llm/module/qwen/FullAttention.cpp
+        src/llm/module/qwen/FullAttention.h
+        src/llm/module/qwen/LinearAttention.cpp
+        src/llm/module/qwen/LinearAttention.h
+        src/llm/module/qwen/DecoderLayer.cpp
+        src/llm/module/qwen/DecoderLayer.h
+        src/llm/model/qwen/QwenModel.cpp
+        src/llm/model/qwen/QwenModel.h
+        src/llm/model/deepseek/DeepseekConfig.cpp
+        src/llm/model/deepseek/DeepseekConfig.h
+        src/llm/model/deepseek/DeepseekForwardScratch.h
+        src/llm/model/deepseek/DeepseekSession.cpp
+        src/llm/model/deepseek/DeepseekSession.h
+        src/llm/model/deepseek/DeepseekWeights.cpp
+        src/llm/model/deepseek/DeepseekWeights.h
+        src/format/gguf/GGUFTokenizer.cpp
+        src/format/gguf/GGUFTokenizer.h
+        src/llm/module/deepseek/Forward.cpp
+        src/llm/module/deepseek/Forward.h
+        src/llm/module/deepseek/DenseFFN.cpp
+        src/llm/module/deepseek/DenseFFN.h
+        src/llm/module/deepseek/MLA.cpp
+        src/llm/module/deepseek/MLA.h
+        src/llm/module/deepseek/MoE.cpp
+        src/llm/module/deepseek/MoE.h
+        src/llm/module/deepseek/MoERouter.cpp
+        src/llm/module/deepseek/MoERouter.h
+        src/llm/module/deepseek/MLP.cpp
+        src/llm/module/deepseek/MLP.h
+        src/llm/module/deepseek/RoutedExperts.cpp
+        src/llm/module/deepseek/RoutedExperts.h
+        src/llm/module/deepseek/SharedExperts.cpp
+        src/llm/module/deepseek/SharedExperts.h
+        src/llm/model/deepseek/DeepseekModel.cpp
+        src/llm/model/deepseek/DeepseekModel.h
         src/utils/stats/StatsReport.h
         src/utils/stats/MemoryUsageProvider.h
         src/utils/stats/Profiler.cpp
@@ -163,4 +182,3 @@ if(NOT NVML_LIBRARY)
     message(FATAL_ERROR "未找到 NVML（libnvidia-ml）。可用 -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda 指定，或安装 NVIDIA 驱动")
 endif()
 target_link_libraries(local_llm PRIVATE ${NVML_LIBRARY})
-

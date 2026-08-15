@@ -34,11 +34,7 @@ CudaScratchBuffer<T> &CudaScratchBuffer<T>::operator=(CudaScratchBuffer &&other)
 
 template <typename T>
 T *CudaScratchBuffer<T>::ensure(size_t count, const std::string &name) {
-    return ensure_bytes(count * sizeof(T), name);
-}
-
-template <typename T>
-T *CudaScratchBuffer<T>::ensure_bytes(size_t required_bytes, const std::string &name) {
+    const size_t required_bytes = count * sizeof(T);
     if (bytes_ >= required_bytes) {
         return ptr_;
     }

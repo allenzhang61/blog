@@ -4,6 +4,7 @@
 
 #include "GgufFile.h"
 
+#include "format/gguf/GGUFTokenizer.h"
 #include "utils/log/Log.h"
 
 #include <cerrno>
@@ -52,28 +53,6 @@ BlockTrait block_trait(GgmlType type) {
     }
 }
 
-// GgmlType -> 可读名。
-const char *ggml_type_name(GgmlType t) {
-    switch (t) {
-    case GgmlType::F32: return "F32";
-    case GgmlType::F16: return "F16";
-    case GgmlType::Q4_0: return "Q4_0";
-    case GgmlType::Q4_1: return "Q4_1";
-    case GgmlType::Q5_0: return "Q5_0";
-    case GgmlType::Q5_1: return "Q5_1";
-    case GgmlType::Q8_0: return "Q8_0";
-    case GgmlType::Q8_1: return "Q8_1";
-    case GgmlType::Q2_K: return "Q2_K";
-    case GgmlType::Q3_K: return "Q3_K";
-    case GgmlType::Q4_K: return "Q4_K";
-    case GgmlType::Q5_K: return "Q5_K";
-    case GgmlType::Q6_K: return "Q6_K";
-    case GgmlType::Q8_K: return "Q8_K";
-    case GgmlType::BF16: return "BF16";
-    default: return "?";
-    }
-}
-
 // GgufValueType -> 可读名。
 const char *value_type_name(GgufValueType t) {
     switch (t) {
@@ -104,6 +83,14 @@ std::string dims_to_string(const std::vector<int64_t> &dims) {
     }
     os << "]";
     return os.str();
+}
+
+int64_t num_elements(const std::vector<int64_t> &dims) {
+    int64_t n = 1;
+    for (int64_t d : dims) {
+        n *= d;
+    }
+    return n;
 }
 
 // 单条标量/数组元数据值 -> 可读字符串（数组做预览截断，避免词表刷屏）。
@@ -161,14 +148,6 @@ std::string value_to_string(const GgufValue &v) {
 }
 } // namespace
 
-int64_t GgufTensorInfo::num_elements() const {
-    int64_t n = 1;
-    for (int64_t d : dims) {
-        n *= d;
-    }
-    return n;
-}
-
 GgufFile::GgufFile(const std::string &path) : path_(path) {
     fd_ = ::open(path_.c_str(), O_RDONLY);
     if (fd_ < 0) {
@@ -188,52 +167,61 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     }
     data_ = static_cast<const uint8_t *>(ptr);
 
-    Cursor c{data_, size_, 0};
+    Cursor c(data_, size_);
 
-    const uint32_t magic = read_u32(c);
+    const uint32_t magic = c.read_u32();
     if (magic != kGgufMagic) {
         throw std::runtime_error("非 GGUF 文件（magic 不匹配）：" + path_.string());
     }
-    version_ = read_u32(c);
+    version_ = c.read_u32();
     if (version_ != 2 && version_ != 3) {
         throw std::runtime_error("不支持的 GGUF 版本: " + std::to_string(version_));
     }
 
-    const uint64_t tensor_count = read_u64(c);
-    const uint64_t metadata_kv_count = read_u64(c);
+    const uint64_t tensor_count = c.read_u64();
+    const uint64_t metadata_kv_count = c.read_u64();
 
     // 解析元数据 KV。
     for (uint64_t i = 0; i < metadata_kv_count; ++i) {
-        const std::string key = read_string(c);
-        const auto value_type = static_cast<GgufValueType>(read_u32(c));
-        metadata_[key] = read_value(c, value_type);
+        const std::string key = c.read_string();
+        const auto value_type = static_cast<GgufValueType>(c.read_u32());
+        metadata_map_[key] = c.read_value(value_type);
     }
 
     // 对齐：general.alignment（默认 32）。
-    if (metadata_.contains("general.alignment")) {
-        alignment_ = static_cast<uint32_t>(metadata_i64("general.alignment"));
+    if (metadata_map_.contains("general.alignment")) {
+        alignment_ = static_cast<uint32_t>(metadata<int64_t>("general.alignment"));
         if (alignment_ == 0) {
             alignment_ = 32;
         }
     }
 
+    struct ParsedTensor {
+        TensorView view;
+        uint64_t offset = 0;
+    };
+
     // 解析张量信息表（name / n_dims / dims / type / offset）。
-    tensors_.reserve(tensor_count);
+    std::vector<ParsedTensor> parsed_tensors;
+    parsed_tensors.reserve(tensor_count);
     for (uint64_t i = 0; i < tensor_count; ++i) {
-        GgufTensorInfo info;
-        info.view.name = read_string(c);
-        const uint32_t n_dims = read_u32(c);
-        info.dims.resize(n_dims);
+        ParsedTensor tensor;
+        tensor.view.name = c.read_string();
+        const uint32_t n_dims = c.read_u32();
+        std::vector<int64_t> dims(n_dims);
         for (uint32_t d = 0; d < n_dims; ++d) {
-            info.dims[d] = static_cast<int64_t>(read_u64(c));
+            dims[d] = static_cast<int64_t>(c.read_u64());
         }
-        info.type = static_cast<GgmlType>(read_u32(c));
-        info.offset = read_u64(c);
-        tensors_.push_back(std::move(info));
+        const GgmlType type = static_cast<GgmlType>(c.read_u32());
+        tensor.offset = c.read_u64();
+        tensor.view.shape.assign(dims.rbegin(), dims.rend());
+        tensor.view.dtype = gguf_type_to_dtype(type);
+        tensor.view.nbytes = type_nbytes(type, num_elements(dims));
+        parsed_tensors.push_back(std::move(tensor));
     }
 
     // 张量数据段起始 = 张量表结束位置，向上对齐到 alignment_。
-    size_t data_start = c.pos;
+    size_t data_start = c.pos();
     if (data_start % alignment_ != 0) {
         data_start += alignment_ - (data_start % alignment_);
     }
@@ -242,18 +230,17 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     }
     const uint8_t *data_base = data_ + data_start;
 
-    // 回填每个张量的数据指针与字节数，并建立名称索引。
-    for (size_t i = 0; i < tensors_.size(); ++i) {
-        GgufTensorInfo &t = tensors_[i];
-        t.view.shape.assign(t.dims.rbegin(), t.dims.rend());
-        t.view.dtype = gguf_type_to_dtype(t.type);
-        t.view.nbytes = type_nbytes(t.type, t.num_elements());
-        t.view.data = data_base + t.offset;
-        if (t.view.data + t.view.nbytes > data_ + size_) {
-            throw std::runtime_error("张量数据越界: " + t.view.name);
+    // 回填每个张量的数据指针。
+    tensors_.reserve(parsed_tensors.size());
+    for (ParsedTensor &tensor : parsed_tensors) {
+        tensor.view.data = data_base + tensor.offset;
+        if (tensor.view.data + tensor.view.nbytes > data_ + size_) {
+            throw std::runtime_error("张量数据越界: " + tensor.view.name);
         }
-        tensor_index_[t.view.name] = i;
+        tensors_.push_back(std::move(tensor.view));
     }
+
+    tokenizer_ = std::make_unique<GGUFTokenizer>(*this);
 }
 
 GgufFile::~GgufFile() {
@@ -272,82 +259,85 @@ void GgufFile::close() {
     size_ = 0;
 }
 
-uint8_t GgufFile::read_u8(Cursor &c) {
-    if (c.pos + 1 > c.size) {
-        throw std::runtime_error("GGUF 解析越界（u8）");
-    }
-    return c.base[c.pos++];
+Cursor::Cursor(const uint8_t *base, size_t size) : base_(base), size_(size) {
 }
 
-uint32_t GgufFile::read_u32(Cursor &c) {
-    if (c.pos + 4 > c.size) {
+uint8_t Cursor::read_u8() {
+    if (pos_ + 1 > size_) {
+        throw std::runtime_error("GGUF 解析越界（u8）");
+    }
+    return base_[pos_++];
+}
+
+uint32_t Cursor::read_u32() {
+    if (pos_ + 4 > size_) {
         throw std::runtime_error("GGUF 解析越界（u32）");
     }
     uint32_t v = 0;
     for (int i = 0; i < 4; ++i) {
-        v |= static_cast<uint32_t>(c.base[c.pos + i]) << (8 * i);
+        v |= static_cast<uint32_t>(base_[pos_ + i]) << (8 * i);
     }
-    c.pos += 4;
+    pos_ += 4;
     return v;
 }
 
-uint64_t GgufFile::read_u64(Cursor &c) {
-    if (c.pos + 8 > c.size) {
+uint64_t Cursor::read_u64() {
+    if (pos_ + 8 > size_) {
         throw std::runtime_error("GGUF 解析越界（u64）");
     }
     uint64_t v = 0;
     for (int i = 0; i < 8; ++i) {
-        v |= static_cast<uint64_t>(c.base[c.pos + i]) << (8 * i);
+        v |= static_cast<uint64_t>(base_[pos_ + i]) << (8 * i);
     }
-    c.pos += 8;
+    pos_ += 8;
     return v;
 }
 
-double GgufFile::read_f64_bits(Cursor &c, GgufValueType t) {
+double Cursor::read_f64_bits(GgufValueType t) {
     if (t == GgufValueType::FLOAT32) {
-        const uint32_t bits = read_u32(c);
+        const uint32_t bits = read_u32();
         float f;
         std::memcpy(&f, &bits, sizeof(f));
         return static_cast<double>(f);
     }
     // FLOAT64
-    const uint64_t bits = read_u64(c);
+    const uint64_t bits = read_u64();
     double d;
     std::memcpy(&d, &bits, sizeof(d));
     return d;
 }
 
-std::string GgufFile::read_string(Cursor &c) {
-    const uint64_t len = read_u64(c);
-    if (c.pos + len > c.size) {
+std::string Cursor::read_string() {
+    const uint64_t len = read_u64();
+    if (pos_ + len > size_) {
         throw std::runtime_error("GGUF 解析越界（string）");
     }
-    std::string s(reinterpret_cast<const char *>(c.base + c.pos), len);
-    c.pos += len;
+    std::string s(reinterpret_cast<const char *>(base_ + pos_), len);
+    pos_ += len;
     return s;
 }
 
-GgufValue GgufFile::read_value(Cursor &c, GgufValueType type) {
+GgufValue Cursor::read_value(GgufValueType type) {
     GgufValue v;
     v.type = type;
     switch (type) {
-        case GgufValueType::UINT8:  v.i64 = read_u8(c); break;
-        case GgufValueType::INT8:   v.i64 = static_cast<int8_t>(read_u8(c)); break;
-        case GgufValueType::UINT16: { uint32_t lo = read_u8(c), hi = read_u8(c); v.i64 = lo | (hi << 8); break; }
-        case GgufValueType::INT16:  { uint32_t lo = read_u8(c), hi = read_u8(c); v.i64 = static_cast<int16_t>(lo | (hi << 8)); break; }
-        case GgufValueType::UINT32: v.i64 = read_u32(c); break;
-        case GgufValueType::INT32:  v.i64 = static_cast<int32_t>(read_u32(c)); break;
-        case GgufValueType::UINT64: v.i64 = static_cast<int64_t>(read_u64(c)); break;
-        case GgufValueType::INT64:  v.i64 = static_cast<int64_t>(read_u64(c)); break;
-        case GgufValueType::FLOAT32: v.f64 = read_f64_bits(c, type); break;
-        case GgufValueType::FLOAT64: v.f64 = read_f64_bits(c, type); break;
-        case GgufValueType::BOOL:   v.boolean = (read_u8(c) != 0); break;
-        case GgufValueType::STRING: v.str = read_string(c); break;
+        case GgufValueType::UINT8:  v.i64 = read_u8(); break;
+        case GgufValueType::INT8:   v.i64 = static_cast<int8_t>(read_u8()); break;
+        case GgufValueType::UINT16: { uint32_t lo = read_u8(), hi = read_u8(); v.i64 = lo | (hi << 8); break; }
+        case GgufValueType::INT16:  { uint32_t lo = read_u8(), hi = read_u8(); v.i64 = static_cast<int16_t>(lo | (hi << 8)); break; }
+        case GgufValueType::UINT32: v.i64 = read_u32(); break;
+        case GgufValueType::INT32:  v.i64 = static_cast<int32_t>(read_u32()); break;
+        case GgufValueType::UINT64: v.i64 = static_cast<int64_t>(read_u64()); break;
+        case GgufValueType::INT64:  v.i64 = static_cast<int64_t>(read_u64()); break;
+        case GgufValueType::FLOAT32: v.f64 = read_f64_bits(type); break;
+        case GgufValueType::FLOAT64: v.f64 = read_f64_bits(type); break;
+        case GgufValueType::BOOL:   v.boolean = (read_u8() != 0); break;
+        case GgufValueType::STRING: v.str = read_string(); break;
         case GgufValueType::ARRAY: {
-            v.elem_type = static_cast<GgufValueType>(read_u32(c));
-            const uint64_t n = read_u64(c);
+            v.elem_type = static_cast<GgufValueType>(read_u32());
+            const uint64_t n = read_u64();
             for (uint64_t i = 0; i < n; ++i) {
-                GgufValue e = read_value(c, v.elem_type);
+                GgufValue e = read_value(v.elem_type);
                 switch (v.elem_type) {
                     case GgufValueType::STRING:  v.arr_str.push_back(std::move(e.str)); break;
                     case GgufValueType::FLOAT32:
@@ -372,44 +362,41 @@ size_t GgufFile::type_nbytes(GgmlType type, int64_t num_elements) {
     return static_cast<size_t>(num_elements / bt.block_size) * bt.type_size;
 }
 
-bool GgufFile::has_metadata(const std::string &key) const {
-    return metadata_.contains(key);
+bool GgufFile::contain_metadata(const std::string &key) const {
+    return metadata_map_.contains(key);
 }
 
-const GgufValue &GgufFile::metadata(const std::string &key) const {
-    auto it = metadata_.find(key);
-    if (it == metadata_.end()) {
+Metadata GgufFile::metadata_value(const std::string &key) const {
+    auto it = metadata_map_.find(key);
+    if (it == metadata_map_.end()) {
         throw std::runtime_error("GGUF 缺少元数据 key: " + key);
     }
-    return it->second;
-}
-
-int64_t GgufFile::metadata_i64(const std::string &key) const {
-    return metadata(key).i64;
-}
-
-float GgufFile::metadata_f32(const std::string &key) const {
-    return static_cast<float>(metadata(key).f64);
-}
-
-std::string GgufFile::metadata_str(const std::string &key) const {
-    return metadata(key).str;
-}
-
-bool GgufFile::metadata_bool(const std::string &key) const {
-    return metadata(key).boolean;
-}
-
-bool GgufFile::contains(const std::string &name) const {
-    return tensor_index_.contains(name);
-}
-
-const GgufTensorInfo &GgufFile::tensor_info(const std::string &name) const {
-    auto it = tensor_index_.find(name);
-    if (it == tensor_index_.end()) {
-        throw std::runtime_error("GGUF 缺少张量: " + name);
+    const GgufValue &value = it->second;
+    switch (value.type) {
+        case GgufValueType::FLOAT32:
+        case GgufValueType::FLOAT64:
+            return static_cast<float>(value.f64);
+        case GgufValueType::BOOL:
+            return value.boolean;
+        case GgufValueType::STRING:
+            return value.str;
+        case GgufValueType::ARRAY:
+            if (value.elem_type == GgufValueType::STRING) {
+                return value.arr_str;
+            }
+            return value.arr_i64;
+        default:
+            return value.i64;
     }
-    return tensors_[it->second];
+}
+
+bool GgufFile::contain_tensor_view(const std::string &name) const {
+    for (const TensorView &tensor : tensors_) {
+        if (tensor.name == name) {
+            return true;
+        }
+    }
+    return false;
 }
 
 DType GgufFile::gguf_type_to_dtype(GgmlType t) {
@@ -433,49 +420,68 @@ DType GgufFile::gguf_type_to_dtype(GgmlType t) {
     }
 }
 
-const TensorView &GgufFile::get(const std::string &name) const {
-    return tensor_info(name).view;
+const TensorView &GgufFile::get_tensor_view(const std::string &name) const {
+    for (const TensorView &tensor : tensors_) {
+        if (tensor.name == name) {
+            return tensor;
+        }
+    }
+    throw std::runtime_error("GGUF 缺少张量: " + name);
 }
 
-std::vector<std::string> GgufFile::names() const {
+std::vector<std::string> GgufFile::tensor_view_names() const {
     std::vector<std::string> names;
     names.reserve(tensors_.size());
-    for (const GgufTensorInfo &t : tensors_) {
-        names.push_back(t.view.name);
+    for (const TensorView &tensor : tensors_) {
+        names.push_back(tensor.name);
     }
     return names;
 }
 
-void GgufFile::DebugDump() const {
+std::vector<int> GgufFile::tokenizer_encode(const std::string &text) const {
+    if (!tokenizer_) {
+        throw std::runtime_error("GGUF tokenizer 尚未初始化");
+    }
+    return tokenizer_->encode(text);
+}
+
+std::string GgufFile::tokenizer_decode(const std::vector<int> &ids) const {
+    if (!tokenizer_) {
+        throw std::runtime_error("GGUF tokenizer 尚未初始化");
+    }
+    return tokenizer_->decode(ids);
+}
+
+void GgufFile::debug_dump() const {
     Log::debug("GGUF: " + path_.string());
     Log::debug("  version: " + std::to_string(version_));
     Log::debug("  alignment: " + std::to_string(alignment_));
-    Log::debug("  metadata_kv: " + std::to_string(metadata_.size()));
+    Log::debug("  metadata_kv: " + std::to_string(metadata_map_.size()));
     Log::debug("  tensors: " + std::to_string(tensors_.size()));
 
     // 全部元数据 KV（按 key 字典序，std::map 已有序）。
-    Log::debug("  === metadata (" + std::to_string(metadata_.size()) + ") ===");
-    for (const auto &[key, val] : metadata_) {
+    Log::debug("  === metadata (" + std::to_string(metadata_map_.size()) + ") ===");
+    for (const auto &[key, val] : metadata_map_) {
         Log::debug("    " + key + " : " + value_type_name(val.type) + " = " + value_to_string(val));
     }
 
-    // 张量量化类型直方图（先统计，放在张量列表之上做概览）。
-    std::map<GgmlType, size_t> type_hist;
-    for (const auto &t : tensors_) {
-        type_hist[t.type]++;
+    // 张量类型直方图（先统计，放在张量列表之上做概览）。
+    std::map<DType, size_t> type_hist;
+    for (const TensorView &tensor : tensors_) {
+        type_hist[tensor.dtype]++;
     }
     Log::debug("  === tensor type histogram ===");
     for (const auto &[type, count] : type_hist) {
-        Log::debug(std::string("    ") + ggml_type_name(type) + " : " + std::to_string(count));
+        Log::debug(std::string("    ") + dtype_name(type) + " : " + std::to_string(count));
     }
 
     // 全部张量元信息（不含权重数据段），按文件出现顺序。
     Log::debug("  === tensors (" + std::to_string(tensors_.size()) + ") ===");
-    for (const auto &t : tensors_) {
+    for (const TensorView &tensor : tensors_) {
         std::ostringstream os;
-        os << "    " << t.view.name << "  dims=" << dims_to_string(t.dims)
-           << " type=" << ggml_type_name(t.type) << " offset=" << t.offset
-           << " nbytes=" << t.view.nbytes;
+        os << "    " << tensor.name << "  shape=" << dims_to_string(tensor.shape)
+           << " dtype=" << dtype_name(tensor.dtype)
+           << " nbytes=" << tensor.nbytes;
         Log::debug(os.str());
     }
 }

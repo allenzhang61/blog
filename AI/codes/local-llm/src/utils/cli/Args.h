@@ -6,7 +6,7 @@
 #define LOCAL_LLM_ARGS_H
 #include <string>
 #include "backend/common.h"
-#include "llm/sampling/Sampler.h"
+#include "utils/sampling/Sampler.h"
 
 class Args {
 public:
@@ -25,7 +25,7 @@ public:
     std::string profile_dir = ".";
 
     Args(int argc, char **argv);
-    void DebugDump();
+    void debug_dump();
 };
 
 

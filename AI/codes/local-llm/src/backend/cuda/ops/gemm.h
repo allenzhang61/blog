@@ -24,7 +24,7 @@ class CudaWeight;
 // 得到 Y[out_dim,tokens]。计算精度固定 CUBLAS_COMPUTE_32F，输出恒为 CUDA_R_32F。
 //
 // 维度需显式传入：CudaWeight 只记录字节数与 dtype，不含 shape，
-// 调用方从 WeightData.shape 取 out_dim / in_dim。
+// 调用方从 TensorView.shape 取 out_dim / in_dim。
 // x_type 指明激活数据类型（CUDA_R_32F 或 CUDA_R_16BF / CUDA_R_16F）；
 // 权重类型取自 weight.type。
 

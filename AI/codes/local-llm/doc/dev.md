@@ -201,7 +201,38 @@ model.safetensors-00002-of-00002.safetensors
 /root/models/Qwen3.5-4B-Base
 ```
 
-### 7.1 从本地同步
+### 7.1 从互联网下载
+
+优先让 Vast 机器直接从模型仓库下载。这样通常比从本地电脑上传更快，也避免占用本地上行带宽。
+
+```bash
+pip3 install -U huggingface_hub
+mkdir -p /root/models
+huggingface-cli download Qwen/Qwen3.5-4B-Base \
+  --local-dir /root/models/Qwen3.5-4B-Base \
+  --local-dir-use-symlinks False
+```
+
+如果模型需要登录：
+
+```bash
+huggingface-cli login
+```
+
+下载后在远端检查：
+
+```bash
+ls -lh /root/models/Qwen3.5-4B-Base
+test -f /root/models/Qwen3.5-4B-Base/config.json
+test -f /root/models/Qwen3.5-4B-Base/tokenizer.json
+ls /root/models/Qwen3.5-4B-Base/*.safetensors
+```
+
+如果实际使用的不是公开仓库名 `Qwen/Qwen3.5-4B-Base`，把命令里的模型仓库替换成真实 repo id。
+
+### 7.2 从本地同步
+
+只有在远端不能访问模型仓库、模型不是公开仓库，或者下载速度明显慢于本地上传时，再从本地同步。
 
 如果本地已经有模型：
 
@@ -218,22 +249,6 @@ ls -lh /root/models/Qwen3.5-4B-Base
 test -f /root/models/Qwen3.5-4B-Base/config.json
 test -f /root/models/Qwen3.5-4B-Base/tokenizer.json
 ls /root/models/Qwen3.5-4B-Base/*.safetensors
-```
-
-### 7.2 从 HuggingFace 下载
-
-```bash
-pip3 install -U huggingface_hub
-mkdir -p /root/models
-huggingface-cli download Qwen/Qwen3.5-4B-Base \
-  --local-dir /root/models/Qwen3.5-4B-Base \
-  --local-dir-use-symlinks False
-```
-
-如果模型需要登录：
-
-```bash
-huggingface-cli login
 ```
 
 ## 八、运行
