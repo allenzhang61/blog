@@ -11,6 +11,9 @@
 
 // DeepSeek 前向的临时激活缓冲（grow-only，随 Session 存活，保证并发隔离）。
 struct DeepseekForwardScratch {
+    // embedding 输入 token id 的 device 暂存。
+    CudaScratchBuffer<int> input;
+
     // 主隐状态与归一化输出
     CudaScratchBuffer<float> hidden;       // [tokens, hidden]
     CudaScratchBuffer<float> normed;       // [tokens, hidden]
@@ -46,7 +49,7 @@ struct DeepseekForwardScratch {
     std::vector<float> h_logits;
 
     size_t total_bytes() const {
-        return hidden.bytes() + normed.bytes() + normed_lowp.bytes() +
+        return input.bytes() + hidden.bytes() + normed.bytes() + normed_lowp.bytes() +
                q.bytes() + kv_a.bytes() + latent_lowp.bytes() + kv_b_out.bytes() + attn.bytes() +
                attn_lowp.bytes() + attn_out.bytes() + ffn_in_lowp.bytes() + gate.bytes() + up.bytes() +
                act.bytes() + act_lowp.bytes() + ffn_out.bytes() + moe_out.bytes() +

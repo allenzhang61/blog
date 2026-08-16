@@ -45,43 +45,43 @@ DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &text_c
     }
 }
 
-void DecoderLayer::prefill(float *d_hidden, size_t tokens, QwenSession &session,
-                           QwenForwardScratch &scratch) {
-    const int hidden = text_config_.hidden_size;
-    const size_t n = tokens * static_cast<size_t>(hidden);
+void DecoderLayer::prefill(QwenSession &session, float *d_hidden, size_t input_size) {
+    QwenForwardScratch &scratch = session.scratch;
+    const int hidden_size = text_config_.hidden_size;
+    const size_t n = input_size * hidden_size;
 
     float *d_normed = scratch.token_hidden_a.ensure(n, "layer normed");
     float *d_attn = scratch.mixer_buffer.ensure(n, "layer attn out");
 
     // h = x + attn( input_norm(x) )
-    input_norm_.forward(d_hidden, d_normed, tokens, hidden, scratch);
+    input_norm_.forward(d_hidden, d_normed, input_size, hidden_size);
     if (is_full_) {
         static_cast<FullAttention *>(attn_.get())->prefill(
-            d_normed, d_attn, tokens, session.fullAttnKVCaches[type_index_], scratch);
+            d_normed, d_attn, input_size, session.fullAttnKVCaches[type_index_], scratch);
     } else {
         static_cast<LinearAttention *>(attn_.get())->prefill(
-            d_normed, d_attn, tokens, session.linearAttnRecurrentStates[type_index_], scratch);
+            d_normed, d_attn, input_size, session.linearAttnRecurrentStates[type_index_], scratch);
     }
     launch_add(d_hidden, d_attn, d_hidden, static_cast<int>(n), nullptr);
 
     // y = h + mlp( post_norm(h) )
     float *d_post = scratch.token_hidden_b.ensure(n, "layer post normed");
     float *d_mlp = scratch.mlp_out_buffer.ensure(n, "layer mlp out");
-    post_norm_.forward(d_hidden, d_post, tokens, hidden, scratch);
-    mlp_.forward(d_post, d_mlp, tokens, hidden, scratch);
+    post_norm_.forward(d_hidden, d_post, input_size, hidden_size);
+    mlp_.forward(d_post, d_mlp, input_size, hidden_size, scratch);
     launch_add(d_hidden, d_mlp, d_hidden, static_cast<int>(n), nullptr);
 
     check_cuda(cudaDeviceSynchronize(), "DecoderLayer prefill 同步失败");
 }
 
-void DecoderLayer::decode(float *d_hidden, int pos, QwenSession &session,
+void DecoderLayer::decode(QwenSession &session, float *d_hidden, int pos,
                           QwenForwardScratch &scratch) {
     const int hidden = text_config_.hidden_size;
 
     float *d_normed = scratch.token_hidden_a.ensure(hidden, "layer normed");
     float *d_attn = scratch.mixer_buffer.ensure(hidden, "layer attn out");
 
-    input_norm_.forward(d_hidden, d_normed, 1, hidden, scratch);
+    input_norm_.forward(d_hidden, d_normed, 1, hidden);
     if (is_full_) {
         static_cast<FullAttention *>(attn_.get())->decode(
             d_normed, d_attn, pos, session.fullAttnKVCaches[type_index_], scratch);
@@ -93,7 +93,7 @@ void DecoderLayer::decode(float *d_hidden, int pos, QwenSession &session,
 
     float *d_post = scratch.token_hidden_b.ensure(hidden, "layer post normed");
     float *d_mlp = scratch.mlp_out_buffer.ensure(hidden, "layer mlp out");
-    post_norm_.forward(d_hidden, d_post, 1, hidden, scratch);
+    post_norm_.forward(d_hidden, d_post, 1, hidden);
     mlp_.forward(d_post, d_mlp, 1, hidden, scratch);
     launch_add(d_hidden, d_mlp, d_hidden, hidden, nullptr);
 

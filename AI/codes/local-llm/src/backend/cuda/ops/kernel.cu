@@ -44,14 +44,14 @@ __global__ void silu_mul_kernel(const float *gate, const float *up, float *out, 
 // ---- Embedding ----
 
 // 每个 block 负责一个 token 的一行拷贝。
-__global__ void embedding_lookup_kernel(const uint16_t *table, const int *token_ids,
-                                        float *output, int vocab, int hidden, int lowp_type) {
-    int token = blockIdx.x;
-    int id = token_ids[token];
-    if (id < 0 || id >= vocab) id = 0;
-    const uint16_t *row = table + static_cast<size_t>(id) * hidden;
-    float *dst = output + static_cast<size_t>(token) * hidden;
-    for (int j = threadIdx.x; j < hidden; j += blockDim.x) {
+__global__ void embedding_lookup_kernel(const int *input, float *output, const uint16_t *table,
+                                        int vocab_size, int hidden_size, int lowp_type) {
+    int i = blockIdx.x;
+    int id = input[i];
+    if (id < 0 || id >= vocab_size) id = 0;
+    const uint16_t *row = table + static_cast<size_t>(id) * hidden_size;
+    float *dst = output + static_cast<size_t>(i) * hidden_size;
+    for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
         dst[j] = lowp_to_float(row[j], lowp_type);
     }
 }

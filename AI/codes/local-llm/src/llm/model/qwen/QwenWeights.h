@@ -13,40 +13,40 @@ class QwenConfig;
 
 // linear attention 层一次性解析好的权重引用。
 struct LinearAttnWeights {
-    TensorView in_proj_qkv;
-    TensorView in_proj_z;
-    TensorView in_proj_b;
-    TensorView in_proj_a;
-    TensorView conv1d;
-    TensorView a_log;
-    TensorView dt_bias;
-    TensorView norm;
-    TensorView out_proj;
+    MFTensorView in_proj_qkv;
+    MFTensorView in_proj_z;
+    MFTensorView in_proj_b;
+    MFTensorView in_proj_a;
+    MFTensorView conv1d;
+    MFTensorView a_log;
+    MFTensorView dt_bias;
+    MFTensorView norm;
+    MFTensorView out_proj;
 };
 
 // full attention 层一次性解析好的权重引用。
 struct FullAttnWeights {
-    TensorView q_proj;
-    TensorView k_proj;
-    TensorView v_proj;
-    TensorView q_norm;
-    TensorView k_norm;
-    TensorView o_proj;
+    MFTensorView q_proj;
+    MFTensorView k_proj;
+    MFTensorView v_proj;
+    MFTensorView q_norm;
+    MFTensorView k_norm;
+    MFTensorView o_proj;
 };
 
 // MLP 层一次性解析好的权重引用。
 struct MlpWeights {
-    TensorView gate;
-    TensorView up;
-    TensorView down;
+    MFTensorView gate;
+    MFTensorView up;
+    MFTensorView down;
 };
 
 // 单个 transformer 层解析好的权重引用集合。
 struct LayerWeights {
     // 层类型："linear_attention" 或 "full_attention"。
     std::string type;
-    TensorView input_norm;
-    TensorView post_norm;
+    MFTensorView input_norm;
+    MFTensorView post_norm;
     // 仅 linear_attention 层有效。
     LinearAttnWeights lin;
     // 仅 full_attention 层有效。
@@ -56,55 +56,55 @@ struct LayerWeights {
 
 // 视觉塔单个 transformer block 的权重引用；当前未使用（纯文本推理不走视觉分支）。
 struct VisionBlockWeights {
-    TensorView norm1_weight;
-    TensorView norm1_bias;
-    TensorView norm2_weight;
-    TensorView norm2_bias;
-    TensorView attn_qkv_weight;
-    TensorView attn_qkv_bias;
-    TensorView attn_proj_weight;
-    TensorView attn_proj_bias;
-    TensorView mlp_fc1_weight;
-    TensorView mlp_fc1_bias;
-    TensorView mlp_fc2_weight;
-    TensorView mlp_fc2_bias;
+    MFTensorView norm1_weight;
+    MFTensorView norm1_bias;
+    MFTensorView norm2_weight;
+    MFTensorView norm2_bias;
+    MFTensorView attn_qkv_weight;
+    MFTensorView attn_qkv_bias;
+    MFTensorView attn_proj_weight;
+    MFTensorView attn_proj_bias;
+    MFTensorView mlp_fc1_weight;
+    MFTensorView mlp_fc1_bias;
+    MFTensorView mlp_fc2_weight;
+    MFTensorView mlp_fc2_bias;
 };
 
 // 视觉塔（model.visual.*）解析好的权重引用集合；当前未使用。
 struct VisionWeights {
-    TensorView patch_embed_proj_weight;
-    TensorView patch_embed_proj_bias;
-    TensorView pos_embed_weight;
+    MFTensorView patch_embed_proj_weight;
+    MFTensorView patch_embed_proj_bias;
+    MFTensorView pos_embed_weight;
     std::vector<VisionBlockWeights> blocks;
-    TensorView merger_norm_weight;
-    TensorView merger_norm_bias;
-    TensorView merger_fc1_weight;
-    TensorView merger_fc1_bias;
-    TensorView merger_fc2_weight;
-    TensorView merger_fc2_bias;
+    MFTensorView merger_norm_weight;
+    MFTensorView merger_norm_bias;
+    MFTensorView merger_fc1_weight;
+    MFTensorView merger_fc1_bias;
+    MFTensorView merger_fc2_weight;
+    MFTensorView merger_fc2_bias;
 };
 
 // MTP（多 token 预测）单层权重引用；当前未使用。
 struct MtpLayerWeights {
-    TensorView input_norm;
-    TensorView post_norm;
-    TensorView self_attn_q_proj;
-    TensorView self_attn_k_proj;
-    TensorView self_attn_v_proj;
-    TensorView self_attn_o_proj;
-    TensorView self_attn_q_norm;
-    TensorView self_attn_k_norm;
-    TensorView mlp_gate;
-    TensorView mlp_up;
-    TensorView mlp_down;
+    MFTensorView input_norm;
+    MFTensorView post_norm;
+    MFTensorView self_attn_q_proj;
+    MFTensorView self_attn_k_proj;
+    MFTensorView self_attn_v_proj;
+    MFTensorView self_attn_o_proj;
+    MFTensorView self_attn_q_norm;
+    MFTensorView self_attn_k_norm;
+    MFTensorView mlp_gate;
+    MFTensorView mlp_up;
+    MFTensorView mlp_down;
 };
 
 // MTP（mtp.*）解析好的权重引用集合；当前未使用。
 struct MtpWeights {
-    TensorView fc_weight;
-    TensorView norm_weight;
-    TensorView pre_fc_norm_embedding_weight;
-    TensorView pre_fc_norm_hidden_weight;
+    MFTensorView fc_weight;
+    MFTensorView norm_weight;
+    MFTensorView pre_fc_norm_embedding_weight;
+    MFTensorView pre_fc_norm_hidden_weight;
     std::vector<MtpLayerWeights> layers;
 };
 
@@ -114,8 +114,8 @@ public:
 
     void DebugDump();
 
-    TensorView embed_tokens;
-    TensorView final_norm;
+    MFTensorView embed_tokens;
+    MFTensorView final_norm;
     std::vector<LayerWeights> layers;
 
     // 视觉塔权重（model.visual.*）；已解析但当前未使用（纯文本推理不走视觉分支）。
@@ -127,8 +127,8 @@ private:
     // 外部持有的模型文件；QwenWeights 不负责打开/关闭模型文件。
     const MF &mf_;
 
-    // 校验 Qwen3.5 推理路径需要的 tensor 是否齐全。
-    void validate_qwen_tensors(int num_hidden_layers, const std::vector<std::string> &layer_types) const;
+    // 校验 Qwen3.5 推理路径需要的 tensor 是否齐全，且关键 shape 与 config 一致。
+    void validate(const QwenConfig &config) const;
 
     // 解析视觉塔（model.visual.*）权重到 this->vision；当前未使用。
     void parse_vision_weights(const QwenConfig &config);

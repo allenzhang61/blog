@@ -30,10 +30,10 @@ public:
                  size_t layer_index);
 
     // prefill：处理整段输入 [tokens, hidden_size]，原位更新隐状态。
-    void prefill(float *d_hidden, size_t tokens, QwenSession &session, QwenForwardScratch &scratch);
+    void prefill(QwenSession &session, float *d_hidden, size_t input_size);
 
     // decode：处理位置 pos 的单个 token [1, hidden_size]，原位更新隐状态。
-    void decode(float *d_hidden, int pos, QwenSession &session, QwenForwardScratch &scratch);
+    void decode(QwenSession &session, float *d_hidden, int pos, QwenForwardScratch &scratch);
 
     // 是否为 full_attention 层（否则为 linear_attention）。
     bool is_full_attention() const { return is_full_; }

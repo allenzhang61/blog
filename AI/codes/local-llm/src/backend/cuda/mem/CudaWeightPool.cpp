@@ -80,7 +80,7 @@ size_t CudaWeightPool::cache_limit_bytes() {
     return static_cast<size_t>(gb * 1024.0 * 1024.0 * 1024.0);
 }
 
-cudaDataType_t CudaWeightPool::cuda_type_for(const TensorView &weight) {
+cudaDataType_t CudaWeightPool::cuda_type_for(const MFTensorView &weight) {
     const DType dtype = weight.dtype;
     if (dtype == DType::BF16) {
         return CUDA_R_16BF;
@@ -98,7 +98,7 @@ cudaDataType_t CudaWeightPool::cuda_type_for(const TensorView &weight) {
                              " tensor=" + weight.name);
 }
 
-size_t CudaWeightPool::dtype_size_for(const TensorView &weight) {
+size_t CudaWeightPool::dtype_size_for(const MFTensorView &weight) {
     const DType dtype = weight.dtype;
     if (dtype == DType::BF16 || dtype == DType::F16) {
         return sizeof(uint16_t);
@@ -120,7 +120,7 @@ CudaWeightPool::~CudaWeightPool() {
     }
 }
 
-CudaWeight *CudaWeightPool::cached_weight(const TensorView &weight) {
+CudaWeight *CudaWeightPool::cached_weight(const MFTensorView &weight) {
     auto found = items_.find(weight.name);
     if (found != items_.end()) {
         return &found->second;

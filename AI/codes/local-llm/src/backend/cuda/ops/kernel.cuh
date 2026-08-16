@@ -24,8 +24,8 @@ void launch_silu_mul(const float *gate, const float *up, float *out, int n, void
 
 // ---- Embedding ----
 // 批量查表：按 token_ids 从低精度权重表 [vocab, hidden] 取行转 float 到 output[tokens, hidden]。
-void launch_embedding_lookup(const uint16_t *table, const int *token_ids, float *output,
-                             int tokens, int vocab, int hidden, int lowp_type, void *stream);
+void launch_embedding_lookup(const int *input, float *output, const uint16_t *table,
+                             int input_size, int vocab_size, int hidden_size, int lowp_type, void *stream);
 
 // ---- RMSNorm ----
 // weight_type 指明 norm 权重（gamma）的 dtype：0=bf16，1=f16，2=f32。

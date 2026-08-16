@@ -54,7 +54,7 @@ public:
 
     // 本次请求前向过程的临时激活暂存区（grow-only 复用），随 Session 存活。
     // 放在 Session 内保证并发请求间天然隔离：每个请求独享一份，互不覆盖。
-    QwenForwardScratch forwardScratch;
+    QwenForwardScratch scratch;
 
     // 本次请求的最大序列长度（prefill 输入 + 最大生成）。
     size_t max_seq_len = 0;
@@ -64,7 +64,7 @@ public:
     // recurrent / conv state 之和（随 max_seq_len 增长）。
     size_t kv_state_bytes() const override;
     // 前向临时激活峰值字节数：forwardScratch 各 buffer 之和。
-    size_t scratch_bytes() const override { return forwardScratch.total_bytes(); }
+    size_t scratch_bytes() const override { return scratch.total_bytes(); }
 };
 
 

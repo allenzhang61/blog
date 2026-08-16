@@ -20,7 +20,7 @@ class Sampler;
 class LMHead : public Module {
 public:
     // weight：复用的 embed_tokens 权重（tie）；pool：device 权重缓存。
-    LMHead(const TensorView &weight, CudaWeightPool *pool);
+    LMHead(const MFTensorView &weight, CudaWeightPool *pool);
 
     // 对单行隐状态 [1, hidden_size] 计算 logits，拷回 host 后交由 sampler 采样，
     // 返回下一个 token id。prev_tokens 供重复惩罚使用（可为空）。
@@ -29,7 +29,7 @@ public:
                 Sampler &sampler, const std::vector<int> &prev_tokens);
 
 private:
-    const TensorView &weight_;
+    const MFTensorView &weight_;
     CudaWeightPool *pool_ = nullptr;
 };
 

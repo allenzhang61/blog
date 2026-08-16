@@ -17,6 +17,7 @@ project(local_llm LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # 目标架构：RTX A4000 为 sm_86。可用 -DCMAKE_CUDA_ARCHITECTURES=xx 覆盖。
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 86)
@@ -55,6 +56,7 @@ add_executable(local_llm main.cpp
         src/backend/cuda/ops/gemm.h
         src/format/gguf/GgufFile.cpp
         src/format/gguf/GgufFile.h
+        src/format/MF.cpp
         src/format/MF.h
         src/format/MFFactory.cpp
         src/format/MFFactory.h
@@ -68,10 +70,10 @@ add_executable(local_llm main.cpp
         src/llm/model/ModelFactory.h
         src/utils/sampling/Sampler.cpp
         src/utils/sampling/Sampler.h
+        src/llm/module/common/Embedding.cpp
+        src/llm/module/common/Embedding.h
         src/llm/module/qwen/RMSNorm.cpp
         src/llm/module/qwen/RMSNorm.h
-        src/llm/module/qwen/Embedding.cpp
-        src/llm/module/qwen/Embedding.h
         src/llm/module/qwen/SwiGLUMlp.cpp
         src/llm/module/qwen/SwiGLUMlp.h
         src/llm/module/qwen/LMHead.cpp
@@ -93,8 +95,8 @@ add_executable(local_llm main.cpp
         src/llm/model/deepseek/DeepseekWeights.h
         src/format/gguf/GGUFTokenizer.cpp
         src/format/gguf/GGUFTokenizer.h
-        src/llm/module/deepseek/Forward.cpp
-        src/llm/module/deepseek/Forward.h
+        src/llm/module/deepseek/RMSNorm.cpp
+        src/llm/module/deepseek/RMSNorm.h
         src/llm/module/deepseek/DenseFFN.cpp
         src/llm/module/deepseek/DenseFFN.h
         src/llm/module/deepseek/MLA.cpp
@@ -123,6 +125,7 @@ add_executable(local_llm main.cpp
         src/utils/stats/DeviceMonitor.h
         src/utils/stats/WeightLoadTracker.cpp
         src/utils/stats/WeightLoadTracker.h
+        src/llm/module/common/Embedding.cpp
 )
 
 target_include_directories(local_llm PRIVATE src)
@@ -149,36 +152,59 @@ target_compile_definitions(local_llm PRIVATE PCRE2_CODE_UNIT_WIDTH=8)
 target_include_directories(local_llm PRIVATE ${PCRE2_INCLUDE_DIR} ${UTF8PROC_INCLUDE_DIR})
 target_link_libraries(local_llm PRIVATE ${PCRE2_LIBRARY} ${UTF8PROC_LIBRARY})
 
-# CUDA：project() 已启用 CUDA 语言，.cu kernel 由 nvcc 编译。
-# 这里再补上 cuBLAS 的头文件与链接库路径（cudart 由 CUDA 工具链自动链接，
-# 但显式链接更稳妥）。允许通过 -DCUDA_TOOLKIT_ROOT_DIR=/path 覆盖探测位置。
-find_path(CUDA_INCLUDE_DIR NAMES cublas_v2.h cuda_runtime.h
-        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
-        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
-        PATH_SUFFIXES include targets/x86_64-linux/include)
-find_library(CUDART_LIBRARY NAMES cudart
-        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
-        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
-        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib)
-find_library(CUBLAS_LIBRARY NAMES cublas
-        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
-        PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
-        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib)
-
-if(NOT CUDA_INCLUDE_DIR OR NOT CUDART_LIBRARY OR NOT CUBLAS_LIBRARY)
-    message(FATAL_ERROR "未找到 CUDA toolkit（cublas_v2.h / libcudart / libcublas）。可用 -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda 指定")
+# CUDA：project() 已启用 CUDA 语言，.cu kernel 由 nvcc 编译。这里使用 CMake 官方
+# CUDAToolkit 包导出 include 目录和 imported targets，CLion 的 code model 识别更稳定。
+# 兼容旧参数 -DCUDA_TOOLKIT_ROOT_DIR=/path，同时允许 CMake 原生 -DCUDAToolkit_ROOT=/path。
+if(DEFINED CUDA_TOOLKIT_ROOT_DIR AND NOT DEFINED CUDAToolkit_ROOT)
+    set(CUDAToolkit_ROOT "${CUDA_TOOLKIT_ROOT_DIR}")
 endif()
+find_package(CUDAToolkit REQUIRED)
 
-target_include_directories(local_llm PRIVATE ${CUDA_INCLUDE_DIR})
-target_link_libraries(local_llm PRIVATE ${CUDART_LIBRARY} ${CUBLAS_LIBRARY})
+target_include_directories(local_llm SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+target_link_libraries(local_llm PRIVATE CUDA::cudart CUDA::cublas)
 
 # NVML（libnvidia-ml）：DeviceMonitor 用于采样 GPU 利用率 / 带宽 / 功耗 / 温度。
 # nvml.h 随 CUDA toolkit 提供；运行库 libnvidia-ml 随驱动安装（stubs 也可链接）。
 find_library(NVML_LIBRARY NAMES nvidia-ml
-        HINTS ${CUDA_TOOLKIT_ROOT_DIR}
+        HINTS ${CUDA_TOOLKIT_ROOT_DIR} ${CUDAToolkit_ROOT}
         PATHS /usr/local/cuda /usr/local/cuda-12 /usr/local/cuda-12.8 /usr/local/cuda-12.4
         PATH_SUFFIXES lib64 lib lib64/stubs lib/stubs targets/x86_64-linux/lib targets/x86_64-linux/lib/stubs)
 if(NOT NVML_LIBRARY)
     message(FATAL_ERROR "未找到 NVML（libnvidia-ml）。可用 -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda 指定，或安装 NVIDIA 驱动")
 endif()
 target_link_libraries(local_llm PRIVATE ${NVML_LIBRARY})
+
+option(LOCAL_LLM_BUILD_TESTS "Build local-llm tests" ON)
+
+if(LOCAL_LLM_BUILD_TESTS)
+    include(CTest)
+    include(FetchContent)
+
+    find_package(GTest QUIET)
+    if(NOT GTest_FOUND)
+        FetchContent_Declare(
+                googletest
+                URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+        )
+        FetchContent_MakeAvailable(googletest)
+    endif()
+
+    add_executable(local_llm_tests
+            test/LaunchAddTest.cpp
+            src/backend/cuda/ops/kernel.cu
+            src/backend/cuda/ops/kernel.cuh
+            src/backend/cuda/ops/kernel_internal.cuh
+            src/backend/cuda/ops/launch.cu
+            src/utils/stats/Profiler.cpp
+            src/utils/stats/Profiler.h
+            src/utils/stats/ScopedTimer.cpp
+            src/utils/stats/ScopedTimer.h
+    )
+
+    target_include_directories(local_llm_tests SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    target_include_directories(local_llm_tests PRIVATE src)
+    target_link_libraries(local_llm_tests PRIVATE GTest::gtest_main CUDA::cudart)
+
+    include(GoogleTest)
+    gtest_discover_tests(local_llm_tests)
+endif()

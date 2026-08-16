@@ -135,7 +135,7 @@ void HFFile::parse_shard_header(size_t shard_index) {
         if (data_begin > data_end || data_end > shard.size) {
             throw std::runtime_error("tensor data_offsets 越界：" + name);
         }
-        TensorView view;
+        MFTensorView view;
         view.name = name;
         view.shape = shape; // safetensors 本就是行主序 [out, in]
         view.dtype = dtype_from_string(dtype);
@@ -206,7 +206,7 @@ bool HFFile::contain_tensor_view(const std::string &name) const {
     return views_.contains(name);
 }
 
-const TensorView &HFFile::get_tensor_view(const std::string &name) const {
+const MFTensorView &HFFile::get_tensor_view(const std::string &name) const {
     auto it = views_.find(name);
     if (it == views_.end()) {
         throw std::runtime_error("HFFile 缺少张量：" + name);

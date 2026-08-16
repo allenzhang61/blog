@@ -5,6 +5,7 @@
 #ifndef LOCAL_LLM_CUDA_COMMON_H
 #define LOCAL_LLM_CUDA_COMMON_H
 
+#include <cstddef>
 #include <string>
 
 #include <cublas_v2.h>
@@ -15,5 +16,17 @@ void check_cuda(cudaError_t status, const std::string &what);
 
 // 检查 cuBLAS API 返回值，失败时附带上下文信息抛异常。
 void check_cublas(cublasStatus_t status, const std::string &what);
+
+// Host -> Device 拷贝，调用方不需要直接依赖 CUDA runtime 枚举。
+void cuda_memcpy_h2d(void *dst, const void *src, size_t bytes, const std::string &what);
+
+// Device -> Host 拷贝，调用方不需要直接依赖 CUDA runtime 枚举。
+void cuda_memcpy_d2h(void *dst, const void *src, size_t bytes, const std::string &what);
+
+// 分配 device 内存，失败时抛异常。
+void *cuda_malloc_device(size_t bytes, const std::string &what);
+
+// 释放 device 内存；用于析构 / reset 路径，不向外抛异常。
+void cuda_free_device(void *ptr);
 
 #endif // LOCAL_LLM_CUDA_COMMON_H

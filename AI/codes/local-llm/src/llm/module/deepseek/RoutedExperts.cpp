@@ -18,7 +18,7 @@
 
 namespace {
 
-int64_t tensor_elements(const TensorView &tensor) {
+int64_t tensor_elements(const MFTensorView &tensor) {
     int64_t n = 1;
     for (int64_t dim : tensor.shape) {
         n *= dim;
@@ -26,11 +26,11 @@ int64_t tensor_elements(const TensorView &tensor) {
     return n;
 }
 
-TensorView expert_tensor_view(const TensorView &weight, int expert, int n_experts) {
+MFTensorView expert_tensor_view(const MFTensorView &weight, int expert, int n_experts) {
     const int64_t n_per_expert = tensor_elements(weight) / n_experts;
     const size_t bytes_per_expert = weight.nbytes / static_cast<size_t>(n_experts);
 
-    TensorView view = weight;
+    MFTensorView view = weight;
     view.name = weight.name + ".e" + std::to_string(expert);
     view.shape = {n_per_expert};
     view.data = weight.data + static_cast<size_t>(expert) * bytes_per_expert;
@@ -64,16 +64,16 @@ void RoutedExperts::forward(DeepseekSession &session, const DeepseekLayerWeights
             const size_t route_idx = static_cast<size_t>(tok) * k + r;
             const int e = route.expert_ids[route_idx];
             const float w = route.weights[route_idx];
-            TensorView gate = expert_tensor_view(*weights.ffn_gate_exps, e, n_exp);
+            MFTensorView gate = expert_tensor_view(*weights.ffn_gate_exps, e, n_exp);
             CudaWeight wg = pool_->cached_weight(gate)->try_dequant();
             to_weight_lowp(tok_in, xlow, H, wg, nullptr);
             gemm_weight(pool_->handle, wg, ffn, H, xlow, wg.type, 1, d_gate, "ds.gemm.egate");
-            TensorView up = expert_tensor_view(*weights.ffn_up_exps, e, n_exp);
+            MFTensorView up = expert_tensor_view(*weights.ffn_up_exps, e, n_exp);
             CudaWeight wu = pool_->cached_weight(up)->try_dequant();
             to_weight_lowp(tok_in, xlow, H, wu, nullptr);
             gemm_weight(pool_->handle, wu, ffn, H, xlow, wu.type, 1, d_up, "ds.gemm.eup");
             launch_silu_mul(d_gate, d_up, d_act, ffn, nullptr);
-            TensorView down = expert_tensor_view(*weights.ffn_down_exps, e, n_exp);
+            MFTensorView down = expert_tensor_view(*weights.ffn_down_exps, e, n_exp);
             CudaWeight wd = pool_->cached_weight(down)->try_dequant();
             to_weight_lowp(d_act, alow, ffn, wd, nullptr);
             gemm_weight(pool_->handle, wd, H, ffn, alow, wd.type, 1, d_eout, "ds.gemm.edown");

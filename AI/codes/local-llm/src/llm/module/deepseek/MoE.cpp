@@ -10,28 +10,29 @@
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
+#include "llm/module/deepseek/RMSNorm.h"
 
 #include <cstddef>
 
 #include <cuda_runtime.h>
 
-MoE::MoE(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool)
+MoE::MoE(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool,
+         deepseek::RMSNorm *rms_norm)
     : config_(config),
       weights_(weights),
       pool_(pool),
+      rms_norm_(rms_norm),
       router_(config, pool),
       routed_experts_(config, pool),
       shared_experts_(config, pool) {}
 
-void MoE::forward(DeepseekSession &session, int layer, int tokens) {
+void MoE::forward(DeepseekSession &session, int layer, float *d_hidden, int tokens) {
     auto &s = session.scratch;
     const DeepseekLayerWeights &lw = weights_.layers[layer];
     const int H = config_.hidden_size;
 
     float *d_normed = s.normed.ensure(static_cast<size_t>(tokens) * H, "ds.normed");
-    CudaWeight *ffn_norm = pool_->cached_weight(*lw.ffn_norm);
-    launch_rms_norm(s.hidden, ffn_norm->ptr, 2, d_normed, tokens, H,
-                    config_.rms_norm_eps, false, nullptr);
+    rms_norm_->forward(*lw.ffn_norm, d_hidden, d_normed, tokens, H);
 
     MoERoute route = router_.forward(session, lw, d_normed, tokens);
 
@@ -41,5 +42,5 @@ void MoE::forward(DeepseekSession &session, int layer, int tokens) {
     routed_experts_.forward(session, lw, d_normed, route, tokens, d_moe);
     shared_experts_.forward(session, lw, d_normed, tokens, d_moe);
 
-    launch_add(s.hidden, d_moe, s.hidden, tokens * H, nullptr);
+    launch_add(d_hidden, d_moe, d_hidden, tokens * H, nullptr);
 }

@@ -197,7 +197,7 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     }
 
     struct ParsedTensor {
-        TensorView view;
+        MFTensorView view;
         uint64_t offset = 0;
     };
 
@@ -391,7 +391,7 @@ Metadata GgufFile::metadata_value(const std::string &key) const {
 }
 
 bool GgufFile::contain_tensor_view(const std::string &name) const {
-    for (const TensorView &tensor : tensors_) {
+    for (const MFTensorView &tensor : tensors_) {
         if (tensor.name == name) {
             return true;
         }
@@ -420,8 +420,8 @@ DType GgufFile::gguf_type_to_dtype(GgmlType t) {
     }
 }
 
-const TensorView &GgufFile::get_tensor_view(const std::string &name) const {
-    for (const TensorView &tensor : tensors_) {
+const MFTensorView &GgufFile::get_tensor_view(const std::string &name) const {
+    for (const MFTensorView &tensor : tensors_) {
         if (tensor.name == name) {
             return tensor;
         }
@@ -432,7 +432,7 @@ const TensorView &GgufFile::get_tensor_view(const std::string &name) const {
 std::vector<std::string> GgufFile::tensor_view_names() const {
     std::vector<std::string> names;
     names.reserve(tensors_.size());
-    for (const TensorView &tensor : tensors_) {
+    for (const MFTensorView &tensor : tensors_) {
         names.push_back(tensor.name);
     }
     return names;
@@ -467,7 +467,7 @@ void GgufFile::debug_dump() const {
 
     // 张量类型直方图（先统计，放在张量列表之上做概览）。
     std::map<DType, size_t> type_hist;
-    for (const TensorView &tensor : tensors_) {
+    for (const MFTensorView &tensor : tensors_) {
         type_hist[tensor.dtype]++;
     }
     Log::debug("  === tensor type histogram ===");
@@ -477,7 +477,7 @@ void GgufFile::debug_dump() const {
 
     // 全部张量元信息（不含权重数据段），按文件出现顺序。
     Log::debug("  === tensors (" + std::to_string(tensors_.size()) + ") ===");
-    for (const TensorView &tensor : tensors_) {
+    for (const MFTensorView &tensor : tensors_) {
         std::ostringstream os;
         os << "    " << tensor.name << "  shape=" << dims_to_string(tensor.shape)
            << " dtype=" << dtype_name(tensor.dtype)

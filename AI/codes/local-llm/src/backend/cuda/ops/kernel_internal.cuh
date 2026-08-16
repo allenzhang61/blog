@@ -20,8 +20,8 @@ inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 // ---- 逐元素 / Embedding / Norm ----
 __global__ void add_kernel(const float *a, const float *b, float *out, int n);
 __global__ void silu_mul_kernel(const float *gate, const float *up, float *out, int n);
-__global__ void embedding_lookup_kernel(const uint16_t *table, const int *token_ids,
-                                        float *output, int vocab, int hidden, int lowp_type);
+__global__ void embedding_lookup_kernel(const int *input, float *output, const uint16_t *table,
+                                        int vocab_size, int hidden_size, int lowp_type);
 __global__ void rms_norm_kernel(const float *input, const void *weight, int weight_type,
                                 float *output, int hidden, float eps, bool one_plus);
 

@@ -82,12 +82,12 @@ public:
     // MLP 子层输出缓存。
     CudaScratchBuffer<float> mlp_out_buffer;
     // 完整 transformer layer 输出缓存。
-    CudaScratchBuffer<float> layer_out_buffer;
+    CudaScratchBuffer<float> hidden;
     // token hidden 双缓冲，用于 decode 层间传递。
     CudaScratchBuffer<float> token_hidden_a;
     CudaScratchBuffer<float> token_hidden_b;
     // embedding 输入 token id 的 device 暂存。
-    CudaScratchBuffer<int> inputs;
+    CudaScratchBuffer<int> input;
     // ---- host 端采样 ----
     // logits 从 device 拷回 host 的暂存（长度 vocab），供 Sampler 做温度/top-k/
     // top-p/重复惩罚。不计入 device 显存统计。
@@ -102,8 +102,8 @@ public:
                input_lowp_buffer.bytes() + y_buffer.bytes() + gate_buffer.bytes() +
                up_buffer.bytes() + prod_buffer.bytes() +
                prod_lowp_buffer.bytes() + mixer_buffer.bytes() + mlp_out_buffer.bytes() +
-               layer_out_buffer.bytes() + token_hidden_a.bytes() + token_hidden_b.bytes() +
-               inputs.bytes();
+               hidden.bytes() + token_hidden_a.bytes() + token_hidden_b.bytes() +
+               input.bytes();
     }
 };
 

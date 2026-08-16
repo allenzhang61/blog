@@ -15,16 +15,22 @@ class DeepseekConfig;
 class DeepseekSession;
 class DeepseekWeights;
 
+namespace deepseek {
+class RMSNorm;
+}
+
 class MoE : public Module {
 public:
-    MoE(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool);
+    MoE(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool,
+        deepseek::RMSNorm *rms_norm);
 
-    void forward(DeepseekSession &session, int layer, int tokens);
+    void forward(DeepseekSession &session, int layer, float *d_hidden, int tokens);
 
 private:
     const DeepseekConfig &config_;
     const DeepseekWeights &weights_;
     CudaWeightPool *pool_ = nullptr;
+    deepseek::RMSNorm *rms_norm_ = nullptr;
     MoERouter router_;
     RoutedExperts routed_experts_;
     SharedExperts shared_experts_;

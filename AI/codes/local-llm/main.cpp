@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
                                                     args.max_output_tokens, args.sampling);
     CudaWeightPool &pool = global_cuda_weight_pool();
 
-    std::vector<int> inputs = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
+    std::vector<int> input = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
     const int eos = model->eos_token_id();
 
     // 性能采集：仅 --profile 时开启，所有埋点否则零开销。
@@ -54,8 +54,8 @@ int main(int argc, char **argv) {
     // 初始化与 kernel 首次启动，避免首步冷启动污染稳态计时。
     // BaseModel::prefill 每次会重建内部 session，因此 warmup 与正式跑天然隔离。
     {
-        int wnext = model->prefill(inputs);
-        int wpos = static_cast<int>(inputs.size());
+        int wnext = model->prefill(input);
+        int wpos = static_cast<int>(input.size());
         for (int i = 0; i < 4 && wnext != eos; ++i) {
             model->append_output(wnext);
             wnext = model->decode(wnext, wpos);
@@ -73,14 +73,14 @@ int main(int argc, char **argv) {
     int next;
     {
         ScopedCpuTimer t("prefill");
-        next = model->prefill(inputs);
+        next = model->prefill(input);
     }
     if (args.profile) {
         mem_reporter.sample(pool, model->memory_usage(), "prefill");
     }
 
     // decode：从 prompt 之后的位置开始逐 token 生成。
-    int pos = static_cast<int>(inputs.size());
+    int pos = static_cast<int>(input.size());
     int decode_tokens = 0;
     // 基础墙钟计时：与 profile 埋点无关，无 CUDA 同步、无落盘，恒定开销可忽略。
     const auto decode_wall_start = std::chrono::steady_clock::now();
@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
 
     // 同时在 stdout 打印稳态端到端指标，便于快速查看。
     std::cout << "PROFILE model=" << model->name()
-              << " input_tokens=" << inputs.size()
+              << " input_tokens=" << input.size()
               << " decode_tokens=" << decode_tokens
               << " reports=" << prefix << ".{jsonl,_summary.json,_summary.md}"
               << std::endl;

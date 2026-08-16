@@ -25,7 +25,15 @@ std::string QwenWeights::shape_to_string(const std::vector<int64_t> &shape) {
     return out.str();
 }
 
-void QwenWeights::validate_qwen_tensors(int num_hidden_layers, const std::vector<std::string> &layer_types) const {
+void QwenWeights::validate(const QwenConfig &config) const {
+    mf_.validate();
+
+    const int num_hidden_layers = config.data.text.num_hidden_layers;
+    const std::vector<std::string> &layer_types = config.data.text.layer_types;
+    if (static_cast<int>(layer_types.size()) != num_hidden_layers) {
+        throw std::runtime_error("Qwen layer_types 数量与 num_hidden_layers 不一致");
+    }
+
     const std::string root = "model.language_model.";
     for (const std::string &name : {
              root + "embed_tokens.weight",
@@ -80,13 +88,18 @@ void QwenWeights::validate_qwen_tensors(int num_hidden_layers, const std::vector
             }
         }
     }
+
+    mf_.validate_tensor_shape(root + "embed_tokens.weight",
+                              {config.data.text.vocab_size, config.data.text.hidden_size});
+    mf_.validate_tensor_shape(root + "norm.weight", {config.data.text.hidden_size});
 }
 
 QwenWeights::QwenWeights(const MF &mf, const QwenConfig &config)
     : mf_(mf) {
+    validate(config);
+
     const int num_hidden_layers = config.data.text.num_hidden_layers;
     const std::vector<std::string> &layer_types = config.data.text.layer_types;
-    validate_qwen_tensors(num_hidden_layers, layer_types);
 
     const std::string root = "model.language_model.";
     embed_tokens = mf_.get_tensor_view(root + "embed_tokens.weight");
@@ -191,7 +204,7 @@ void QwenWeights::DebugDump() {
     out << "QwenWeights:\n";
     out << "  tensors=" << mf_.tensor_view_names().size() << "\n";
 
-    auto dump_one = [&](const std::string &label, const TensorView &w) {
+    auto dump_one = [&](const std::string &label, const MFTensorView &w) {
         out << "  " << label << ": ";
         if (w.data == nullptr) {
             out << "<null>\n";

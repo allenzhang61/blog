@@ -6,8 +6,6 @@
 
 #include "../common.h"
 
-#include <cuda_runtime.h>
-
 template <typename T>
 CudaScratchBuffer<T>::~CudaScratchBuffer() {
     reset();
@@ -39,9 +37,7 @@ T *CudaScratchBuffer<T>::ensure(size_t count, const std::string &name) {
         return ptr_;
     }
     reset();
-    void *raw = nullptr;
-    check_cuda(cudaMalloc(&raw, required_bytes), "cudaMalloc " + name + " 失败");
-    ptr_ = static_cast<T *>(raw);
+    ptr_ = static_cast<T *>(cuda_malloc_device(required_bytes, "cudaMalloc " + name + " 失败"));
     bytes_ = required_bytes;
     return ptr_;
 }
@@ -49,7 +45,7 @@ T *CudaScratchBuffer<T>::ensure(size_t count, const std::string &name) {
 template <typename T>
 void CudaScratchBuffer<T>::reset() {
     if (ptr_) {
-        cudaFree(ptr_);
+        cuda_free_device(ptr_);
         ptr_ = nullptr;
     }
     bytes_ = 0;

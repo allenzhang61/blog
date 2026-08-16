@@ -24,11 +24,11 @@ void launch_silu_mul(const float *gate, const float *up, float *out, int n, void
     silu_mul_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(gate, up, out, n);
 }
 
-void launch_embedding_lookup(const uint16_t *table, const int *token_ids, float *output,
-                             int tokens, int vocab, int hidden, int lowp_type, void *stream) {
+void launch_embedding_lookup(const int *input, float *output, const uint16_t *table,
+                             int input_size, int vocab_size, int hidden_size, int lowp_type, void *stream) {
     ScopedGpuTimer timer("embedding_lookup", as_stream(stream));
-    embedding_lookup_kernel<<<tokens, kBlock, 0, as_stream(stream)>>>(
-        table, token_ids, output, vocab, hidden, lowp_type);
+    embedding_lookup_kernel<<<input_size, kBlock, 0, as_stream(stream)>>>(
+        input, output, table, vocab_size, hidden_size, lowp_type);
 }
 
 void launch_rms_norm(const float *input, const void *weight, int weight_type, float *output,

@@ -17,7 +17,7 @@
 #include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
 
-LMHead::LMHead(const TensorView &weight, CudaWeightPool *pool)
+LMHead::LMHead(const MFTensorView &weight, CudaWeightPool *pool)
     : weight_(weight), pool_(pool) {}
 
 int LMHead::forward(const float *d_hidden, int hidden_size, QwenForwardScratch &scratch,

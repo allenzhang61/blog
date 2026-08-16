@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "llm/module/Module.h"
-#include "llm/module/qwen/Embedding.h"
+#include "llm/module/common/Embedding.h"
 #include "llm/module/qwen/DecoderLayer.h"
 #include "llm/module/qwen/RMSNorm.h"
 #include "llm/module/qwen/LMHead.h"
@@ -61,7 +61,7 @@ public:
 
 private:
     // 内部前向：喂入整段 prompt token，跑完各层，返回首个生成 token id。
-    int prefill_session(QwenSession &session, const std::vector<int> &inputs);
+    int prefill_session(QwenSession &session, const std::vector<int> &input);
     // 内部前向：喂入上一个 token（位置 pos），跑完各层，返回下一个 token id。
     int decode_session(QwenSession &session, int prev_token_id, int pos);
 
@@ -71,7 +71,7 @@ private:
     int max_output_tokens_ = 0;
     Sampler sampler_;
 
-    Embedding embed_tokens_;
+    common::Embedding embedding_;
     std::vector<DecoderLayer> layers_;
     RMSNorm final_norm_;
     LMHead lm_head_;
