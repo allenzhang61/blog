@@ -12,7 +12,6 @@
 #include "llm/module/Module.h"
 #include "llm/module/common/Embedding.h"
 #include "llm/module/qwen/DecoderLayer.h"
-#include "llm/module/qwen/RMSNorm.h"
 #include "llm/module/qwen/LMHead.h"
 
 #include "format/MF.h"
@@ -73,7 +72,6 @@ private:
 
     common::Embedding embedding_;
     std::vector<DecoderLayer> layers_;
-    RMSNorm final_norm_;
     LMHead lm_head_;
 
     // 当前请求的 per-request 状态；prefill() 会重建，decode() 复用。

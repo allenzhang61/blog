@@ -19,9 +19,8 @@ DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, cons
       max_output_tokens_(max_output_tokens),
       sampler_(sampling),
       embedding_(*weights_.token_embd, &global_cuda_weight_pool()),
-      rms_norm_(&global_cuda_weight_pool(), config_.rms_norm_eps),
-      mla_(config_, weights_, &global_cuda_weight_pool(), &rms_norm_),
-      mlp_(config_, weights_, &global_cuda_weight_pool(), &rms_norm_) {
+      mla_(config_, weights_, &global_cuda_weight_pool()),
+      mlp_(config_, weights_, &global_cuda_weight_pool()) {
     config_.DebugDump();
 }
 
@@ -45,13 +44,14 @@ int DeepseekModel::forward_session(DeepseekSession &session, const std::vector<i
     const int last = input_size - 1;
     float *d_last = d_hidden + static_cast<size_t>(last) * hidden_size;
     float *d_normed = scratch.normed.ensure(static_cast<size_t>(hidden_size), "ds.final_normed");
-    rms_norm_.forward(*weights_.output_norm, d_last, d_normed, 1, hidden_size);
+    RMSNorm::forward(&global_cuda_weight_pool(), *weights_.output_norm, d_last, d_normed, 1,
+                     hidden_size, config_.rms_norm_eps, /*one_plus=*/false);
 
     float *d_logits = scratch.logits.ensure(static_cast<size_t>(vocab_size), "ds.logits");
     CudaWeight w = pool.cached_weight(*weights_.output)->try_dequant();
     uint16_t *xlow = scratch.logits_in_lowp.ensure(static_cast<size_t>(hidden_size), "ds.logits_in_lowp");
-    to_weight_lowp(d_normed, xlow, hidden_size, w, nullptr);
-    gemm_weight(pool.handle, w, vocab_size, hidden_size, xlow, w.type, 1, d_logits, "ds.gemm.lm_head");
+    GemmInput lm_in = prepare_gemm_input(d_normed, xlow, hidden_size, w.type, nullptr);
+    gemm_weight(pool.handle, w, lm_in.ptr, d_logits, vocab_size, hidden_size, 1, lm_in.type, "ds.gemm.lm_head");
 
     scratch.h_logits.resize(static_cast<size_t>(vocab_size));
     cuda_memcpy_d2h(scratch.h_logits.data(), d_logits, static_cast<size_t>(vocab_size) * sizeof(float),

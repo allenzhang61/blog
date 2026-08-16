@@ -12,6 +12,7 @@
 
 #include "llm/model/qwen/QwenSession.h"
 #include "llm/model/qwen/QwenForwardScratch.h"
+#include "llm/module/common/RMSNorm.h"
 #include "backend/cuda/common.h"
 
 QwenModel::QwenModel(std::unique_ptr<MF> mf, int max_output_tokens, const SamplingConfig &sampling)
@@ -21,7 +22,6 @@ QwenModel::QwenModel(std::unique_ptr<MF> mf, int max_output_tokens, const Sampli
       max_output_tokens_(max_output_tokens),
       sampler_(sampling),
       embedding_(weights_.embed_tokens, &global_cuda_weight_pool()),
-      final_norm_(weights_.final_norm, &global_cuda_weight_pool(), config_.data.text.rms_norm_eps),
       // tie_word_embeddings=true：LMHead 复用 embed_tokens 权重。
       lm_head_(weights_.embed_tokens, &global_cuda_weight_pool()) {
     const TextConfig &text_config = config_.data.text;
@@ -79,7 +79,8 @@ int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &inp
     // final_norm 仅作用于最后一个 token（下一步预测只需末位隐状态）。
     float *d_last = d_hidden + (input_size - 1) * hidden_size;
     float *d_normed = scratch.token_hidden_a.ensure(hidden_size, "prefill final normed");
-    final_norm_.forward(d_last, d_normed, 1, hidden_size);
+    RMSNorm::forward(&global_cuda_weight_pool(), weights_.final_norm, d_last, d_normed, 1,
+                     hidden_size, config_.data.text.rms_norm_eps, /*one_plus=*/true);
 
     return lm_head_.forward(d_normed, hidden_size, scratch, sampler_, session.outputs);
 }
@@ -97,7 +98,8 @@ int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) 
     }
 
     float *d_normed = scratch.token_hidden_a.ensure(hidden_size, "decode final normed");
-    final_norm_.forward(d_hidden, d_normed, 1, hidden_size);
+    RMSNorm::forward(&global_cuda_weight_pool(), weights_.final_norm, d_hidden, d_normed, 1,
+                     hidden_size, config_.data.text.rms_norm_eps, /*one_plus=*/true);
 
     return lm_head_.forward(d_normed, hidden_size, scratch, sampler_, session.outputs);
 }

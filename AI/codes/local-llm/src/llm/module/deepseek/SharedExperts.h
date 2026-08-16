@@ -17,7 +17,7 @@ public:
     SharedExperts(const DeepseekConfig &config, CudaWeightPool *pool);
 
     void forward(DeepseekSession &session, const DeepseekLayerWeights &weights,
-                 const float *d_normed, int tokens, float *d_moe);
+                 const float *d_normed, int input_size, float *d_moe);
 
 private:
     const DeepseekConfig &config_;

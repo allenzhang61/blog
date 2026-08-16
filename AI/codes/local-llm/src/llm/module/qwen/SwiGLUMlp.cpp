@@ -22,13 +22,6 @@ SwiGLUMlp::SwiGLUMlp(const MlpWeights &weights, CudaWeightPool *pool)
 
 void SwiGLUMlp::forward(const float *d_in, float *d_out, size_t rows, int hidden_size,
                         QwenForwardScratch &scratch) {
-    CudaWeight *gate_resident = pool_->cached_weight(weights_.gate);
-    CudaWeight *up_resident = pool_->cached_weight(weights_.up);
-    CudaWeight *down_resident = pool_->cached_weight(weights_.down);
-    if (!gate_resident || !up_resident || !down_resident) {
-        throw std::runtime_error("SwiGLUMlp 权重上传失败");
-    }
-
     // gate / up：[intermediate, hidden]；down：[hidden, intermediate]。
     const int intermediate = static_cast<int>(weights_.gate.shape[0]);
     const size_t n = rows * static_cast<size_t>(intermediate);
@@ -40,23 +33,23 @@ void SwiGLUMlp::forward(const float *d_in, float *d_out, size_t rows, int hidden
     // 输入激活转成权重 dtype（BF16/F16）后再投影；gate/up 同 dtype，只需转一次。
     uint16_t *d_in_lowp =
         scratch.input_lowp_buffer.ensure(rows * static_cast<size_t>(hidden_size), "mlp in lowp");
-    CudaWeight gate = gate_resident->try_dequant();
-    to_weight_lowp(d_in, d_in_lowp, rows * static_cast<size_t>(hidden_size), gate, nullptr);
-    gemm_weight(pool_->handle, gate, intermediate, hidden_size, d_in_lowp, gate.type, rows, d_gate, "mlp.gate");
+    CudaWeight gate = pool_->cached_weight(weights_.gate)->try_dequant();
+    GemmInput in = prepare_gemm_input(d_in, d_in_lowp, rows * static_cast<size_t>(hidden_size), gate.type, nullptr);
+    gemm_weight(pool_->handle, gate, in.ptr, d_gate, intermediate, hidden_size, rows, in.type, "mlp.gate");
 
-    CudaWeight up = up_resident->try_dequant();
-    gemm_weight(pool_->handle, up, intermediate, hidden_size, d_in_lowp, up.type, rows, d_up, "mlp.up");
+    CudaWeight up = pool_->cached_weight(weights_.up)->try_dequant();
+    gemm_weight(pool_->handle, up, in.ptr, d_up, intermediate, hidden_size, rows, in.type, "mlp.up");
 
     // prod = SiLU(gate) * up。
     launch_silu_mul(d_gate, d_up, d_prod, static_cast<int>(n), /*stream=*/nullptr);
 
     // prod 转成 down 权重 dtype 后做 down 投影。
     uint16_t *d_prod_lowp = scratch.prod_lowp_buffer.ensure(n, "mlp prod lowp");
-    CudaWeight down = down_resident->try_dequant();
-    to_weight_lowp(d_prod, d_prod_lowp, n, down, nullptr);
+    CudaWeight down = pool_->cached_weight(weights_.down)->try_dequant();
+    GemmInput prod_in = prepare_gemm_input(d_prod, d_prod_lowp, n, down.type, nullptr);
 
     // down：[hidden, intermediate] · prod[intermediate, rows] -> [hidden, rows]。
-    gemm_weight(pool_->handle, down, hidden_size, intermediate, d_prod_lowp, down.type, rows, d_out, "mlp.down");
+    gemm_weight(pool_->handle, down, prod_in.ptr, d_out, hidden_size, intermediate, rows, prod_in.type, "mlp.down");
 
     check_cuda(cudaDeviceSynchronize(), "SwiGLUMlp 同步失败");
 }

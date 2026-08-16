@@ -9,7 +9,7 @@
 #include <memory>
 
 #include "llm/module/Module.h"
-#include "RMSNorm.h"
+#include "llm/module/common/RMSNorm.h"
 #include "SwiGLUMlp.h"
 
 struct LayerWeights;
@@ -40,13 +40,14 @@ public:
 
 private:
     const TextConfig &text_config_;
+    CudaWeightPool *pool_ = nullptr;
     size_t layer_index_ = 0;
     // 本层在同类型层中的下标，用于索引 QwenSession 的 fullAttnKVCaches / linearAttnRecurrentStates。
     size_t type_index_ = 0;
     bool is_full_ = false;
 
-    RMSNorm input_norm_;
-    RMSNorm post_norm_;
+    const MFTensorView &input_norm_weight_;
+    const MFTensorView &post_norm_weight_;
     SwiGLUMlp mlp_;
     // 按层类型二选一：is_full_ 为真时用 full attention 子层，否则用 linear attention 子层。
     // 用基类指针持有，具体类型见 FullAttention / LinearAttention。

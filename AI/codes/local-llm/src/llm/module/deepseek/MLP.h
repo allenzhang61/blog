@@ -14,17 +14,12 @@ class DeepseekConfig;
 class DeepseekSession;
 class DeepseekWeights;
 
-namespace deepseek {
-class RMSNorm;
-}
-
 // DeepSeek FFN 子层：前若干层为 dense FFN，后续为 MoE FFN。
 class MLP : public Module {
 public:
-    MLP(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool,
-        deepseek::RMSNorm *rms_norm);
+    MLP(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, int layer, float *d_hidden, int tokens);
+    void forward(DeepseekSession &session, int layer, float *d_hidden, int input_size);
 
 private:
     const DeepseekWeights &weights_;

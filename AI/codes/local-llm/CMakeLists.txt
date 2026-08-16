@@ -72,8 +72,8 @@ add_executable(local_llm main.cpp
         src/utils/sampling/Sampler.h
         src/llm/module/common/Embedding.cpp
         src/llm/module/common/Embedding.h
-        src/llm/module/qwen/RMSNorm.cpp
-        src/llm/module/qwen/RMSNorm.h
+        src/llm/module/common/RMSNorm.cpp
+        src/llm/module/common/RMSNorm.h
         src/llm/module/qwen/SwiGLUMlp.cpp
         src/llm/module/qwen/SwiGLUMlp.h
         src/llm/module/qwen/LMHead.cpp
@@ -95,8 +95,6 @@ add_executable(local_llm main.cpp
         src/llm/model/deepseek/DeepseekWeights.h
         src/format/gguf/GGUFTokenizer.cpp
         src/format/gguf/GGUFTokenizer.h
-        src/llm/module/deepseek/RMSNorm.cpp
-        src/llm/module/deepseek/RMSNorm.h
         src/llm/module/deepseek/DenseFFN.cpp
         src/llm/module/deepseek/DenseFFN.h
         src/llm/module/deepseek/MLA.cpp

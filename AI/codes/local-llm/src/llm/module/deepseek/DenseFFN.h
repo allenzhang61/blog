@@ -12,22 +12,16 @@ class DeepseekConfig;
 class DeepseekSession;
 class DeepseekWeights;
 
-namespace deepseek {
-class RMSNorm;
-}
-
 class DenseFFN : public Module {
 public:
-    DenseFFN(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool,
-             deepseek::RMSNorm *rms_norm);
+    DenseFFN(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, int layer, float *d_hidden, int tokens);
+    void forward(DeepseekSession &session, int layer, float *d_hidden, int input_size);
 
 private:
     const DeepseekConfig &config_;
     const DeepseekWeights &weights_;
     CudaWeightPool *pool_ = nullptr;
-    deepseek::RMSNorm *rms_norm_ = nullptr;
 };
 
 #endif // LOCAL_LLM_DEEPSEEK_DENSE_FFN_H

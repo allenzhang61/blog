@@ -22,8 +22,8 @@ __global__ void add_kernel(const float *a, const float *b, float *out, int n);
 __global__ void silu_mul_kernel(const float *gate, const float *up, float *out, int n);
 __global__ void embedding_lookup_kernel(const int *input, float *output, const uint16_t *table,
                                         int vocab_size, int hidden_size, int lowp_type);
-__global__ void rms_norm_kernel(const float *input, const void *weight, int weight_type,
-                                float *output, int hidden, float eps, bool one_plus);
+__global__ void rms_norm_kernel(const float *input, float *output, const void *weight,
+                                int weight_type, int hidden_size, float eps, bool one_plus);
 
 // ---- full attention ----
 __global__ void full_attention_q_kernel(const float *q_and_gate, const uint16_t *q_norm_weight,

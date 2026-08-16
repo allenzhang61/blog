@@ -31,11 +31,11 @@ void launch_embedding_lookup(const int *input, float *output, const uint16_t *ta
         input, output, table, vocab_size, hidden_size, lowp_type);
 }
 
-void launch_rms_norm(const float *input, const void *weight, int weight_type, float *output,
-                     int rows, int hidden, float eps, bool one_plus, void *stream) {
+void launch_rms_norm(const float *input, float *output, const void *weight, int weight_type,
+                     int rows, int hidden_size, float eps, bool one_plus, void *stream) {
     ScopedGpuTimer timer("rms_norm", as_stream(stream));
     rms_norm_kernel<<<rows, kBlock, kBlock * sizeof(float), as_stream(stream)>>>(
-        input, weight, weight_type, output, hidden, eps, one_plus);
+        input, output, weight, weight_type, hidden_size, eps, one_plus);
 }
 
 // ---- full attention ----

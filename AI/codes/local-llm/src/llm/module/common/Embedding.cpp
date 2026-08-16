@@ -26,11 +26,7 @@ Embedding::Embedding(const MFTensorView &weight, CudaWeightPool *pool)
 void Embedding::forward(const std::vector<int> &input, float *d_hidden,
                         CudaScratchBuffer<int> &input_buffer,
                         const std::string &input_buffer_name) {
-    CudaWeight *resident = pool_->cached_weight(weight_);
-    if (!resident) {
-        throw std::runtime_error("Embedding 权重上传失败：" + weight_.name);
-    }
-    CudaWeight table = resident->try_dequant();
+    CudaWeight table = pool_->cached_weight(weight_)->try_dequant();
 
     const int lowp_type = (table.dtype == DType::F16) ? 1 : 0;
     const size_t input_size = input.size();

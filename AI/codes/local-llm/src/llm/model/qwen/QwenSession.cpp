@@ -35,7 +35,7 @@ QwenSession::QwenSession(const QwenConfig &config, const std::vector<int> &input
             cache.key_cache = CudaWeight(cache_bytes, CUDA_R_32F, false, "full key cache");
             cache.value_cache = CudaWeight(cache_bytes, CUDA_R_32F, false, "full value cache");
             cache.seq_len = 0;
-            fullAttnKVCaches.push_back(std::move(cache));
+            full_attn_kv_cache.push_back(std::move(cache));
         } else {
             // linear_attention
             LinearAttnRecurrentState state;
@@ -43,17 +43,17 @@ QwenSession::QwenSession(const QwenConfig &config, const std::vector<int> &input
                 CudaWeight(conv_dim * kernel * sizeof(float), CUDA_R_32F, true, "linear conv state");
             state.recurrent_state = CudaWeight(recurrent_elems * sizeof(float), CUDA_R_32F, true,
                                                "linear recurrent state");
-            linearAttnRecurrentStates.push_back(std::move(state));
+            linear_attn_recurrent_states.push_back(std::move(state));
         }
     }
 }
 
 size_t QwenSession::kv_state_bytes() const {
     size_t total = 0;
-    for (const FullAttnKVCache &c : fullAttnKVCaches) {
+    for (const FullAttnKVCache &c : full_attn_kv_cache) {
         total += c.key_cache.bytes + c.value_cache.bytes;
     }
-    for (const LinearAttnRecurrentState &s : linearAttnRecurrentStates) {
+    for (const LinearAttnRecurrentState &s : linear_attn_recurrent_states) {
         total += s.conv_state.bytes + s.recurrent_state.bytes;
     }
     return total;

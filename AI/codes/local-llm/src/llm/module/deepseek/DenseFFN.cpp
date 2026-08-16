@@ -10,45 +10,45 @@
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
-#include "llm/module/deepseek/RMSNorm.h"
+#include "llm/module/common/RMSNorm.h"
 
 #include <cstddef>
 
-DenseFFN::DenseFFN(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool,
-                   deepseek::RMSNorm *rms_norm)
-    : config_(config), weights_(weights), pool_(pool), rms_norm_(rms_norm) {}
+DenseFFN::DenseFFN(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool)
+    : config_(config), weights_(weights), pool_(pool) {}
 
-void DenseFFN::forward(DeepseekSession &session, int layer, float *d_hidden, int tokens) {
+void DenseFFN::forward(DeepseekSession &session, int layer, float *d_hidden, int input_size) {
     auto &s = session.scratch;
     const DeepseekLayerWeights &lw = weights_.layers[layer];
-    const int H = config_.hidden_size;
+    const int hidden_size = config_.hidden_size;
     const int ffn = config_.dense_ffn;
 
-    float *d_normed = s.normed.ensure(static_cast<size_t>(tokens) * H, "ds.normed");
-    rms_norm_->forward(*lw.ffn_norm, d_hidden, d_normed, tokens, H);
+    float *d_normed = s.normed.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed");
+    RMSNorm::forward(pool_, *lw.ffn_norm, d_hidden, d_normed, input_size, hidden_size,
+                     config_.rms_norm_eps, /*one_plus=*/false);
 
-    float *d_gate = s.gate.ensure(static_cast<size_t>(tokens) * ffn, "ds.gate");
-    float *d_up = s.up.ensure(static_cast<size_t>(tokens) * ffn, "ds.up");
-    uint16_t *xlow = s.ffn_in_lowp.ensure(static_cast<size_t>(tokens) * H, "ds.ffn_in_lowp");
+    float *d_gate = s.gate.ensure(static_cast<size_t>(input_size) * ffn, "ds.gate");
+    float *d_up = s.up.ensure(static_cast<size_t>(input_size) * ffn, "ds.up");
+    uint16_t *xlow = s.ffn_in_lowp.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.ffn_in_lowp");
     {
         CudaWeight wg = pool_->cached_weight(*lw.ffn_gate)->try_dequant();
-        to_weight_lowp(d_normed, xlow, tokens * H, wg, nullptr);
-        gemm_weight(pool_->handle, wg, ffn, H, xlow, wg.type, tokens, d_gate, "ds.gemm.ffn_gate");
+        GemmInput gate_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, wg.type, nullptr);
+        gemm_weight(pool_->handle, wg, gate_in.ptr, d_gate, ffn, hidden_size, input_size, gate_in.type, "ds.gemm.ffn_gate");
     }
     {
         CudaWeight wu = pool_->cached_weight(*lw.ffn_up)->try_dequant();
-        to_weight_lowp(d_normed, xlow, tokens * H, wu, nullptr);
-        gemm_weight(pool_->handle, wu, ffn, H, xlow, wu.type, tokens, d_up, "ds.gemm.ffn_up");
+        GemmInput up_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, wu.type, nullptr);
+        gemm_weight(pool_->handle, wu, up_in.ptr, d_up, ffn, hidden_size, input_size, up_in.type, "ds.gemm.ffn_up");
     }
-    float *d_act = s.act.ensure(static_cast<size_t>(tokens) * ffn, "ds.act");
-    launch_silu_mul(d_gate, d_up, d_act, tokens * ffn, nullptr);
+    float *d_act = s.act.ensure(static_cast<size_t>(input_size) * ffn, "ds.act");
+    launch_silu_mul(d_gate, d_up, d_act, input_size * ffn, nullptr);
 
-    float *d_out = s.ffn_out.ensure(static_cast<size_t>(tokens) * H, "ds.ffn_out");
+    float *d_out = s.ffn_out.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.ffn_out");
     {
         CudaWeight wd = pool_->cached_weight(*lw.ffn_down)->try_dequant();
-        uint16_t *alow = s.act_lowp.ensure(static_cast<size_t>(tokens) * ffn, "ds.act_lowp");
-        to_weight_lowp(d_act, alow, tokens * ffn, wd, nullptr);
-        gemm_weight(pool_->handle, wd, H, ffn, alow, wd.type, tokens, d_out, "ds.gemm.ffn_down");
+        uint16_t *alow = s.act_lowp.ensure(static_cast<size_t>(input_size) * ffn, "ds.act_lowp");
+        GemmInput down_in = prepare_gemm_input(d_act, alow, input_size * ffn, wd.type, nullptr);
+        gemm_weight(pool_->handle, wd, down_in.ptr, d_out, hidden_size, ffn, input_size, down_in.type, "ds.gemm.ffn_down");
     }
-    launch_add(d_hidden, d_out, d_hidden, tokens * H, nullptr);
+    launch_add(d_hidden, d_out, d_hidden, input_size * hidden_size, nullptr);
 }

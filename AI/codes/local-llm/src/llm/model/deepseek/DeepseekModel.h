@@ -14,7 +14,7 @@
 #include "llm/module/common/Embedding.h"
 #include "llm/module/deepseek/MLA.h"
 #include "llm/module/deepseek/MLP.h"
-#include "llm/module/deepseek/RMSNorm.h"
+#include "llm/module/common/RMSNorm.h"
 #include "utils/sampling/Sampler.h"
 
 #include <memory>
@@ -47,7 +47,6 @@ private:
     int max_output_tokens_ = 0;
     Sampler sampler_;
     common::Embedding embedding_;
-    deepseek::RMSNorm rms_norm_;
     MLA mla_;
     MLP mlp_;
     std::unique_ptr<DeepseekSession> session_;

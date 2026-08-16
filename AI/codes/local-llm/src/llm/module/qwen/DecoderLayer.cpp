@@ -32,10 +32,11 @@ size_t type_index_of(const TextConfig &config, size_t layer_index, const std::st
 DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &text_config,
                            CudaWeightPool *pool, size_t layer_index)
     : text_config_(text_config),
+      pool_(pool),
       layer_index_(layer_index),
       is_full_(weights.type == "full_attention"),
-      input_norm_(weights.input_norm, pool, text_config.rms_norm_eps),
-      post_norm_(weights.post_norm, pool, text_config.rms_norm_eps),
+      input_norm_weight_(weights.input_norm),
+      post_norm_weight_(weights.post_norm),
       mlp_(weights.mlp, pool) {
     type_index_ = type_index_of(text_config, layer_index, weights.type);
     if (is_full_) {
@@ -54,20 +55,22 @@ void DecoderLayer::prefill(QwenSession &session, float *d_hidden, size_t input_s
     float *d_attn = scratch.mixer_buffer.ensure(n, "layer attn out");
 
     // h = x + attn( input_norm(x) )
-    input_norm_.forward(d_hidden, d_normed, input_size, hidden_size);
+    RMSNorm::forward(pool_, input_norm_weight_, d_hidden, d_normed, input_size, hidden_size,
+                     text_config_.rms_norm_eps, /*one_plus=*/true);
     if (is_full_) {
         static_cast<FullAttention *>(attn_.get())->prefill(
-            d_normed, d_attn, input_size, session.fullAttnKVCaches[type_index_], scratch);
+            d_normed, d_attn, input_size, session.full_attn_kv_cache[type_index_], scratch);
     } else {
         static_cast<LinearAttention *>(attn_.get())->prefill(
-            d_normed, d_attn, input_size, session.linearAttnRecurrentStates[type_index_], scratch);
+            d_normed, d_attn, input_size, session.linear_attn_recurrent_states[type_index_], scratch);
     }
     launch_add(d_hidden, d_attn, d_hidden, static_cast<int>(n), nullptr);
 
     // y = h + mlp( post_norm(h) )
     float *d_post = scratch.token_hidden_b.ensure(n, "layer post normed");
     float *d_mlp = scratch.mlp_out_buffer.ensure(n, "layer mlp out");
-    post_norm_.forward(d_hidden, d_post, input_size, hidden_size);
+    RMSNorm::forward(pool_, post_norm_weight_, d_hidden, d_post, input_size, hidden_size,
+                     text_config_.rms_norm_eps, /*one_plus=*/true);
     mlp_.forward(d_post, d_mlp, input_size, hidden_size, scratch);
     launch_add(d_hidden, d_mlp, d_hidden, static_cast<int>(n), nullptr);
 
@@ -81,19 +84,21 @@ void DecoderLayer::decode(QwenSession &session, float *d_hidden, int pos,
     float *d_normed = scratch.token_hidden_a.ensure(hidden, "layer normed");
     float *d_attn = scratch.mixer_buffer.ensure(hidden, "layer attn out");
 
-    input_norm_.forward(d_hidden, d_normed, 1, hidden);
+    RMSNorm::forward(pool_, input_norm_weight_, d_hidden, d_normed, 1, hidden,
+                     text_config_.rms_norm_eps, /*one_plus=*/true);
     if (is_full_) {
         static_cast<FullAttention *>(attn_.get())->decode(
-            d_normed, d_attn, pos, session.fullAttnKVCaches[type_index_], scratch);
+            d_normed, d_attn, pos, session.full_attn_kv_cache[type_index_], scratch);
     } else {
         static_cast<LinearAttention *>(attn_.get())->decode(
-            d_normed, d_attn, session.linearAttnRecurrentStates[type_index_], scratch);
+            d_normed, d_attn, session.linear_attn_recurrent_states[type_index_], scratch);
     }
     launch_add(d_hidden, d_attn, d_hidden, hidden, nullptr);
 
     float *d_post = scratch.token_hidden_b.ensure(hidden, "layer post normed");
     float *d_mlp = scratch.mlp_out_buffer.ensure(hidden, "layer mlp out");
-    post_norm_.forward(d_hidden, d_post, 1, hidden);
+    RMSNorm::forward(pool_, post_norm_weight_, d_hidden, d_post, 1, hidden,
+                     text_config_.rms_norm_eps, /*one_plus=*/true);
     mlp_.forward(d_post, d_mlp, 1, hidden, scratch);
     launch_add(d_hidden, d_mlp, d_hidden, hidden, nullptr);
 

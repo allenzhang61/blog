@@ -24,7 +24,7 @@ public:
     MoERouter(const DeepseekConfig &config, CudaWeightPool *pool);
 
     MoERoute forward(DeepseekSession &session, const DeepseekLayerWeights &weights,
-                     const float *d_normed, int tokens);
+                     const float *d_normed, int input_size);
 
 private:
     const DeepseekConfig &config_;

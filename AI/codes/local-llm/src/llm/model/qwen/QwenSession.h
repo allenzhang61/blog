@@ -48,9 +48,9 @@ public:
     std::vector<int> outputs;
 
     // 每个 full_attention 层一份 KV cache；顺序与 config.layer_types 中 full 层出现顺序一致。
-    std::vector<FullAttnKVCache> fullAttnKVCaches;
+    std::vector<FullAttnKVCache> full_attn_kv_cache;
     // 每个 linear_attention 层一份 recurrent state；顺序与 config.layer_types 中 linear 层出现顺序一致。
-    std::vector<LinearAttnRecurrentState> linearAttnRecurrentStates;
+    std::vector<LinearAttnRecurrentState> linear_attn_recurrent_states;
 
     // 本次请求前向过程的临时激活暂存区（grow-only 复用），随 Session 存活。
     // 放在 Session 内保证并发请求间天然隔离：每个请求独享一份，互不覆盖。

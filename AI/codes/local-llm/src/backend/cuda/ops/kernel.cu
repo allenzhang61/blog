@@ -58,28 +58,37 @@ __global__ void embedding_lookup_kernel(const int *input, float *output, const u
 
 // ---- RMSNorm ----
 // 每个 block 处理一行；block 内先归约平方和，再逐元素缩放。
+// y = x / sqrt(mean(x^2 + eps)) * weight
+__global__ void rms_norm_kernel(const float *input, float *output, const void *weight,
+                                int weight_type, int hidden_size, float eps, bool one_plus) {
+    int row = blockIdx.x; //每个block处理一行，block内多个线程协作处理这一行的hidden个元素
+    const float *x = input + static_cast<size_t>(row) * hidden_size; // 指向当前行起始地址
 
-__global__ void rms_norm_kernel(const float *input, const void *weight, int weight_type,
-                                float *output, int hidden, float eps, bool one_plus) {
-    int row = blockIdx.x;
-    const float *x = input + static_cast<size_t>(row) * hidden;
-
-    extern __shared__ float sdata[];
+    extern __shared__ float sdata[]; // sdata长度是blockDim.x，即block里的线程数
+    // 求平方和，每个线程算一部分
+    // 线程按 blockDim.x 步长跨步遍历(grid-stride 风格),每个线程累加自己负责元素的平方,得到局部和 local 。
     float local = 0.0f;
-    for (int j = threadIdx.x; j < hidden; j += blockDim.x) {
+    for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
         float v = x[j];
         local += v * v;
     }
-    sdata[threadIdx.x] = local;
+    // block内归约求总平方和
+    sdata[threadIdx.x] = local; // 各线程把local写入共享内存sdata
     __syncthreads();
+    // 经典树形归约parallel reduction：每轮把后半段加到前半段，循环折半
+    //  把 sdata[0..blockDim.x-1] 里所有元素求和,最终结果存到 sdata[0]
+    // 复杂度 :串行相加要 O(n) 步,树形归约只要 O(log n) 步
+    // 前提约束：blockDim.x 必须是 2 的幂
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        // if 控制只有前半段线程参与归约
         if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
         __syncthreads();
     }
-    float inv_rms = rsqrtf(sdata[0] / hidden + eps);
+    // sdata[0] / hidden_size 即 mean(x²),加 eps 防止除零, rsqrtf 是 1/sqrt(...) 的快速倒数平方根
+    float inv_rms = rsqrtf(sdata[0] / hidden_size + eps);
 
-    float *dst = output + static_cast<size_t>(row) * hidden;
-    for (int j = threadIdx.x; j < hidden; j += blockDim.x) {
+    float *dst = output + static_cast<size_t>(row) * hidden_size;
+    for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
         float w;
         if (weight_type == 2) {
             w = static_cast<const float *>(weight)[j];

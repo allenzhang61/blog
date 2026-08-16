@@ -44,9 +44,9 @@ RoutedExperts::RoutedExperts(const DeepseekConfig &config, CudaWeightPool *pool)
     : config_(config), pool_(pool) {}
 
 void RoutedExperts::forward(DeepseekSession &session, const DeepseekLayerWeights &weights,
-                            const float *d_normed, const MoERoute &route, int tokens, float *d_moe) {
+                            const float *d_normed, const MoERoute &route, int input_size, float *d_moe) {
     auto &s = session.scratch;
-    const int H = config_.hidden_size;
+    const int hidden_size = config_.hidden_size;
     const int ffn = config_.expert_ffn;
     const int n_exp = config_.expert_count;
     const int k = config_.expert_used;
@@ -54,30 +54,30 @@ void RoutedExperts::forward(DeepseekSession &session, const DeepseekLayerWeights
     float *d_gate = s.gate.ensure(static_cast<size_t>(ffn), "ds.egate");
     float *d_up = s.up.ensure(static_cast<size_t>(ffn), "ds.eup");
     float *d_act = s.act.ensure(static_cast<size_t>(ffn), "ds.eact");
-    float *d_eout = s.expert_out.ensure(static_cast<size_t>(H), "ds.eout");
-    uint16_t *xlow = s.ffn_in_lowp.ensure(static_cast<size_t>(H), "ds.ffn_in_lowp");
+    float *d_eout = s.expert_out.ensure(static_cast<size_t>(hidden_size), "ds.eout");
+    uint16_t *xlow = s.ffn_in_lowp.ensure(static_cast<size_t>(hidden_size), "ds.ffn_in_lowp");
     uint16_t *alow = s.act_lowp.ensure(static_cast<size_t>(ffn), "ds.act_lowp");
 
-    for (int tok = 0; tok < tokens; ++tok) {
-        const float *tok_in = d_normed + static_cast<size_t>(tok) * H;
+    for (int tok = 0; tok < input_size; ++tok) {
+        const float *tok_in = d_normed + static_cast<size_t>(tok) * hidden_size;
         for (int r = 0; r < k; ++r) {
             const size_t route_idx = static_cast<size_t>(tok) * k + r;
             const int e = route.expert_ids[route_idx];
             const float w = route.weights[route_idx];
             MFTensorView gate = expert_tensor_view(*weights.ffn_gate_exps, e, n_exp);
             CudaWeight wg = pool_->cached_weight(gate)->try_dequant();
-            to_weight_lowp(tok_in, xlow, H, wg, nullptr);
-            gemm_weight(pool_->handle, wg, ffn, H, xlow, wg.type, 1, d_gate, "ds.gemm.egate");
+            GemmInput egate_in = prepare_gemm_input(tok_in, xlow, hidden_size, wg.type, nullptr);
+            gemm_weight(pool_->handle, wg, egate_in.ptr, d_gate, ffn, hidden_size, 1, egate_in.type, "ds.gemm.egate");
             MFTensorView up = expert_tensor_view(*weights.ffn_up_exps, e, n_exp);
             CudaWeight wu = pool_->cached_weight(up)->try_dequant();
-            to_weight_lowp(tok_in, xlow, H, wu, nullptr);
-            gemm_weight(pool_->handle, wu, ffn, H, xlow, wu.type, 1, d_up, "ds.gemm.eup");
+            GemmInput eup_in = prepare_gemm_input(tok_in, xlow, hidden_size, wu.type, nullptr);
+            gemm_weight(pool_->handle, wu, eup_in.ptr, d_up, ffn, hidden_size, 1, eup_in.type, "ds.gemm.eup");
             launch_silu_mul(d_gate, d_up, d_act, ffn, nullptr);
             MFTensorView down = expert_tensor_view(*weights.ffn_down_exps, e, n_exp);
             CudaWeight wd = pool_->cached_weight(down)->try_dequant();
-            to_weight_lowp(d_act, alow, ffn, wd, nullptr);
-            gemm_weight(pool_->handle, wd, H, ffn, alow, wd.type, 1, d_eout, "ds.gemm.edown");
-            launch_moe_accumulate(d_eout, w, d_moe + static_cast<size_t>(tok) * H, H, nullptr);
+            GemmInput edown_in = prepare_gemm_input(d_act, alow, ffn, wd.type, nullptr);
+            gemm_weight(pool_->handle, wd, edown_in.ptr, d_eout, hidden_size, ffn, 1, edown_in.type, "ds.gemm.edown");
+            launch_moe_accumulate(d_eout, w, d_moe + static_cast<size_t>(tok) * hidden_size, hidden_size, nullptr);
         }
     }
 }

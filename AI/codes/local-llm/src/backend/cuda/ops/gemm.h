@@ -34,8 +34,8 @@ class CudaWeight;
 // （decode 为访存瓶颈，投影耗时主体即读取权重），供 Profiler 算有效带宽；
 // 传空串（默认）则不埋点、零开销。
 void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
-                 int out_dim, int in_dim,
-                 const void *d_x, cudaDataType_t x_type, size_t tokens, float *d_y,
+                 const void *d_x, float *d_y,
+                 int out_dim, int in_dim, size_t input_size, cudaDataType_t x_type,
                  const char *name = "");
 
 // 把 float 激活转成权重 dtype（BF16/F16）写入 d_x_lowp，供后续 gemm_weight 使用。
@@ -43,7 +43,18 @@ void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
 // 共享同一输入的多次投影（如 q/k/v、gate/up）只需调用一次，再多次 gemm_weight，避免重复转换。
 //   d_x      : float 激活，元素数 n；
 //   d_x_lowp : 低精度输出 buffer（元素数 >= n，通常取自 scratch）。
-void to_weight_lowp(const float *d_x, uint16_t *d_x_lowp, size_t n,
-                    const CudaWeight &weight, void *stream);
+void float_to_lowp(const float *d_x, uint16_t *d_x_lowp, size_t n,
+                   cudaDataType_t weight_dtype, void *stream);
+
+// 准备可直接喂给 gemm_weight 的激活指针与 dtype（cublasGemmEx 要求激活与权重同 dtype）。
+//   - 权重为 F16/BF16：把 float 激活压成对应 16-bit 写入 d_x_lowp，返回该 buffer 与 weight_dtype；
+//   - 权重为 F32：直接透传原始 float 激活 d_x（不使用 d_x_lowp，无额外拷贝），返回 CUDA_R_32F。
+// 共享同一输入的多次投影只需调用一次。
+struct GemmInput {
+    const void *ptr;
+    cudaDataType_t type;
+};
+GemmInput prepare_gemm_input(const float *d_x, uint16_t *d_x_lowp, size_t n,
+                             cudaDataType_t weight_dtype, void *stream);
 
 #endif // LOCAL_LLM_GEMM_H

@@ -37,8 +37,10 @@ void MF::validate() const {
                                          " shape=" + shape_to_string(tensor.shape));
             }
         }
-        if (tensor.dtype == DType::UNKNOWN) {
-            throw std::runtime_error("tensor dtype UNKNOWN: " + name);
+        if (!is_supported_dtype(tensor.dtype)) {
+            throw std::runtime_error("tensor dtype 不受支持: " + name +
+                                     " dtype=" + dtype_name(tensor.dtype) +
+                                     "（仅支持 F32/F16/BF16/Q4_K/Q5_0/Q6_K/Q8_0）");
         }
         if (tensor.data == nullptr) {
             throw std::runtime_error("tensor data 为空: " + name);

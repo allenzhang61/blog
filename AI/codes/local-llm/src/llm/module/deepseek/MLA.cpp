@@ -11,13 +11,12 @@
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
-#include "llm/module/deepseek/RMSNorm.h"
+#include "llm/module/common/RMSNorm.h"
 
 #include <cuda_runtime.h>
 
-MLA::MLA(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool,
-         deepseek::RMSNorm *rms_norm)
-    : config_(config), weights_(weights), pool_(pool), rms_norm_(rms_norm) {}
+MLA::MLA(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool)
+    : config_(config), weights_(weights), pool_(pool) {}
 
 void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int input_size, int start_pos) {
     auto &scratch = session.scratch;
@@ -34,14 +33,15 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
     const int kvb_out = n_heads * (qk_nope + v_head); // 4096
 
     float *d_normed = scratch.normed.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed");
-    rms_norm_->forward(*lw.attn_norm, d_hidden, d_normed, input_size, hidden_size);
+    RMSNorm::forward(pool_, *lw.attn_norm, d_hidden, d_normed, input_size, hidden_size,
+                     config_.rms_norm_eps, /*one_plus=*/false);
 
     float *d_q = scratch.q.ensure(static_cast<size_t>(input_size) * q_dim, "ds.q");
     {
         CudaWeight w = pool_->cached_weight(*lw.attn_q)->try_dequant();
         uint16_t *xlow = scratch.normed_lowp.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
-        to_weight_lowp(d_normed, xlow, input_size * hidden_size, w, nullptr);
-        gemm_weight(pool_->handle, w, q_dim, hidden_size, xlow, w.type, input_size, d_q, "ds.gemm.attn_q");
+        GemmInput q_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, w.type, nullptr);
+        gemm_weight(pool_->handle, w, q_in.ptr, d_q, q_dim, hidden_size, input_size, q_in.type, "ds.gemm.attn_q");
     }
     if (input_size == 1) {
         launch_mla_rope_q(d_q, n_heads, qk_nope, qk_rope, start_pos, static_cast<const float *>(session.inv_freq.ptr), nullptr);
@@ -53,8 +53,8 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
     {
         CudaWeight w = pool_->cached_weight(*lw.attn_kv_a_mqa)->try_dequant();
         uint16_t *xlow = scratch.normed_lowp.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
-        to_weight_lowp(d_normed, xlow, input_size * hidden_size, w, nullptr);
-        gemm_weight(pool_->handle, w, kv_total, hidden_size, xlow, w.type, input_size, d_kv_a, "ds.gemm.kv_a");
+        GemmInput kv_a_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, w.type, nullptr);
+        gemm_weight(pool_->handle, w, kv_a_in.ptr, d_kv_a, kv_total, hidden_size, input_size, kv_a_in.type, "ds.gemm.kv_a");
     }
 
     float *d_cache = static_cast<float *>(session.kv_caches[layer].cache.ptr);
@@ -82,8 +82,8 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
                                 kv_total * sizeof(float), kv_lora * sizeof(float), seq,
                                 cudaMemcpyDeviceToDevice),
                    "ds.gather.latent");
-        to_weight_lowp(latent_f32, latent_low, seq * kv_lora, w, nullptr);
-        gemm_weight(pool_->handle, w, kvb_out, kv_lora, latent_low, w.type, seq, d_kvb, "ds.gemm.kv_b");
+        GemmInput latent_in = prepare_gemm_input(latent_f32, latent_low, seq * kv_lora, w.type, nullptr);
+        gemm_weight(pool_->handle, w, latent_in.ptr, d_kvb, kvb_out, kv_lora, seq, latent_in.type, "ds.gemm.kv_b");
     }
 
     float *d_attn = scratch.attn.ensure(static_cast<size_t>(input_size) * n_heads * v_head, "ds.attn");
@@ -101,8 +101,8 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
         CudaWeight w = pool_->cached_weight(*lw.attn_output)->try_dequant();
         const int in_dim = n_heads * v_head; // 2048
         uint16_t *xlow = scratch.attn_lowp.ensure(static_cast<size_t>(input_size) * in_dim, "ds.attn_lowp");
-        to_weight_lowp(d_attn, xlow, input_size * in_dim, w, nullptr);
-        gemm_weight(pool_->handle, w, hidden_size, in_dim, xlow, w.type, input_size, d_out, "ds.gemm.attn_output");
+        GemmInput attn_in = prepare_gemm_input(d_attn, xlow, input_size * in_dim, w.type, nullptr);
+        gemm_weight(pool_->handle, w, attn_in.ptr, d_out, hidden_size, in_dim, input_size, attn_in.type, "ds.gemm.attn_output");
     }
 
     launch_add(d_hidden, d_out, d_hidden, input_size * hidden_size, nullptr);

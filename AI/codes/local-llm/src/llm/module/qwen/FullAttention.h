@@ -27,7 +27,7 @@ public:
 
     // prefill：一次处理 tokens 个位置，写满 KV cache 并算出注意力输出。
     // d_hidden：输入隐状态 [tokens, hidden_size]；d_out：注意力输出 [tokens, hidden_size]。
-    void prefill(const float *d_hidden, float *d_out, size_t tokens,
+    void prefill(const float *d_hidden, float *d_out, size_t input_size,
                  FullAttnKVCache &kv, QwenForwardScratch &scratch);
 
     // decode：处理位置 pos 的单个 token，追加写入 KV cache 并算出注意力输出。
