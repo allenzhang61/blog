@@ -4,6 +4,7 @@
 
 #include "RoutedExperts.h"
 
+#include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
@@ -51,12 +52,12 @@ void RoutedExperts::forward(DeepseekSession &session, const DeepseekLayerWeights
     const int n_exp = config_.expert_count;
     const int k = config_.expert_used;
 
-    float *d_gate = s.gate.ensure(static_cast<size_t>(ffn), "ds.egate");
-    float *d_up = s.up.ensure(static_cast<size_t>(ffn), "ds.eup");
-    float *d_act = s.act.ensure(static_cast<size_t>(ffn), "ds.eact");
-    float *d_eout = s.expert_out.ensure(static_cast<size_t>(hidden_size), "ds.eout");
-    uint16_t *xlow = s.ffn_in_lowp.ensure(static_cast<size_t>(hidden_size), "ds.ffn_in_lowp");
-    uint16_t *alow = s.act_lowp.ensure(static_cast<size_t>(ffn), "ds.act_lowp");
+    float *d_gate = s.ensure<float>(scratch_key::kGate, static_cast<size_t>(ffn), "ds.egate");
+    float *d_up = s.ensure<float>(scratch_key::kUp, static_cast<size_t>(ffn), "ds.eup");
+    float *d_act = s.ensure<float>(scratch_key::kAct, static_cast<size_t>(ffn), "ds.eact");
+    float *d_eout = s.ensure<float>(scratch_key::kExpertOut, static_cast<size_t>(hidden_size), "ds.eout");
+    uint16_t *xlow = s.ensure<uint16_t>(scratch_key::kFfnInLowp, static_cast<size_t>(hidden_size), "ds.ffn_in_lowp");
+    uint16_t *alow = s.ensure<uint16_t>(scratch_key::kActLowp, static_cast<size_t>(ffn), "ds.act_lowp");
 
     for (int tok = 0; tok < input_size; ++tok) {
         const float *tok_in = d_normed + static_cast<size_t>(tok) * hidden_size;

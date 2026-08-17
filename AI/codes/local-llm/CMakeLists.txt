@@ -43,11 +43,13 @@ add_executable(local_llm main.cpp
         src/backend/cuda/mem/CudaWeightDequantPool.h
         src/backend/cuda/mem/CudaScratchBuffer.cpp
         src/backend/cuda/mem/CudaScratchBuffer.h
+        src/backend/cuda/mem/CudaScratch.cpp
+        src/backend/cuda/mem/CudaScratch.h
+        src/backend/cuda/mem/SessionBase.h
         src/backend/cuda/mem/Quant.cpp
         src/backend/cuda/mem/Quant.h
         src/llm/model/qwen/QwenSession.cpp
         src/llm/model/qwen/QwenSession.h
-        src/llm/model/qwen/QwenForwardScratch.h
         src/backend/cuda/ops/kernel.cu
         src/backend/cuda/ops/kernel.cuh
         src/backend/cuda/ops/kernel_internal.cuh
@@ -74,10 +76,10 @@ add_executable(local_llm main.cpp
         src/llm/module/common/Embedding.h
         src/llm/module/common/RMSNorm.cpp
         src/llm/module/common/RMSNorm.h
+        src/llm/module/common/LMHead.cpp
+        src/llm/module/common/LMHead.h
         src/llm/module/qwen/SwiGLUMlp.cpp
         src/llm/module/qwen/SwiGLUMlp.h
-        src/llm/module/qwen/LMHead.cpp
-        src/llm/module/qwen/LMHead.h
         src/llm/module/qwen/FullAttention.cpp
         src/llm/module/qwen/FullAttention.h
         src/llm/module/qwen/LinearAttention.cpp
@@ -88,7 +90,6 @@ add_executable(local_llm main.cpp
         src/llm/model/qwen/QwenModel.h
         src/llm/model/deepseek/DeepseekConfig.cpp
         src/llm/model/deepseek/DeepseekConfig.h
-        src/llm/model/deepseek/DeepseekForwardScratch.h
         src/llm/model/deepseek/DeepseekSession.cpp
         src/llm/model/deepseek/DeepseekSession.h
         src/llm/model/deepseek/DeepseekWeights.cpp

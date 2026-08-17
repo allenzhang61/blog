@@ -5,7 +5,7 @@
 #include "llm/module/common/Embedding.h"
 
 #include "backend/cuda/common.h"
-#include "backend/cuda/mem/CudaScratchBuffer.h"
+#include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "backend/cuda/ops/kernel.cuh"
@@ -24,14 +24,14 @@ Embedding::Embedding(const MFTensorView &weight, CudaWeightPool *pool)
 }
 
 void Embedding::forward(const std::vector<int> &input, float *d_hidden,
-                        CudaScratchBuffer<int> &input_buffer,
+                        CudaScratch &scratch,
                         const std::string &input_buffer_name) {
     CudaWeight table = pool_->cached_weight(weight_)->try_dequant();
 
     const int lowp_type = (table.dtype == DType::F16) ? 1 : 0;
     const size_t input_size = input.size();
 
-    int *d_input = input_buffer.ensure(input_size, input_buffer_name);
+    int *d_input = scratch.ensure<int>(scratch_key::kInput, input_size, input_buffer_name);
     cuda_memcpy_h2d(d_input, input.data(), input_size * sizeof(int),
                     "cudaMemcpy embedding token ids 失败");
 

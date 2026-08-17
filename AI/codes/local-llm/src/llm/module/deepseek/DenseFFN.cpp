@@ -4,6 +4,7 @@
 
 #include "DenseFFN.h"
 
+#include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
@@ -23,13 +24,13 @@ void DenseFFN::forward(DeepseekSession &session, int layer, float *d_hidden, int
     const int hidden_size = config_.hidden_size;
     const int ffn = config_.dense_ffn;
 
-    float *d_normed = s.normed.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed");
+    float *d_normed = s.ensure<float>(scratch_key::kNormed, static_cast<size_t>(input_size) * hidden_size, "ds.normed");
     RMSNorm::forward(pool_, *lw.ffn_norm, d_hidden, d_normed, input_size, hidden_size,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    float *d_gate = s.gate.ensure(static_cast<size_t>(input_size) * ffn, "ds.gate");
-    float *d_up = s.up.ensure(static_cast<size_t>(input_size) * ffn, "ds.up");
-    uint16_t *xlow = s.ffn_in_lowp.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.ffn_in_lowp");
+    float *d_gate = s.ensure<float>(scratch_key::kGate, static_cast<size_t>(input_size) * ffn, "ds.gate");
+    float *d_up = s.ensure<float>(scratch_key::kUp, static_cast<size_t>(input_size) * ffn, "ds.up");
+    uint16_t *xlow = s.ensure<uint16_t>(scratch_key::kFfnInLowp, static_cast<size_t>(input_size) * hidden_size, "ds.ffn_in_lowp");
     {
         CudaWeight wg = pool_->cached_weight(*lw.ffn_gate)->try_dequant();
         GemmInput gate_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, wg.type, nullptr);
@@ -40,13 +41,13 @@ void DenseFFN::forward(DeepseekSession &session, int layer, float *d_hidden, int
         GemmInput up_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, wu.type, nullptr);
         gemm_weight(pool_->handle, wu, up_in.ptr, d_up, ffn, hidden_size, input_size, up_in.type, "ds.gemm.ffn_up");
     }
-    float *d_act = s.act.ensure(static_cast<size_t>(input_size) * ffn, "ds.act");
+    float *d_act = s.ensure<float>(scratch_key::kAct, static_cast<size_t>(input_size) * ffn, "ds.act");
     launch_silu_mul(d_gate, d_up, d_act, input_size * ffn, nullptr);
 
-    float *d_out = s.ffn_out.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.ffn_out");
+    float *d_out = s.ensure<float>(scratch_key::kFfnOut, static_cast<size_t>(input_size) * hidden_size, "ds.ffn_out");
     {
         CudaWeight wd = pool_->cached_weight(*lw.ffn_down)->try_dequant();
-        uint16_t *alow = s.act_lowp.ensure(static_cast<size_t>(input_size) * ffn, "ds.act_lowp");
+        uint16_t *alow = s.ensure<uint16_t>(scratch_key::kActLowp, static_cast<size_t>(input_size) * ffn, "ds.act_lowp");
         GemmInput down_in = prepare_gemm_input(d_act, alow, input_size * ffn, wd.type, nullptr);
         gemm_weight(pool_->handle, wd, down_in.ptr, d_out, hidden_size, ffn, input_size, down_in.type, "ds.gemm.ffn_down");
     }

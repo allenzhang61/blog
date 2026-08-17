@@ -11,9 +11,9 @@
 
 #include "llm/model/qwen/QwenWeights.h"
 #include "llm/model/qwen/QwenConfig.h"
-#include "llm/model/qwen/QwenForwardScratch.h"
 #include "llm/model/qwen/QwenSession.h"
 #include "backend/cuda/common.h"
+#include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "backend/cuda/ops/gemm.h"
@@ -23,8 +23,9 @@ LinearAttention::LinearAttention(const LinearAttnWeights &weights, const TextCon
                                  CudaWeightPool *pool)
     : weights_(weights), config_(config), pool_(pool) {}
 
-void LinearAttention::prefill(const float *d_hidden, float *d_out, size_t input_size,
-                              LinearAttnRecurrentState &state, QwenForwardScratch &scratch) {
+void LinearAttention::prefill(QwenSession &session, const float *d_hidden, float *d_out, size_t input_size,
+                              LinearAttnRecurrentState &state) {
+    CudaScratch &scratch = session.scratch;
     const int hidden_size = config_.hidden_size;
     const int key_heads = config_.linear_num_key_heads;
     const int value_heads = config_.linear_num_value_heads;
@@ -37,18 +38,18 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, size_t input_
     const float eps = config_.rms_norm_eps;
     const int token_count = static_cast<int>(input_size);
 
-    float *d_mixed = scratch.linear_projection.ensure(input_size * static_cast<size_t>(conv_dim), "lin mixed");
-    float *d_z = scratch.linear_z.ensure(input_size * static_cast<size_t>(value_total), "lin z");
-    float *d_b = scratch.linear_b.ensure(input_size * static_cast<size_t>(value_heads), "lin b");
-    float *d_a = scratch.linear_a.ensure(input_size * static_cast<size_t>(value_heads), "lin a");
-    float *d_conv = scratch.linear_conv_out.ensure(input_size * static_cast<size_t>(conv_dim), "lin conv");
-    float *d_gated = scratch.linear_gated.ensure(input_size * static_cast<size_t>(value_total), "lin gated");
+    float *d_mixed = scratch.ensure<float>(scratch_key::kLinearProjection, input_size * static_cast<size_t>(conv_dim), "lin mixed");
+    float *d_z = scratch.ensure<float>(scratch_key::kLinearZ, input_size * static_cast<size_t>(value_total), "lin z");
+    float *d_b = scratch.ensure<float>(scratch_key::kLinearB, input_size * static_cast<size_t>(value_heads), "lin b");
+    float *d_a = scratch.ensure<float>(scratch_key::kLinearA, input_size * static_cast<size_t>(value_heads), "lin a");
+    float *d_conv = scratch.ensure<float>(scratch_key::kLinearConvOut, input_size * static_cast<size_t>(conv_dim), "lin conv");
+    float *d_gated = scratch.ensure<float>(scratch_key::kLinearGated, input_size * static_cast<size_t>(value_total), "lin gated");
     uint16_t *d_gated_lowp =
-        scratch.linear_gated_lowp.ensure(input_size * static_cast<size_t>(value_total), "lin gated lowp");
+        scratch.ensure<uint16_t>(scratch_key::kLinearGatedLowp, input_size * static_cast<size_t>(value_total), "lin gated lowp");
 
     // 输入激活转成权重 dtype（BF16/F16）后再做各投影。
     uint16_t *d_in_lowp =
-        scratch.input_lowp_buffer.ensure(input_size * static_cast<size_t>(hidden_size), "lin in lowp");
+        scratch.ensure<uint16_t>(scratch_key::kInputLowp, input_size * static_cast<size_t>(hidden_size), "lin in lowp");
     CudaWeight qkv = pool_->cached_weight(weights_.in_proj_qkv)->try_dequant();
     GemmInput in = prepare_gemm_input(d_hidden, d_in_lowp, input_size * static_cast<size_t>(hidden_size), qkv.type, nullptr);
     gemm_weight(pool_->handle, qkv, in.ptr, d_mixed, conv_dim, hidden_size, input_size, in.type, "linattn.in_proj_qkv");
@@ -83,8 +84,9 @@ void LinearAttention::prefill(const float *d_hidden, float *d_out, size_t input_
     check_cuda(cudaDeviceSynchronize(), "LinearAttention prefill 同步失败");
 }
 
-void LinearAttention::decode(const float *d_hidden, float *d_out,
-                             LinearAttnRecurrentState &state, QwenForwardScratch &scratch) {
+void LinearAttention::decode(QwenSession &session, const float *d_hidden, float *d_out,
+                             LinearAttnRecurrentState &state) {
+    CudaScratch &scratch = session.scratch;
     const int hidden_size = config_.hidden_size;
     const int key_heads = config_.linear_num_key_heads;
     const int value_heads = config_.linear_num_value_heads;
@@ -96,15 +98,15 @@ void LinearAttention::decode(const float *d_hidden, float *d_out,
     const int conv_dim = key_total * 2 + value_total;
     const float eps = config_.rms_norm_eps;
 
-    float *d_mixed = scratch.linear_projection.ensure(conv_dim, "lin mixed");
-    float *d_z = scratch.linear_z.ensure(value_total, "lin z");
-    float *d_b = scratch.linear_b.ensure(value_heads, "lin b");
-    float *d_a = scratch.linear_a.ensure(value_heads, "lin a");
-    float *d_conv = scratch.linear_conv_out.ensure(conv_dim, "lin conv");
-    float *d_gated = scratch.linear_gated.ensure(value_total, "lin gated");
-    uint16_t *d_gated_lowp = scratch.linear_gated_lowp.ensure(value_total, "lin gated lowp");
+    float *d_mixed = scratch.ensure<float>(scratch_key::kLinearProjection, conv_dim, "lin mixed");
+    float *d_z = scratch.ensure<float>(scratch_key::kLinearZ, value_total, "lin z");
+    float *d_b = scratch.ensure<float>(scratch_key::kLinearB, value_heads, "lin b");
+    float *d_a = scratch.ensure<float>(scratch_key::kLinearA, value_heads, "lin a");
+    float *d_conv = scratch.ensure<float>(scratch_key::kLinearConvOut, conv_dim, "lin conv");
+    float *d_gated = scratch.ensure<float>(scratch_key::kLinearGated, value_total, "lin gated");
+    uint16_t *d_gated_lowp = scratch.ensure<uint16_t>(scratch_key::kLinearGatedLowp, value_total, "lin gated lowp");
 
-    uint16_t *d_in_lowp = scratch.input_lowp_buffer.ensure(hidden_size, "lin in lowp");
+    uint16_t *d_in_lowp = scratch.ensure<uint16_t>(scratch_key::kInputLowp, hidden_size, "lin in lowp");
     CudaWeight qkv = pool_->cached_weight(weights_.in_proj_qkv)->try_dequant();
     GemmInput in = prepare_gemm_input(d_hidden, d_in_lowp, hidden_size, qkv.type, nullptr);
     gemm_weight(pool_->handle, qkv, in.ptr, d_mixed, conv_dim, hidden_size, 1, in.type, "linattn.in_proj_qkv");

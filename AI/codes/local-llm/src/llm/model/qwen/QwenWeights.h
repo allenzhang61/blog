@@ -12,41 +12,47 @@
 class QwenConfig;
 
 // linear attention 层一次性解析好的权重引用。
+// 记号：hidden=hidden_size；key_total=linear_num_key_heads*linear_key_head_dim；
+//       value_total=linear_num_value_heads*linear_value_head_dim；
+//       conv_dim=key_total*2+value_total；kernel=linear_conv_kernel_dim。
 struct LinearAttnWeights {
-    MFTensorView in_proj_qkv;
-    MFTensorView in_proj_z;
-    MFTensorView in_proj_b;
-    MFTensorView in_proj_a;
-    MFTensorView conv1d;
-    MFTensorView a_log;
-    MFTensorView dt_bias;
-    MFTensorView norm;
-    MFTensorView out_proj;
+    MFTensorView in_proj_qkv;  // [conv_dim, hidden]
+    MFTensorView in_proj_z;    // [value_total, hidden]
+    MFTensorView in_proj_b;    // [linear_num_value_heads, hidden]
+    MFTensorView in_proj_a;    // [linear_num_value_heads, hidden]
+    MFTensorView conv1d;       // [conv_dim, kernel]（深度可分离，逐通道）
+    MFTensorView a_log;        // [linear_num_value_heads]
+    MFTensorView dt_bias;      // [linear_num_value_heads]
+    MFTensorView norm;         // [linear_value_head_dim]（每 head 的 gated RMSNorm）
+    MFTensorView out_proj;     // [hidden, value_total]
 };
 
 // full attention 层一次性解析好的权重引用。
+// 记号：hidden=hidden_size；q_total=num_attention_heads*head_dim；
+//       kv_total=num_key_value_heads*head_dim。
 struct FullAttnWeights {
-    MFTensorView q_proj;
-    MFTensorView k_proj;
-    MFTensorView v_proj;
-    MFTensorView q_norm;
-    MFTensorView k_norm;
-    MFTensorView o_proj;
+    MFTensorView q_proj;  // [q_total*2, hidden]（每 head 交错输出 [q, gate]）
+    MFTensorView k_proj;  // [kv_total, hidden]
+    MFTensorView v_proj;  // [kv_total, hidden]
+    MFTensorView q_norm;  // [head_dim]
+    MFTensorView k_norm;  // [head_dim]
+    MFTensorView o_proj;  // [hidden, q_total]
 };
 
 // MLP 层一次性解析好的权重引用。
+// 记号：hidden=hidden_size；intermediate=intermediate_size。
 struct MlpWeights {
-    MFTensorView gate;
-    MFTensorView up;
-    MFTensorView down;
+    MFTensorView gate;  // [intermediate, hidden]
+    MFTensorView up;    // [intermediate, hidden]
+    MFTensorView down;  // [hidden, intermediate]
 };
 
 // 单个 transformer 层解析好的权重引用集合。
 struct LayerWeights {
     // 层类型："linear_attention" 或 "full_attention"。
     std::string type;
-    MFTensorView input_norm;
-    MFTensorView post_norm;
+    MFTensorView attn_norm;  // [hidden_size]（注意力前 RMSNorm）
+    MFTensorView ffn_norm;   // [hidden_size]（MLP 前 RMSNorm）
     // 仅 linear_attention 层有效。
     LinearAttnWeights lin;
     // 仅 full_attention 层有效。
@@ -86,8 +92,8 @@ struct VisionWeights {
 
 // MTP（多 token 预测）单层权重引用；当前未使用。
 struct MtpLayerWeights {
-    MFTensorView input_norm;
-    MFTensorView post_norm;
+    MFTensorView attn_norm;
+    MFTensorView ffn_norm;
     MFTensorView self_attn_q_proj;
     MFTensorView self_attn_k_proj;
     MFTensorView self_attn_v_proj;
@@ -114,8 +120,8 @@ public:
 
     void DebugDump();
 
-    MFTensorView embed_tokens;
-    MFTensorView final_norm;
+    MFTensorView token_embd;  // [vocab_size, hidden_size]
+    MFTensorView output_norm; // [hidden_size]
     std::vector<LayerWeights> layers;
 
     // 视觉塔权重（model.visual.*）；已解析但当前未使用（纯文本推理不走视觉分支）。

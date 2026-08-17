@@ -1,7 +1,7 @@
 # Qwen3.5-4B-Base 模型架构
 
 本文根据 [`config.json`](../../../../../software/llm/Qwen3.5-4B-Base/config.json) 以及本项目的
-[`QwenConfig.cpp`](../src/llm/qwen/QwenConfig.cpp)、[`QwenWeights.h`](../src/llm/qwen/QwenWeights.h)
+[`QwenConfig.cpp`](../src/llm/model/qwen/QwenConfig.cpp)、[`QwenWeights.h`](../src/llm/model/qwen/QwenWeights.h)
 描述该模型的整体架构。模型顶层 `architectures` 为 `Qwen3_5ForConditionalGeneration`，
 `model_type` 为 `qwen3_5`，是一个包含文本塔与视觉塔的多模态模型。本项目当前只走**纯文本推理**路径，
 视觉塔（`vision_config` / `model.visual.*`）与 MTP（`mtp.*`）权重虽被解析，但不参与前向。
@@ -110,7 +110,7 @@ down( SiLU(gate(x)) * up(x) )
 - `input_norm`：注意力子层前的 pre-norm；
 - `post_norm`：MLP 子层前的 pre-norm。
 
-塔尾接 `final_norm`（RMSNorm）后再经 lm_head 输出 logits。
+塔尾接 `final_norm`（RMSNorm）后再经 lm_head 输出 logits；lm_head 由通用 `common::LMHead` 统一实现（与 DeepSeek 共用），因 `tie_word_embeddings=true` 复用 `embed_tokens` 权重，`vocab_size` 由 Model 外部传入。
 
 ### 2.7 位置编码（RoPE）
 
@@ -182,8 +182,12 @@ down( SiLU(gate(x)) * up(x) )
 
 ## 七、与本项目实现的对应关系
 
-- 配置解析：[`QwenConfig.cpp`](../src/llm/qwen/QwenConfig.cpp) 把上述字段解析到 `Data`/`TextConfig`/`VisionConfig`；
+- 配置解析：[`QwenConfig.cpp`](../src/llm/model/qwen/QwenConfig.cpp) 把上述字段解析到 `Data`/`TextConfig`/`VisionConfig`；
   标注"当前未使用"的字段仅解析保存，不参与前向。
-- 权重加载：[`QwenWeights.h`](../src/llm/qwen/QwenWeights.h) 通过 mmap 零拷贝加载 safetensors，
+- 权重加载：[`QwenWeights.h`](../src/llm/model/qwen/QwenWeights.h) 通过 mmap 零拷贝加载 safetensors，
   按层类型解析成 `LayerWeights`；视觉塔与 MTP 权重被解析但不进入推理。
 - 层类型判定：实际前向按 `layer_types` 逐层区分 linear/full attention，而非用 `full_attention_interval` 推算。
+- 请求状态：[`QwenSession.h`](../src/llm/model/qwen/QwenSession.h)，包含 full attention KV cache 与 linear attention recurrent state；
+  scratch、已生成 token（`outputs`）、`max_seq_len` 上提到公共基类 [`SessionBase.h`](../src/backend/cuda/mem/SessionBase.h)。
+- 整体前向：[`QwenModel.cpp`](../src/llm/model/qwen/QwenModel.cpp)（prefill / decode 前向路径）。
+- 输出头：[`LMHead`](../src/llm/module/common/LMHead.h)（`common::LMHead`，Qwen / DeepSeek 共用）。

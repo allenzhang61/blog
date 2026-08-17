@@ -12,9 +12,7 @@
 #include "llm/module/Module.h"
 
 class CudaWeightPool;
-
-template <typename T>
-class CudaScratchBuffer;
+class CudaScratch;
 
 namespace common {
 
@@ -25,8 +23,9 @@ public:
     Embedding(const MFTensorView &weight, CudaWeightPool *pool);
 
     // 按 token id 逐行拷贝嵌入到 d_hidden（device），形状 [tokens, hidden_size]。
-    // token_buffer 是调用方 scratch 中的 int 临时缓冲，用于把 host token id 搬到 device。
-    void forward(const std::vector<int> &input, float *d_hidden, CudaScratchBuffer<int> &input_buffer,
+    // scratch 提供 token id 的 int 临时缓冲（key = scratch_key::kInput），用于把 host
+    // token id 搬到 device；input_buffer_name 仅用于分配失败时的错误信息。
+    void forward(const std::vector<int> &input, float *d_hidden, CudaScratch &scratch,
                  const std::string &input_buffer_name);
 
 private:

@@ -5,6 +5,7 @@
 #include "MLA.h"
 
 #include "backend/cuda/common.h"
+#include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
@@ -32,14 +33,14 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
     const int q_dim = n_heads * qk_head;             // 3072
     const int kvb_out = n_heads * (qk_nope + v_head); // 4096
 
-    float *d_normed = scratch.normed.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed");
+    float *d_normed = scratch.ensure<float>(scratch_key::kNormed, static_cast<size_t>(input_size) * hidden_size, "ds.normed");
     RMSNorm::forward(pool_, *lw.attn_norm, d_hidden, d_normed, input_size, hidden_size,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    float *d_q = scratch.q.ensure(static_cast<size_t>(input_size) * q_dim, "ds.q");
+    float *d_q = scratch.ensure<float>(scratch_key::kQ, static_cast<size_t>(input_size) * q_dim, "ds.q");
     {
         CudaWeight w = pool_->cached_weight(*lw.attn_q)->try_dequant();
-        uint16_t *xlow = scratch.normed_lowp.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
+        uint16_t *xlow = scratch.ensure<uint16_t>(scratch_key::kNormedLowp, static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
         GemmInput q_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, w.type, nullptr);
         gemm_weight(pool_->handle, w, q_in.ptr, d_q, q_dim, hidden_size, input_size, q_in.type, "ds.gemm.attn_q");
     }
@@ -49,10 +50,10 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
         launch_mla_rope_q_batch(d_q, input_size, n_heads, qk_nope, qk_rope, start_pos, static_cast<const float *>(session.inv_freq.ptr), nullptr);
     }
 
-    float *d_kv_a = scratch.kv_a.ensure(static_cast<size_t>(input_size) * kv_total, "ds.kv_a");
+    float *d_kv_a = scratch.ensure<float>(scratch_key::kKvA, static_cast<size_t>(input_size) * kv_total, "ds.kv_a");
     {
         CudaWeight w = pool_->cached_weight(*lw.attn_kv_a_mqa)->try_dequant();
-        uint16_t *xlow = scratch.normed_lowp.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
+        uint16_t *xlow = scratch.ensure<uint16_t>(scratch_key::kNormedLowp, static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
         GemmInput kv_a_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, w.type, nullptr);
         gemm_weight(pool_->handle, w, kv_a_in.ptr, d_kv_a, kv_total, hidden_size, input_size, kv_a_in.type, "ds.gemm.kv_a");
     }
@@ -73,20 +74,19 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
     session.kv_caches[layer].seq_len = start_pos + input_size;
 
     const int seq = start_pos + input_size;
-    float *d_kvb = scratch.kv_b_out.ensure(static_cast<size_t>(seq) * kvb_out, "ds.kv_b_out");
+    float *d_kvb = scratch.ensure<float>(scratch_key::kKvBOut, static_cast<size_t>(seq) * kvb_out, "ds.kv_b_out");
     {
         CudaWeight w = pool_->cached_weight(*lw.attn_kv_b)->try_dequant();
-        uint16_t *latent_low = scratch.latent_lowp.ensure(static_cast<size_t>(seq) * kv_lora, "ds.latent_lowp");
-        float *latent_f32 = scratch.attn.ensure(static_cast<size_t>(seq) * kv_lora, "ds.latent_f32");
-        check_cuda(cudaMemcpy2D(latent_f32, kv_lora * sizeof(float), d_cache,
-                                kv_total * sizeof(float), kv_lora * sizeof(float), seq,
-                                cudaMemcpyDeviceToDevice),
-                   "ds.gather.latent");
+        uint16_t *latent_low = scratch.ensure<uint16_t>(scratch_key::kLatentLowp, static_cast<size_t>(seq) * kv_lora, "ds.latent_lowp");
+        float *latent_f32 = scratch.ensure<float>(scratch_key::kAttn, static_cast<size_t>(seq) * kv_lora, "ds.latent_f32");
+        cuda_memcpy2d_d2d(latent_f32, kv_lora * sizeof(float), d_cache,
+                          kv_total * sizeof(float), kv_lora * sizeof(float), seq,
+                          "ds.gather.latent");
         GemmInput latent_in = prepare_gemm_input(latent_f32, latent_low, seq * kv_lora, w.type, nullptr);
         gemm_weight(pool_->handle, w, latent_in.ptr, d_kvb, kvb_out, kv_lora, seq, latent_in.type, "ds.gemm.kv_b");
     }
 
-    float *d_attn = scratch.attn.ensure(static_cast<size_t>(input_size) * n_heads * v_head, "ds.attn");
+    float *d_attn = scratch.ensure<float>(scratch_key::kAttn, static_cast<size_t>(input_size) * n_heads * v_head, "ds.attn");
     if (input_size == 1) {
         launch_mla_attend(d_q, d_kvb, d_cache, d_attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
                           session.max_seq_len, start_pos, session.attn_softmax_scale, nullptr);
@@ -96,11 +96,11 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
                                 session.attn_softmax_scale, nullptr);
     }
 
-    float *d_out = scratch.attn_out.ensure(static_cast<size_t>(input_size) * hidden_size, "ds.attn_out");
+    float *d_out = scratch.ensure<float>(scratch_key::kAttnOut, static_cast<size_t>(input_size) * hidden_size, "ds.attn_out");
     {
         CudaWeight w = pool_->cached_weight(*lw.attn_output)->try_dequant();
         const int in_dim = n_heads * v_head; // 2048
-        uint16_t *xlow = scratch.attn_lowp.ensure(static_cast<size_t>(input_size) * in_dim, "ds.attn_lowp");
+        uint16_t *xlow = scratch.ensure<uint16_t>(scratch_key::kAttnLowp, static_cast<size_t>(input_size) * in_dim, "ds.attn_lowp");
         GemmInput attn_in = prepare_gemm_input(d_attn, xlow, input_size * in_dim, w.type, nullptr);
         gemm_weight(pool_->handle, w, attn_in.ptr, d_out, hidden_size, in_dim, input_size, attn_in.type, "ds.gemm.attn_output");
     }

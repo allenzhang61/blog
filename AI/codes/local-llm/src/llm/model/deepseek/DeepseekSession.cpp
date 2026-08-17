@@ -73,9 +73,9 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const std::vector
     attn_softmax_scale = 1.0f / std::sqrt(static_cast<float>(config.qk_head_dim()));
     inv_freq = CudaWeight(static_cast<size_t>(half) * sizeof(float), CUDA_R_32F, false,
                           "deepseek.inv_freq");
-    check_cuda(cudaMemcpy(inv_freq.ptr, h_inv_freq.data(),
-                          static_cast<size_t>(half) * sizeof(float), cudaMemcpyHostToDevice),
-               "deepseek.inv_freq h2d");
+    cuda_memcpy_h2d(inv_freq.ptr, h_inv_freq.data(),
+                    static_cast<size_t>(half) * sizeof(float),
+                    "deepseek.inv_freq h2d");
 }
 
 size_t DeepseekSession::kv_state_bytes() const {

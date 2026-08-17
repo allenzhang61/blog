@@ -15,7 +15,6 @@
 struct LayerWeights;
 struct TextConfig;
 class QwenSession;
-class QwenForwardScratch;
 class CudaWeightPool;
 
 // 单个 Decoder 层，对应 LayerWeights。结构（pre-norm + 残差）：
@@ -33,7 +32,7 @@ public:
     void prefill(QwenSession &session, float *d_hidden, size_t input_size);
 
     // decode：处理位置 pos 的单个 token [1, hidden_size]，原位更新隐状态。
-    void decode(QwenSession &session, float *d_hidden, int pos, QwenForwardScratch &scratch);
+    void decode(QwenSession &session, float *d_hidden, int pos);
 
     // 是否为 full_attention 层（否则为 linear_attention）。
     bool is_full_attention() const { return is_full_; }

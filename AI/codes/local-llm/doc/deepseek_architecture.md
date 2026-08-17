@@ -33,7 +33,7 @@ embedding
 - **模型格式**：当前 DeepSeek 路径主要读取 GGUF 的 `deepseek2.*` metadata 与 tensor。
 - **注意力**：所有层使用 MLA（Multi-head Latent Attention），KV cache 保存 latent 表示。
 - **FFN**：前 `leading_dense_block_count` 层为 dense SwiGLU，后续为 MoE。
-- **lm_head**：优先使用独立 `output.weight`，缺失时回退到 `token_embd.weight`。
+- **lm_head**：优先使用独立 `output.weight`，缺失时回退到 `token_embd.weight`；由通用 `common::LMHead` 统一实现（与 Qwen 共用），`vocab_size` 由 Model 外部传入。
 
 ## 二、全局超参（DeepseekConfig）
 
@@ -91,7 +91,7 @@ hidden
 
 ### 3.3 Latent KV Cache
 
-`DeepseekSession` 为每层分配一份 latent KV cache：
+`DeepseekSession` 为每层分配一份 latent KV cache（由类外的 `LatentKVCache` 结构描述）：
 
 ```
 [max_seq_len, kv_lora_rank + qk_rope_head_dim]
@@ -233,8 +233,9 @@ shared expert 输出直接累加到 `moe_out`。
 - tokenizer：[`GGUFTokenizer.h`](../src/format/gguf/GGUFTokenizer.h) / [`GGUFTokenizer.cpp`](../src/format/gguf/GGUFTokenizer.cpp)。
 - 配置解析：[`DeepseekConfig.cpp`](../src/llm/model/deepseek/DeepseekConfig.cpp)。
 - 权重索引：[`DeepseekWeights.cpp`](../src/llm/model/deepseek/DeepseekWeights.cpp)。
-- 请求状态：[`DeepseekSession.h`](../src/llm/model/deepseek/DeepseekSession.h)，包含 latent KV cache、`inv_freq`、scratch。
-- 整体前向：[`Forward.cpp`](../src/llm/module/deepseek/DeepseekForward.cpp)。
+- 请求状态：[`DeepseekSession.h`](../src/llm/model/deepseek/DeepseekSession.h)，包含 latent KV cache、`inv_freq`、`attn_softmax_scale`；scratch、已生成 token（`outputs`）、`max_seq_len` 上提到公共基类 [`SessionBase.h`](../src/backend/cuda/mem/SessionBase.h)。
+- 整体前向：[`DeepseekModel.cpp`](../src/llm/model/deepseek/DeepseekModel.cpp)（prefill / decode 前向路径）。
+- 输出头：[`LMHead`](../src/llm/module/common/LMHead.h)（`common::LMHead`，Qwen / DeepSeek 共用）。
 - MLA：[`MLA.cpp`](../src/llm/module/deepseek/MLA.cpp)。
 - FFN 分发：[`MLP.cpp`](../src/llm/module/deepseek/MLP.cpp)。
 - Dense FFN：[`DenseFFN.cpp`](../src/llm/module/deepseek/DenseFFN.cpp)。

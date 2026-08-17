@@ -14,6 +14,7 @@
 #include "llm/module/common/Embedding.h"
 #include "llm/module/deepseek/MLA.h"
 #include "llm/module/deepseek/MLP.h"
+#include "llm/module/common/LMHead.h"
 #include "llm/module/common/RMSNorm.h"
 #include "utils/sampling/Sampler.h"
 
@@ -49,6 +50,7 @@ private:
     common::Embedding embedding_;
     MLA mla_;
     MLP mlp_;
+    common::LMHead lm_head_;
     std::unique_ptr<DeepseekSession> session_;
 };
 

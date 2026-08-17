@@ -23,6 +23,11 @@ void cuda_memcpy_h2d(void *dst, const void *src, size_t bytes, const std::string
 // Device -> Host 拷贝，调用方不需要直接依赖 CUDA runtime 枚举。
 void cuda_memcpy_d2h(void *dst, const void *src, size_t bytes, const std::string &what);
 
+// Device -> Device 的 2D 跨步拷贝（对应 cudaMemcpy2D + cudaMemcpyDeviceToDevice），
+// dpitch/spitch 为目的/源每行字节跨距，width_bytes 为每行有效字节数，height 为行数。
+void cuda_memcpy2d_d2d(void *dst, size_t dpitch, const void *src, size_t spitch,
+                       size_t width_bytes, size_t height, const std::string &what);
+
 // 分配 device 内存，失败时抛异常。
 void *cuda_malloc_device(size_t bytes, const std::string &what);
 

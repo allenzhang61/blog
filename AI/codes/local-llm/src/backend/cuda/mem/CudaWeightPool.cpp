@@ -56,7 +56,7 @@ void CudaWeightPool::memcpy_h2d_timed(void *dst, const void *src, size_t bytes,
                                       const std::string &what, bool timed, double &out_ms) {
     out_ms = 0.0;
     if (!timed) {
-        check_cuda(cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice), "cudaMemcpy weight 失败 " + what);
+        cuda_memcpy_h2d(dst, src, bytes, "cudaMemcpy weight 失败 " + what);
         return;
     }
     cudaEvent_t start = nullptr;
@@ -64,7 +64,7 @@ void CudaWeightPool::memcpy_h2d_timed(void *dst, const void *src, size_t bytes,
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
-    check_cuda(cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice), "cudaMemcpy weight 失败 " + what);
+    cuda_memcpy_h2d(dst, src, bytes, "cudaMemcpy weight 失败 " + what);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     float ms = 0.0f;

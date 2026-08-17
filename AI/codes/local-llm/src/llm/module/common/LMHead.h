@@ -1,0 +1,41 @@
+//
+// Created by zhangyoulun on 9/8/2026.
+//
+
+#ifndef LOCAL_LLM_COMMON_LMHEAD_H
+#define LOCAL_LLM_COMMON_LMHEAD_H
+
+#include "format/MF.h"
+#include "llm/module/Module.h"
+
+class SessionBase;
+class CudaWeightPool;
+class Sampler;
+
+namespace common {
+
+// 通用输出头：对 norm 后的单行隐状态 [1, hidden_size] 计算 logits，拷回 host 交由
+// Sampler 采样得到下一个 token id。与具体模型无关，Qwen / DeepSeek 共用。
+//
+// weight：lm_head 投影权重，逻辑形状 [vocab_size, hidden_size]
+//   （Qwen tie_word_embeddings 复用 embed_tokens；DeepSeek 用 output，缺失时加载阶段
+//    已回退到 token_embd）。
+// logits 及输入低精度中间量走 session.scratch；重复惩罚所需历史 token 取自 session.outputs。
+class LMHead : public Module {
+public:
+    LMHead(const MFTensorView &weight, CudaWeightPool *pool);
+
+    // 对单行隐状态 [1, hidden_size] 计算 logits，拷回 host 后交由 sampler 采样，返回下一个 token id。
+    // d_hidden 需为已过 final/output norm 的隐状态；vocab_size 由调用方传入；
+    // 仅在需要下一个 token 的位置调用（decode 每步、prefill 末位）。
+    int forward(SessionBase &session, const float *d_hidden, int hidden_size, int vocab_size,
+                Sampler &sampler);
+
+private:
+    const MFTensorView &weight_;
+    CudaWeightPool *pool_ = nullptr;
+};
+
+} // namespace common
+
+#endif // LOCAL_LLM_COMMON_LMHEAD_H

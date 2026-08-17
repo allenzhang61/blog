@@ -12,7 +12,7 @@
 #include "llm/module/Module.h"
 #include "llm/module/common/Embedding.h"
 #include "llm/module/qwen/DecoderLayer.h"
-#include "llm/module/qwen/LMHead.h"
+#include "llm/module/common/LMHead.h"
 
 #include "format/MF.h"
 #include "llm/model/BaseModel.h"
@@ -29,7 +29,7 @@ class QwenSession;
 //
 // 作为 BaseModel 的实现，QwenModel 自持一次推理请求所需的全部对象：
 //   config / weights / tokenizer / per-request session。
-// Module 本身无 per-request 状态；跨 token 状态与临时激活分别在 QwenSession / QwenForwardScratch。
+// Module 本身无 per-request 状态；跨 token 状态与临时激活分别在 QwenSession / QwenSession::scratch。
 class QwenModel : public Module, public BaseModel {
 public:
     // 从已打开的模型文件加载 config / weights / tokenizer，并建立各子 Module。
@@ -72,7 +72,7 @@ private:
 
     common::Embedding embedding_;
     std::vector<DecoderLayer> layers_;
-    LMHead lm_head_;
+    common::LMHead lm_head_;
 
     // 当前请求的 per-request 状态；prefill() 会重建，decode() 复用。
     // 语法：

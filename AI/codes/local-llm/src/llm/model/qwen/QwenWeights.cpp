@@ -102,16 +102,16 @@ QwenWeights::QwenWeights(const MF &mf, const QwenConfig &config)
     const std::vector<std::string> &layer_types = config.data.text.layer_types;
 
     const std::string root = "model.language_model.";
-    embed_tokens = mf_.get_tensor_view(root + "embed_tokens.weight");
-    final_norm = mf_.get_tensor_view(root + "norm.weight");
+    token_embd = mf_.get_tensor_view(root + "embed_tokens.weight");
+    output_norm = mf_.get_tensor_view(root + "norm.weight");
     layers.resize(num_hidden_layers);
 
     for (int layer = 0; layer < num_hidden_layers; ++layer) {
         const std::string prefix = root + "layers." + std::to_string(layer) + ".";
         LayerWeights &lw = layers[layer];
         lw.type = layer_types[layer];
-        lw.input_norm = mf_.get_tensor_view(prefix + "input_layernorm.weight");
-        lw.post_norm = mf_.get_tensor_view(prefix + "post_attention_layernorm.weight");
+        lw.attn_norm = mf_.get_tensor_view(prefix + "input_layernorm.weight");
+        lw.ffn_norm = mf_.get_tensor_view(prefix + "post_attention_layernorm.weight");
         lw.mlp.gate = mf_.get_tensor_view(prefix + "mlp.gate_proj.weight");
         lw.mlp.up = mf_.get_tensor_view(prefix + "mlp.up_proj.weight");
         lw.mlp.down = mf_.get_tensor_view(prefix + "mlp.down_proj.weight");
@@ -185,8 +185,8 @@ void QwenWeights::parse_mtp_weights(const QwenConfig &config) {
     for (int i = 0; i < num_layers; ++i) {
         const std::string prefix = root + "layers." + std::to_string(i) + ".";
         MtpLayerWeights &m = mtp.layers[i];
-        m.input_norm = mf_.get_tensor_view(prefix + "input_layernorm.weight");
-        m.post_norm = mf_.get_tensor_view(prefix + "post_attention_layernorm.weight");
+        m.attn_norm = mf_.get_tensor_view(prefix + "input_layernorm.weight");
+        m.ffn_norm = mf_.get_tensor_view(prefix + "post_attention_layernorm.weight");
         m.self_attn_q_proj = mf_.get_tensor_view(prefix + "self_attn.q_proj.weight");
         m.self_attn_k_proj = mf_.get_tensor_view(prefix + "self_attn.k_proj.weight");
         m.self_attn_v_proj = mf_.get_tensor_view(prefix + "self_attn.v_proj.weight");
@@ -216,13 +216,13 @@ void QwenWeights::DebugDump() {
             << " bytes=" << w.nbytes << "\n";
     };
 
-    dump_one("embed_tokens", embed_tokens);
-    dump_one("final_norm", final_norm);
+    dump_one("token_embd", token_embd);
+    dump_one("output_norm", output_norm);
     for (size_t i = 0; i < layers.size(); ++i) {
         const LayerWeights &lw = layers[i];
         out << "  layer[" << i << "] type=" << lw.type << "\n";
-        dump_one("  input_norm", lw.input_norm);
-        dump_one("  post_norm", lw.post_norm);
+        dump_one("  attn_norm", lw.attn_norm);
+        dump_one("  ffn_norm", lw.ffn_norm);
         dump_one("  mlp.gate", lw.mlp.gate);
         dump_one("  mlp.up", lw.mlp.up);
         dump_one("  mlp.down", lw.mlp.down);
@@ -283,8 +283,8 @@ void QwenWeights::DebugDump() {
     for (size_t i = 0; i < mtp.layers.size(); ++i) {
         const MtpLayerWeights &m = mtp.layers[i];
         out << "  mtp.layer[" << i << "]\n";
-        dump_one("  input_norm", m.input_norm);
-        dump_one("  post_norm", m.post_norm);
+        dump_one("  attn_norm", m.attn_norm);
+        dump_one("  ffn_norm", m.ffn_norm);
         dump_one("  self_attn.q_proj", m.self_attn_q_proj);
         dump_one("  self_attn.k_proj", m.self_attn_k_proj);
         dump_one("  self_attn.v_proj", m.self_attn_v_proj);

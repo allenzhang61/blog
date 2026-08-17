@@ -11,9 +11,9 @@
 
 #include "llm/model/qwen/QwenWeights.h"
 #include "llm/model/qwen/QwenConfig.h"
-#include "llm/model/qwen/QwenForwardScratch.h"
 #include "llm/model/qwen/QwenSession.h"
 #include "backend/cuda/common.h"
+#include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "backend/cuda/ops/gemm.h"
@@ -23,8 +23,9 @@ FullAttention::FullAttention(const FullAttnWeights &weights, const TextConfig &c
                              CudaWeightPool *pool)
     : weights_(weights), config_(config), pool_(pool) {}
 
-void FullAttention::prefill(const float *d_hidden, float *d_out, size_t input_size,
-                            FullAttnKVCache &kv, QwenForwardScratch &scratch) {
+void FullAttention::prefill(QwenSession &session, const float *d_hidden, float *d_out, size_t input_size,
+                            FullAttnKVCache &kv) {
+    CudaScratch &scratch = session.scratch;
     const int n_heads = config_.num_attention_heads;
     const int kv_heads = config_.num_key_value_heads;
     const int head_dim = config_.head_dim;
@@ -37,16 +38,16 @@ void FullAttention::prefill(const float *d_hidden, float *d_out, size_t input_si
     const int start_pos = kv.seq_len;
 
     // q_proj 输出 q_total*2（每 head 交错 [q, gate]）；k/v_proj 输出 kv_total。
-    float *d_qgate = scratch.full_projection.ensure(input_size * static_cast<size_t>(q_total) * 2, "full qgate");
-    float *d_k = scratch.full_k.ensure(input_size * static_cast<size_t>(kv_total), "full k");
-    float *d_v = scratch.full_v.ensure(input_size * static_cast<size_t>(kv_total), "full v");
-    float *d_q = scratch.full_q.ensure(input_size * static_cast<size_t>(q_total), "full q");
-    float *d_g = scratch.full_gate.ensure(input_size * static_cast<size_t>(q_total), "full gate");
-    float *d_attn = scratch.full_attn.ensure(input_size * static_cast<size_t>(q_total), "full attn");
+    float *d_qgate = scratch.ensure<float>(scratch_key::kFullProjection, input_size * static_cast<size_t>(q_total) * 2, "full qgate");
+    float *d_k = scratch.ensure<float>(scratch_key::kFullK, input_size * static_cast<size_t>(kv_total), "full k");
+    float *d_v = scratch.ensure<float>(scratch_key::kFullV, input_size * static_cast<size_t>(kv_total), "full v");
+    float *d_q = scratch.ensure<float>(scratch_key::kFullQ, input_size * static_cast<size_t>(q_total), "full q");
+    float *d_g = scratch.ensure<float>(scratch_key::kFullGate, input_size * static_cast<size_t>(q_total), "full gate");
+    float *d_attn = scratch.ensure<float>(scratch_key::kFullAttn, input_size * static_cast<size_t>(q_total), "full attn");
 
     // 输入激活转成权重 dtype（BF16/F16）后再投影。
     uint16_t *d_hidden_lowp =
-        scratch.input_lowp_buffer.ensure(input_size * static_cast<size_t>(hidden_size), "full in lowp");
+        scratch.ensure<uint16_t>(scratch_key::kInputLowp, input_size * static_cast<size_t>(hidden_size), "full in lowp");
     CudaWeight q_proj = pool_->cached_weight(weights_.q_proj)->try_dequant();
     GemmInput in = prepare_gemm_input(d_hidden, d_hidden_lowp, input_size * static_cast<size_t>(hidden_size), q_proj.type, nullptr);
     gemm_weight(pool_->handle, q_proj, in.ptr, d_qgate, q_total * 2, hidden_size, input_size, in.type, "fullattn.q_proj");
@@ -71,7 +72,7 @@ void FullAttention::prefill(const float *d_hidden, float *d_out, size_t input_si
 
     // attn 转成 o_proj 权重 dtype 后做输出投影。
     uint16_t *d_attn_lowp =
-        scratch.full_attn_lowp.ensure(input_size * static_cast<size_t>(q_total), "full attn lowp");
+        scratch.ensure<uint16_t>(scratch_key::kFullAttnLowp, input_size * static_cast<size_t>(q_total), "full attn lowp");
     CudaWeight o_proj = pool_->cached_weight(weights_.o_proj)->try_dequant();
     GemmInput attn_in = prepare_gemm_input(d_attn, d_attn_lowp, input_size * static_cast<size_t>(q_total), o_proj.type, nullptr);
     // o_proj：[hidden, q_total] · attn[q_total, tokens] -> [hidden, tokens]。
@@ -81,8 +82,9 @@ void FullAttention::prefill(const float *d_hidden, float *d_out, size_t input_si
     check_cuda(cudaDeviceSynchronize(), "FullAttention prefill 同步失败");
 }
 
-void FullAttention::decode(const float *d_hidden, float *d_out, int pos,
-                           FullAttnKVCache &kv, QwenForwardScratch &scratch) {
+void FullAttention::decode(QwenSession &session, const float *d_hidden, float *d_out, int pos,
+                           FullAttnKVCache &kv) {
+    CudaScratch &scratch = session.scratch;
     const int n_heads = config_.num_attention_heads;
     const int kv_heads = config_.num_key_value_heads;
     const int head_dim = config_.head_dim;
@@ -93,14 +95,14 @@ void FullAttention::decode(const float *d_hidden, float *d_out, int pos,
     const float theta = config_.rope_parameters.rope_theta;
     const float partial = config_.rope_parameters.partial_rotary_factor;
 
-    float *d_qgate = scratch.full_projection.ensure(static_cast<size_t>(q_total) * 2, "full qgate");
-    float *d_k = scratch.full_k.ensure(kv_total, "full k");
-    float *d_v = scratch.full_v.ensure(kv_total, "full v");
-    float *d_q = scratch.full_q.ensure(q_total, "full q");
-    float *d_g = scratch.full_gate.ensure(q_total, "full gate");
-    float *d_attn = scratch.full_attn.ensure(q_total, "full attn");
+    float *d_qgate = scratch.ensure<float>(scratch_key::kFullProjection, static_cast<size_t>(q_total) * 2, "full qgate");
+    float *d_k = scratch.ensure<float>(scratch_key::kFullK, kv_total, "full k");
+    float *d_v = scratch.ensure<float>(scratch_key::kFullV, kv_total, "full v");
+    float *d_q = scratch.ensure<float>(scratch_key::kFullQ, q_total, "full q");
+    float *d_g = scratch.ensure<float>(scratch_key::kFullGate, q_total, "full gate");
+    float *d_attn = scratch.ensure<float>(scratch_key::kFullAttn, q_total, "full attn");
 
-    uint16_t *d_in_lowp = scratch.input_lowp_buffer.ensure(hidden, "full in lowp");
+    uint16_t *d_in_lowp = scratch.ensure<uint16_t>(scratch_key::kInputLowp, hidden, "full in lowp");
     CudaWeight q_proj = pool_->cached_weight(weights_.q_proj)->try_dequant();
     GemmInput in = prepare_gemm_input(d_hidden, d_in_lowp, hidden, q_proj.type, nullptr);
     gemm_weight(pool_->handle, q_proj, in.ptr, d_qgate, q_total * 2, hidden, 1, in.type, "fullattn.q_proj");
@@ -123,7 +125,7 @@ void FullAttention::decode(const float *d_hidden, float *d_out, int pos,
     launch_full_attention_attend(d_q, d_g, key_cache, value_cache, d_attn, n_heads, kv_heads,
                                  head_dim, /*max_seq_len=*/0, pos, nullptr);
 
-    uint16_t *d_attn_lowp = scratch.full_attn_lowp.ensure(q_total, "full attn lowp");
+    uint16_t *d_attn_lowp = scratch.ensure<uint16_t>(scratch_key::kFullAttnLowp, q_total, "full attn lowp");
     CudaWeight o_proj = pool_->cached_weight(weights_.o_proj)->try_dequant();
     GemmInput attn_in = prepare_gemm_input(d_attn, d_attn_lowp, q_total, o_proj.type, nullptr);
 
