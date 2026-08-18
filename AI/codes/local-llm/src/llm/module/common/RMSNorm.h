@@ -20,14 +20,13 @@ class CudaWeightPool;
 //   - DeepSeek 风格：one_plus 传 false（权重按原值缩放）。
 class RMSNorm {
 public:
-    // 对 d_input 做归一化写入 d_output。d_input / d_output 均为 device float 指针，
-    // 形状 [rows, hidden_size]（prefill 时 rows=tokens，decode 时 rows=1）。
-    // 允许 d_input == d_output 做原位归一化。
-    // pool：device 权重缓存；weight：gamma 权重；eps：数值稳定项；
+    // 对 input 做归一化写入 output。input / output 均为 device 激活视图（Tensor），
+    // 形状 [rows, hidden_size]（prefill 时 rows=tokens，decode 时 rows=1），rows/hidden_size
+    // 由 input.shape 推出。允许 input 与 output 指向同一 device 内存做原位归一化。
+    // weight：gamma 权重；eps：数值稳定项；
     // one_plus：权重是否按 (1 + gamma) 缩放。
-    static void forward(CudaWeightPool *pool, const MFTensorView &weight,
-                        const float *d_input, float *d_output,
-                        size_t rows, int hidden_size, float eps, bool one_plus);
+    static void forward(const Tensor &weight, const Tensor &input, const Tensor &output,
+                        float eps, bool one_plus);
 };
 
 #endif // LOCAL_LLM_COMMON_RMSNORM_H

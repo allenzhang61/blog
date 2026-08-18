@@ -17,24 +17,23 @@
 
 namespace common {
 
-Embedding::Embedding(const MFTensorView &weight, CudaWeightPool *pool)
-    : weight_(weight), pool_(pool) {
+Embedding::Embedding(const Tensor &weight)
+    : weight_(weight) {
     vocab_size_ = static_cast<int>(weight_.shape[0]);
     hidden_size_ = static_cast<int>(weight_.shape[1]);
 }
 
-void Embedding::forward(const std::vector<int> &input, float *d_hidden,
-                        CudaScratch &scratch) {
-    CudaWeight table = pool_->cached_weight(weight_)->try_dequant();
+void Embedding::forward(const Tensor &input, const Tensor &hidden, CudaScratch &scratch) {
+    CudaWeight table = weight_.cached_weight()->try_dequant();
 
     const int lowp_type = (table.dtype == DType::F16) ? 1 : 0;
-    const size_t input_size = input.size();
+    const size_t input_size = static_cast<size_t>(input.numel());
 
     int *d_input = scratch.ensure<int>(scratch_key::kInput, input_size);
-    cuda_memcpy_h2d(d_input, input.data(), input_size * sizeof(int),
+    cuda_memcpy_h2d(d_input, input.host_i32(), input_size * sizeof(int),
                     "cudaMemcpy embedding token ids 失败");
 
-    launch_embedding_lookup(d_input, d_hidden, static_cast<const uint16_t *>(table.ptr),
+    launch_embedding_lookup(d_input, hidden.gpu_f32(), static_cast<const uint16_t *>(table.ptr),
                             static_cast<int>(input_size), vocab_size_, hidden_size_, lowp_type,
                             nullptr);
 }

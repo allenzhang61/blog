@@ -6,22 +6,21 @@
 #define LOCAL_LLM_DEEPSEEK_DENSE_FFN_H
 
 #include "llm/module/Module.h"
+#include "tensor/Tensor.h"
 
-class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
 struct DeepseekLayerWeights;
 
 class DenseFFN : public Module {
 public:
-    DenseFFN(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
+    DenseFFN(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, float *d_hidden, int input_size);
+    void forward(DeepseekSession &session, const Tensor &hidden);
 
 private:
     const DeepseekConfig &config_;
     const DeepseekLayerWeights &weights_;
-    CudaWeightPool *pool_ = nullptr;
 };
 
 #endif // LOCAL_LLM_DEEPSEEK_DENSE_FFN_H

@@ -6,25 +6,24 @@
 #define LOCAL_LLM_DEEPSEEK_MOE_H
 
 #include "llm/module/Module.h"
+#include "tensor/Tensor.h"
 #include "llm/module/deepseek/MoERouter.h"
 #include "llm/module/deepseek/RoutedExperts.h"
 #include "llm/module/deepseek/SharedExperts.h"
 
-class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
 struct DeepseekLayerWeights;
 
 class MoE : public Module {
 public:
-    MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
+    MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, float *d_hidden, int input_size);
+    void forward(DeepseekSession &session, const Tensor &hidden);
 
 private:
     const DeepseekConfig &config_;
     const DeepseekLayerWeights &weights_;
-    CudaWeightPool *pool_ = nullptr;
     MoERouter router_;
     RoutedExperts routed_experts_;
     SharedExperts shared_experts_;

@@ -21,13 +21,13 @@ QwenModel::QwenModel(std::unique_ptr<MF> mf, int max_output_tokens, const Sampli
       weights_(*mf_, config_),
       max_output_tokens_(max_output_tokens),
       sampler_(sampling),
-      embedding_(weights_.token_embd, &global_cuda_weight_pool()),
+      embedding_(weights_.token_embd),
       // tie_word_embeddings=true：LMHead 复用 token_embd 权重。
-      lm_head_(weights_.token_embd, &global_cuda_weight_pool()) {
+      lm_head_(weights_.token_embd) {
     const TextConfig &text_config = config_.data.text;
     layers_.reserve(weights_.layers.size());
     for (size_t i = 0; i < weights_.layers.size(); ++i) {
-        layers_.emplace_back(weights_.layers[i], text_config, &global_cuda_weight_pool());
+        layers_.emplace_back(weights_.layers[i], text_config);
     }
 }
 
@@ -70,21 +70,26 @@ int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &inp
 
     // 隐状态 buffer [tokens, hidden]，逐层原位更新。
     float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, input_size * hidden_size);
-    embedding_.forward(input, d_hidden, scratch);
+    Tensor hidden = Tensor::gpu_activation(
+        d_hidden, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)});
+    Tensor input_view = Tensor::host_view(
+        input.data(), {static_cast<int64_t>(input_size)}, DType::I32);
+    embedding_.forward(input_view, hidden, scratch);
 
     for (DecoderLayer &layer : layers_) {
-        layer.prefill(session, d_hidden, input_size);
+        layer.prefill(session, hidden);
     }
 
     // final_norm 仅作用于最后一个 token（下一步预测只需末位隐状态）。
     float *d_last = d_hidden + (input_size - 1) * hidden_size;
     float *d_normed = scratch.ensure<float>(scratch_key::kTokenHiddenA, hidden_size);
-    RMSNorm::forward(&global_cuda_weight_pool(), weights_.output_norm, d_last, d_normed, 1,
-                     hidden_size, config_.data.text.rms_norm_eps, /*one_plus=*/true);
+    Tensor last = Tensor::gpu_activation(d_last, {1, static_cast<int64_t>(hidden_size)});
+    Tensor normed = Tensor::gpu_activation(d_normed, {1, static_cast<int64_t>(hidden_size)});
+    RMSNorm::forward(weights_.output_norm, last, normed,
+                     config_.data.text.rms_norm_eps, /*one_plus=*/true);
 
     // lm_head 复用 token_embd（tie），vocab 维度直接取自权重 shape [vocab, hidden]。
-    const int vocab_size = static_cast<int>(weights_.token_embd.shape[0]);
-    return lm_head_.forward(session, d_normed, hidden_size, vocab_size, sampler_);
+    return lm_head_.forward(session, normed, sampler_);
 }
 
 int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) {
@@ -93,16 +98,19 @@ int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) 
     CudaScratch &scratch = session.scratch;
 
     float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, hidden_size);
-    embedding_.forward(std::vector<int>{prev_token_id}, d_hidden, scratch);
+    Tensor hidden = Tensor::gpu_activation(d_hidden, {1, static_cast<int64_t>(hidden_size)});
+    const int token_id = prev_token_id;
+    Tensor input_view = Tensor::host_view(&token_id, {1}, DType::I32);
+    embedding_.forward(input_view, hidden, scratch);
 
     for (DecoderLayer &layer : layers_) {
-        layer.decode(session, d_hidden, pos);
+        layer.decode(session, hidden, pos);
     }
 
     float *d_normed = scratch.ensure<float>(scratch_key::kTokenHiddenA, hidden_size);
-    RMSNorm::forward(&global_cuda_weight_pool(), weights_.output_norm, d_hidden, d_normed, 1,
-                     hidden_size, config_.data.text.rms_norm_eps, /*one_plus=*/true);
+    Tensor normed = Tensor::gpu_activation(d_normed, {1, static_cast<int64_t>(hidden_size)});
+    RMSNorm::forward(weights_.output_norm, hidden, normed,
+                     config_.data.text.rms_norm_eps, /*one_plus=*/true);
 
-    const int vocab_size = static_cast<int>(weights_.token_embd.shape[0]);
-    return lm_head_.forward(session, d_normed, hidden_size, vocab_size, sampler_);
+    return lm_head_.forward(session, normed, sampler_);
 }

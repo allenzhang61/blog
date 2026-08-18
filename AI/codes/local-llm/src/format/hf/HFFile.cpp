@@ -4,6 +4,7 @@
 
 #include "HFFile.h"
 
+#include "backend/cuda/mem/CudaWeightPool.h"
 #include "utils/log/Log.h"
 
 #include <algorithm>
@@ -135,12 +136,13 @@ void HFFile::parse_shard_header(size_t shard_index) {
         if (data_begin > data_end || data_end > shard.size) {
             throw std::runtime_error("tensor data_offsets 越界：" + name);
         }
-        MFTensorView view;
+        Tensor view;
         view.name = name;
         view.shape = shape; // safetensors 本就是行主序 [out, in]
         view.dtype = dtype_from_string(dtype);
-        view.data = shard.data + data_begin;
+        view.disk_data = shard.data + data_begin;
         view.nbytes = data_end - data_begin;
+        view.mark_location(TensorLocation::DiskMmap);
         views_.emplace(name, std::move(view));
     }
 }
@@ -206,11 +208,14 @@ bool HFFile::contain_tensor_view(const std::string &name) const {
     return views_.contains(name);
 }
 
-const MFTensorView &HFFile::get_tensor_view(const std::string &name) const {
+const Tensor &HFFile::get_tensor_view(const std::string &name) const {
     auto it = views_.find(name);
     if (it == views_.end()) {
         throw std::runtime_error("HFFile 缺少张量：" + name);
     }
+    // 权重解析发生在全局 pool 就绪之后，这里补写 pool 链接，
+    // 使持有该 view 的 module 无需再单独传 pool。
+    const_cast<Tensor &>(it->second).pool = &global_cuda_weight_pool();
     return it->second;
 }
 

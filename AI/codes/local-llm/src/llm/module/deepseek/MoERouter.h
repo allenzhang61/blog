@@ -6,10 +6,10 @@
 #define LOCAL_LLM_DEEPSEEK_MOE_ROUTER_H
 
 #include "llm/module/Module.h"
+#include "tensor/Tensor.h"
 
 #include <vector>
 
-class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
 struct DeepseekLayerWeights;
@@ -21,14 +21,13 @@ struct MoERoute {
 
 class MoERouter : public Module {
 public:
-    MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
+    MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    MoERoute forward(DeepseekSession &session, const float *d_normed, int input_size);
+    MoERoute forward(DeepseekSession &session, const Tensor &normed);
 
 private:
     const DeepseekConfig &config_;
     const DeepseekLayerWeights &lw_;
-    CudaWeightPool *pool_ = nullptr;
 };
 
 #endif // LOCAL_LLM_DEEPSEEK_MOE_ROUTER_H

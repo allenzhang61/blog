@@ -4,6 +4,7 @@
 
 #include "GgufFile.h"
 
+#include "backend/cuda/mem/CudaWeightPool.h"
 #include "format/gguf/GGUFTokenizer.h"
 #include "utils/log/Log.h"
 
@@ -197,7 +198,7 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     }
 
     struct ParsedTensor {
-        MFTensorView view;
+        Tensor view;
         uint64_t offset = 0;
     };
 
@@ -233,10 +234,11 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     // 回填每个张量的数据指针。
     tensors_.reserve(parsed_tensors.size());
     for (ParsedTensor &tensor : parsed_tensors) {
-        tensor.view.data = data_base + tensor.offset;
-        if (tensor.view.data + tensor.view.nbytes > data_ + size_) {
+        tensor.view.disk_data = data_base + tensor.offset;
+        if (tensor.view.disk_data + tensor.view.nbytes > data_ + size_) {
             throw std::runtime_error("张量数据越界: " + tensor.view.name);
         }
+        tensor.view.mark_location(TensorLocation::DiskMmap);
         tensors_.push_back(std::move(tensor.view));
     }
 
@@ -391,7 +393,7 @@ Metadata GgufFile::metadata_value(const std::string &key) const {
 }
 
 bool GgufFile::contain_tensor_view(const std::string &name) const {
-    for (const MFTensorView &tensor : tensors_) {
+    for (const Tensor &tensor : tensors_) {
         if (tensor.name == name) {
             return true;
         }
@@ -420,9 +422,12 @@ DType GgufFile::gguf_type_to_dtype(GgmlType t) {
     }
 }
 
-const MFTensorView &GgufFile::get_tensor_view(const std::string &name) const {
-    for (const MFTensorView &tensor : tensors_) {
+const Tensor &GgufFile::get_tensor_view(const std::string &name) const {
+    for (const Tensor &tensor : tensors_) {
         if (tensor.name == name) {
+            // 权重解析发生在全局 pool 就绪之后，这里补写 pool 链接，
+            // 使持有该 view 的 module 无需再单独传 pool。
+            const_cast<Tensor &>(tensor).pool = &global_cuda_weight_pool();
             return tensor;
         }
     }
@@ -432,7 +437,7 @@ const MFTensorView &GgufFile::get_tensor_view(const std::string &name) const {
 std::vector<std::string> GgufFile::tensor_view_names() const {
     std::vector<std::string> names;
     names.reserve(tensors_.size());
-    for (const MFTensorView &tensor : tensors_) {
+    for (const Tensor &tensor : tensors_) {
         names.push_back(tensor.name);
     }
     return names;
@@ -467,7 +472,7 @@ void GgufFile::debug_dump() const {
 
     // 张量类型直方图（先统计，放在张量列表之上做概览）。
     std::map<DType, size_t> type_hist;
-    for (const MFTensorView &tensor : tensors_) {
+    for (const Tensor &tensor : tensors_) {
         type_hist[tensor.dtype]++;
     }
     Log::debug("  === tensor type histogram ===");
@@ -477,7 +482,7 @@ void GgufFile::debug_dump() const {
 
     // 全部张量元信息（不含权重数据段），按文件出现顺序。
     Log::debug("  === tensors (" + std::to_string(tensors_.size()) + ") ===");
-    for (const MFTensorView &tensor : tensors_) {
+    for (const Tensor &tensor : tensors_) {
         std::ostringstream os;
         os << "    " << tensor.name << "  shape=" << dims_to_string(tensor.shape)
            << " dtype=" << dtype_name(tensor.dtype)

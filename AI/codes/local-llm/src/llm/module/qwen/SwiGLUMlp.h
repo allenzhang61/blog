@@ -5,13 +5,11 @@
 #ifndef LOCAL_LLM_SWIGLUMLP_H
 #define LOCAL_LLM_SWIGLUMLP_H
 
-#include <cstddef>
-
 #include "llm/module/Module.h"
+#include "tensor/Tensor.h"
 
 struct MlpWeights;
 class QwenSession;
-class CudaWeightPool;
 
 // SwiGLU MLP 子层：
 //   down( SiLU(gate(x)) * up(x) )
@@ -20,15 +18,14 @@ class CudaWeightPool;
 // 中间量（gate/up/prod 等）走 QwenSession::scratch。
 class SwiGLUMlp : public Module {
 public:
-    SwiGLUMlp(const MlpWeights &weights, CudaWeightPool *pool);
+    SwiGLUMlp(const MlpWeights &weights);
 
-    // 对 rows 行隐状态做 MLP（prefill 时 rows=tokens，decode 时 rows=1）。
-    // d_in / d_out：[rows, hidden_size]，允许原位。中间量从 session.scratch 取。
-    void forward(QwenSession &session, const float *d_in, float *d_out, size_t rows, int hidden_size);
+    // 对隐状态做 MLP（prefill 时行数=tokens，decode 时行数=1，由 in.shape 推出）。
+    // in / out：[rows, hidden_size]，允许原位。中间量从 session.scratch 取。
+    void forward(QwenSession &session, const Tensor &in, const Tensor &out);
 
 private:
     const MlpWeights &weights_;
-    CudaWeightPool *pool_ = nullptr;
 };
 
 

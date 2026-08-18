@@ -24,24 +24,23 @@ class CudaWeightPool;
 // 跨 token 状态（KV cache / recurrent state）从 QwenSession 按 LayerWeights::type_index 取。
 class DecoderLayer : public Module {
 public:
-    DecoderLayer(const LayerWeights &weights, const TextConfig &config, CudaWeightPool *pool);
+    DecoderLayer(const LayerWeights &weights, const TextConfig &config);
 
     // prefill：处理整段输入 [tokens, hidden_size]，原位更新隐状态。
-    void prefill(QwenSession &session, float *d_hidden, size_t input_size);
+    void prefill(QwenSession &session, const Tensor &hidden);
 
     // decode：处理位置 pos 的单个 token [1, hidden_size]，原位更新隐状态。
-    void decode(QwenSession &session, float *d_hidden, int pos);
+    void decode(QwenSession &session, const Tensor &hidden, int pos);
 
     // 是否为 full_attention 层（否则为 linear_attention）。
     bool is_full_attention() const { return is_full_; }
 
 private:
     const TextConfig &text_config_;
-    CudaWeightPool *pool_ = nullptr;
     bool is_full_ = false;
 
-    const MFTensorView &input_norm_weight_;
-    const MFTensorView &post_norm_weight_;
+    const Tensor &input_norm_weight_;
+    const Tensor &post_norm_weight_;
     SwiGLUMlp mlp_;
     // 按层类型二选一：is_full_ 为真时用 full attention 子层，否则用 linear attention 子层。
     // 用基类指针持有，具体类型见 FullAttention / LinearAttention。

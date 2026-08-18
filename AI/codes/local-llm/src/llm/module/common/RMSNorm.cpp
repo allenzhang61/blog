@@ -21,10 +21,10 @@ int weight_type_of(DType dtype) {
 }
 } // namespace
 
-void RMSNorm::forward(CudaWeightPool *pool, const MFTensorView &weight,
-                      const float *d_input, float *d_output,
-                      size_t rows, int hidden_size, float eps, bool one_plus) {
-    CudaWeight w = pool->cached_weight(weight)->try_dequant();
-    launch_rms_norm(d_input, d_output, w.ptr, weight_type_of(w.dtype),
-                    static_cast<int>(rows), hidden_size, eps, one_plus, nullptr);
+void RMSNorm::forward(const Tensor &weight, const Tensor &input, const Tensor &output,
+                      float eps, bool one_plus) {
+    CudaWeight w = weight.pool->cached_weight(weight)->try_dequant();
+    launch_rms_norm(input.gpu_f32(), output.gpu_f32(), w.ptr, weight_type_of(w.dtype),
+                    static_cast<int>(input.rows()), static_cast<int>(input.cols()), eps, one_plus,
+                    nullptr);
 }

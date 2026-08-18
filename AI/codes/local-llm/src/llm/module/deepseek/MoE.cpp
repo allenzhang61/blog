@@ -17,29 +17,34 @@
 
 #include <cuda_runtime.h>
 
-MoE::MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool)
+MoE::MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config),
       weights_(weights),
-      pool_(pool),
-      router_(weights, config, pool),
-      routed_experts_(weights, config, pool),
-      shared_experts_(weights, config, pool) {}
+      router_(weights, config),
+      routed_experts_(weights, config),
+      shared_experts_(weights, config) {}
 
-void MoE::forward(DeepseekSession &session, float *d_hidden, int input_size) {
+void MoE::forward(DeepseekSession &session, const Tensor &hidden) {
+    float *d_hidden = hidden.gpu_f32();
+    const int input_size = static_cast<int>(hidden.rows());
     auto &s = session.scratch;
     const int hidden_size = config_.hidden_size;
+    const std::vector<int64_t> act_shape = {static_cast<int64_t>(input_size),
+                                            static_cast<int64_t>(hidden_size)};
 
     float *d_normed = s.ensure<float>(scratch_key::kNormed, static_cast<size_t>(input_size) * hidden_size);
-    RMSNorm::forward(pool_, *weights_.ffn_norm, d_hidden, d_normed, input_size, hidden_size,
+    Tensor normed = Tensor::gpu_activation(d_normed, act_shape);
+    RMSNorm::forward(*weights_.ffn_norm, hidden, normed,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    MoERoute route = router_.forward(session, d_normed, input_size);
+    MoERoute route = router_.forward(session, normed);
 
     float *d_moe_out = s.ensure<float>(scratch_key::kMoeOut, static_cast<size_t>(input_size) * hidden_size);
     check_cuda(cudaMemset(d_moe_out, 0, static_cast<size_t>(input_size) * hidden_size * sizeof(float)), "ds.moe.zero");
+    Tensor moe_out = Tensor::gpu_activation(d_moe_out, act_shape);
 
-    routed_experts_.forward(session, d_normed, route, input_size, d_moe_out);
-    shared_experts_.forward(session, d_normed, input_size, d_moe_out);
+    routed_experts_.forward(session, normed, route, moe_out);
+    shared_experts_.forward(session, normed, moe_out);
 
     launch_add(d_hidden, d_moe_out, d_hidden, input_size * hidden_size, nullptr);
 }

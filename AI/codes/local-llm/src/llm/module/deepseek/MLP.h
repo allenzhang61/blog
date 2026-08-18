@@ -6,6 +6,7 @@
 #define LOCAL_LLM_DEEPSEEK_MLP_H
 
 #include "llm/module/Module.h"
+#include "tensor/Tensor.h"
 #include "llm/module/deepseek/DenseFFN.h"
 #include "llm/module/deepseek/MoE.h"
 
@@ -17,9 +18,9 @@ struct DeepseekLayerWeights;
 // DeepSeek FFN 子层（每层一个实例）：dense 层用 dense FFN，MoE 层用 MoE FFN。
 class MLP : public Module {
 public:
-    MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
+    MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, float *d_hidden, int input_size);
+    void forward(DeepseekSession &session, const Tensor &hidden);
 
 private:
     const DeepseekLayerWeights &weights_;

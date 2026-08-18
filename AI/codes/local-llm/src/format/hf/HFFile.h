@@ -34,7 +34,7 @@ public:
 
     // === MF tensor 接口 ===
     bool contain_tensor_view(const std::string &name) const override;
-    const MFTensorView &get_tensor_view(const std::string &name) const override;
+    const Tensor &get_tensor_view(const std::string &name) const override;
     std::vector<std::string> tensor_view_names() const override;
     bool contain_metadata(const std::string &key) const override;
     void debug_dump() const override;
@@ -60,7 +60,7 @@ private:
 
     std::vector<MappedShard> shards_;
     // name -> 张量视图（data 指向对应分片 mmap 区域）。
-    std::map<std::string, MFTensorView> views_;
+    std::map<std::string, Tensor> views_;
 
     // mmap 打开单个分片，返回它在 shards_ 中的下标。
     size_t open_shard(const std::filesystem::path &path);

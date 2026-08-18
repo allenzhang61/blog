@@ -9,7 +9,6 @@
 #include "llm/module/Module.h"
 
 class SessionBase;
-class CudaWeightPool;
 class Sampler;
 
 namespace common {
@@ -23,17 +22,15 @@ namespace common {
 // logits 及输入低精度中间量走 session.scratch；重复惩罚所需历史 token 取自 session.outputs。
 class LMHead : public Module {
 public:
-    LMHead(const MFTensorView &weight, CudaWeightPool *pool);
+    LMHead(const Tensor &weight);
 
     // 对单行隐状态 [1, hidden_size] 计算 logits，拷回 host 后交由 sampler 采样，返回下一个 token id。
-    // d_hidden 需为已过 final/output norm 的隐状态；vocab_size 由调用方传入；
-    // 仅在需要下一个 token 的位置调用（decode 每步、prefill 末位）。
-    int forward(SessionBase &session, const float *d_hidden, int hidden_size, int vocab_size,
-                Sampler &sampler);
+    // hidden 为已过 final/output norm 的隐状态激活视图（形状最后一维即 hidden_size）；
+    // vocab_size 由权重 shape[0] 推出。仅在需要下一个 token 的位置调用（decode 每步、prefill 末位）。
+    int forward(SessionBase &session, const Tensor &hidden, Sampler &sampler);
 
 private:
-    const MFTensorView &weight_;
-    CudaWeightPool *pool_ = nullptr;
+    const Tensor &weight_;
 };
 
 } // namespace common

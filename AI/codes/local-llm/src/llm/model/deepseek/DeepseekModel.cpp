@@ -15,14 +15,14 @@ DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, cons
       weights_(*mf_, config_),
       max_output_tokens_(max_output_tokens),
       sampler_(sampling),
-      embedding_(*weights_.token_embd, &global_cuda_weight_pool()),
-      lm_head_(*weights_.output, &global_cuda_weight_pool()) {
+      embedding_(*weights_.token_embd),
+      lm_head_(*weights_.output) {
     config_.DebugDump();
     mla_layers_.reserve(config_.num_layers);
     mlp_layers_.reserve(config_.num_layers);
     for (int i = 0; i < config_.num_layers; ++i) {
-        mla_layers_.emplace_back(weights_.layers[i], config_, &global_cuda_weight_pool());
-        mlp_layers_.emplace_back(weights_.layers[i], config_, &global_cuda_weight_pool());
+        mla_layers_.emplace_back(weights_.layers[i], config_);
+        mlp_layers_.emplace_back(weights_.layers[i], config_);
     }
 }
 
@@ -32,23 +32,28 @@ int DeepseekModel::forward_session(DeepseekSession &session, const std::vector<i
     auto &scratch = session.scratch;
     const int input_size = static_cast<int>(input.size());
     const int hidden_size = config_.hidden_size;
-    const int vocab_size = config_.vocab_size;
 
     float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, input_size * hidden_size);
-    embedding_.forward(input, d_hidden, scratch);
+    Tensor hidden = Tensor::gpu_activation(
+        d_hidden, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)});
+    Tensor input_view = Tensor::host_view(
+        input.data(), {static_cast<int64_t>(input_size)}, DType::I32);
+    embedding_.forward(input_view, hidden, scratch);
 
     for (int i = 0; i < config_.num_layers; ++i) {
-        mla_layers_[i].forward(session, d_hidden, input_size, start_pos);
-        mlp_layers_[i].forward(session, d_hidden, input_size);
+        mla_layers_[i].forward(session, hidden, start_pos);
+        mlp_layers_[i].forward(session, hidden);
     }
 
     const int last = input_size - 1;
     float *d_last = d_hidden + static_cast<size_t>(last) * hidden_size;
     float *d_normed = scratch.ensure<float>(scratch_key::kNormed, static_cast<size_t>(hidden_size));
-    RMSNorm::forward(&global_cuda_weight_pool(), *weights_.output_norm, d_last, d_normed, 1,
-                     hidden_size, config_.rms_norm_eps, /*one_plus=*/false);
+    Tensor last_view = Tensor::gpu_activation(d_last, {1, static_cast<int64_t>(hidden_size)});
+    Tensor normed = Tensor::gpu_activation(d_normed, {1, static_cast<int64_t>(hidden_size)});
+    RMSNorm::forward(*weights_.output_norm, last_view, normed,
+                     config_.rms_norm_eps, /*one_plus=*/false);
 
-    return lm_head_.forward(session, d_normed, hidden_size, vocab_size, sampler_);
+    return lm_head_.forward(session, normed, sampler_);
 }
 
 int DeepseekModel::prefill(const std::vector<int> &input) {

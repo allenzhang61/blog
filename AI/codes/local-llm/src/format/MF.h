@@ -5,92 +5,11 @@
 #ifndef LOCAL_LLM_MF_H
 #define LOCAL_LLM_MF_H
 
-#include <cstddef>
-#include <cstdint>
-#include <variant>
 #include <string>
-#include <type_traits>
+#include <variant>
 #include <vector>
 
-// 统一的张量数据类型枚举，兼容 GGUF 量化类型与 safetensors 浮点类型。
-// 数值特意与 ggml_type 保持一致，便于 GgmlType 与本枚举互转。
-enum class DType : int32_t {
-    F32 = 0,
-    F16 = 1,
-    Q4_0 = 2,
-    Q4_1 = 3,
-    Q5_0 = 6,
-    Q5_1 = 7,
-    Q8_0 = 8,
-    Q8_1 = 9,
-    Q2_K = 10,
-    Q3_K = 11,
-    Q4_K = 12,
-    Q5_K = 13,
-    Q6_K = 14,
-    Q8_K = 15,
-    BF16 = 30,
-    UNKNOWN = -1,
-};
-
-// DType -> 可读名（用于日志/错误信息）。
-inline const char *dtype_name(DType dt) {
-    switch (dt) {
-        case DType::F32: return "F32";
-        case DType::F16: return "F16";
-        case DType::Q4_0: return "Q4_0";
-        case DType::Q4_1: return "Q4_1";
-        case DType::Q5_0: return "Q5_0";
-        case DType::Q5_1: return "Q5_1";
-        case DType::Q8_0: return "Q8_0";
-        case DType::Q8_1: return "Q8_1";
-        case DType::Q2_K: return "Q2_K";
-        case DType::Q3_K: return "Q3_K";
-        case DType::Q4_K: return "Q4_K";
-        case DType::Q5_K: return "Q5_K";
-        case DType::Q6_K: return "Q6_K";
-        case DType::Q8_K: return "Q8_K";
-        case DType::BF16: return "BF16";
-        default: return "UNKNOWN";
-    }
-}
-
-// 当前推理链路实际支持的 dtype：浮点 F32/F16/BF16，以及已实现反量化 kernel 的
-// 量化类型 Q4_K/Q5_0/Q6_K/Q8_0（见 Quant::dequantize_to_f16）。其余量化类型即便能被
-// 识别，反量化时也会失败，因此在模型加载阶段就拒绝。
-inline bool is_supported_dtype(DType dt) {
-    switch (dt) {
-        case DType::F32:
-        case DType::F16:
-        case DType::BF16:
-        case DType::Q4_K:
-        case DType::Q5_0:
-        case DType::Q6_K:
-        case DType::Q8_0:
-            return true;
-        // 以下量化类型能被识别，但尚未实现反量化 kernel，暂不启用。
-        // 要启用需先在 Quant::dequantize_to_f16 补对应 launch_dequantize_*_to_f16。
-        // case DType::Q5_K: // 唯一实战常见（Q5_K_M），后续最该优先补
-        // case DType::Q4_0: // legacy，已被 K-quant 取代，新模型基本不发布
-        // case DType::Q4_1: // legacy，几乎绝迹
-        // case DType::Q5_1: // legacy，少见
-        // case DType::Q8_1: // legacy，少见
-        // case DType::Q2_K: // 极限压缩档，质量损失大，小众
-        // case DType::Q3_K: // 极限压缩档，小众
-        // case DType::Q8_K: // 多为 llama.cpp 内部中间格式，权重文件基本不落盘
-        default:
-            return false;
-    }
-}
-
-// 单个张量的统一只读视图，不拥有内存（data 指向模型文件 mmap 区域）。
-struct MFTensorView {
-    std::string name;
-    std::vector<int64_t> shape;
-    DType dtype = DType::UNKNOWN;
-    const uint8_t *data = nullptr;
-    size_t nbytes = 0;
-};
+#include "tensor/Tensor.h"
 
 using Metadata = std::variant<int64_t, float, std::string, bool,
                               std::vector<int64_t>, std::vector<std::string>>;
@@ -110,7 +29,7 @@ public:
     // 是否存在某张量。
     virtual bool contain_tensor_view(const std::string &name) const = 0;
     // 按名返回张量视图；不存在时抛异常。
-    virtual const MFTensorView &get_tensor_view(const std::string &name) const = 0;
+    virtual const Tensor &get_tensor_view(const std::string &name) const = 0;
     // 全部张量名。
     virtual std::vector<std::string> tensor_view_names() const = 0;
 
@@ -130,28 +49,10 @@ public:
 
     virtual bool contain_metadata(const std::string &key) const = 0;
 
+    // 按 key 读取标量/数组元信息。float 与 int64_t 之间允许隐式互转。
+    // 仅对 Metadata variant 覆盖的类型做了显式实例化（见 .cpp）。
     template<typename T>
-    T metadata(const std::string &key) const {
-        const Metadata value = metadata_value(key);
-        if constexpr (std::is_same_v<T, float>) {
-            if (const auto *v = std::get_if<float>(&value)) {
-                return *v;
-            }
-            if (const auto *v = std::get_if<int64_t>(&value)) {
-                return static_cast<float>(*v);
-            }
-        } else if constexpr (std::is_same_v<T, int64_t>) {
-            if (const auto *v = std::get_if<int64_t>(&value)) {
-                return *v;
-            }
-            if (const auto *v = std::get_if<float>(&value)) {
-                return static_cast<int64_t>(*v);
-            }
-        } else {
-            return std::get<T>(value);
-        }
-        return std::get<T>(value);
-    }
+    T metadata(const std::string &key) const;
 
 protected:
     virtual Metadata metadata_value(const std::string &key) const = 0;

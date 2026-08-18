@@ -60,6 +60,8 @@ add_executable(local_llm main.cpp
         src/format/gguf/GgufFile.h
         src/format/MF.cpp
         src/format/MF.h
+        src/tensor/Tensor.cpp
+        src/tensor/Tensor.h
         src/format/MFFactory.cpp
         src/format/MFFactory.h
         src/format/hf/HFFile.cpp

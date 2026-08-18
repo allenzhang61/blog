@@ -7,6 +7,38 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <type_traits>
+
+template<typename T>
+T MF::metadata(const std::string &key) const {
+    const Metadata value = metadata_value(key);
+    if constexpr (std::is_same_v<T, float>) {
+        if (const auto *v = std::get_if<float>(&value)) {
+            return *v;
+        }
+        if (const auto *v = std::get_if<int64_t>(&value)) {
+            return static_cast<float>(*v);
+        }
+    } else if constexpr (std::is_same_v<T, int64_t>) {
+        if (const auto *v = std::get_if<int64_t>(&value)) {
+            return *v;
+        }
+        if (const auto *v = std::get_if<float>(&value)) {
+            return static_cast<int64_t>(*v);
+        }
+    } else {
+        return std::get<T>(value);
+    }
+    return std::get<T>(value);
+}
+
+// Metadata variant 覆盖的全部类型：显式实例化，供其他 TU 链接。
+template float MF::metadata<float>(const std::string &) const;
+template int64_t MF::metadata<int64_t>(const std::string &) const;
+template bool MF::metadata<bool>(const std::string &) const;
+template std::string MF::metadata<std::string>(const std::string &) const;
+template std::vector<int64_t> MF::metadata<std::vector<int64_t>>(const std::string &) const;
+template std::vector<std::string> MF::metadata<std::vector<std::string>>(const std::string &) const;
 
 void MF::validate() const {
     const std::vector<std::string> names = tensor_view_names();
@@ -23,7 +55,7 @@ void MF::validate() const {
             throw std::runtime_error("模型文件存在重复 tensor: " + name);
         }
 
-        const MFTensorView &tensor = get_tensor_view(name);
+        const Tensor &tensor = get_tensor_view(name);
         if (tensor.name != name) {
             throw std::runtime_error("tensor 索引名与视图名不一致: index=" + name +
                                      " view=" + tensor.name);
@@ -42,7 +74,7 @@ void MF::validate() const {
                                      " dtype=" + dtype_name(tensor.dtype) +
                                      "（仅支持 F32/F16/BF16/Q4_K/Q5_0/Q6_K/Q8_0）");
         }
-        if (tensor.data == nullptr) {
+        if (tensor.disk_data == nullptr) {
             throw std::runtime_error("tensor data 为空: " + name);
         }
         if (tensor.nbytes == 0) {
@@ -53,7 +85,7 @@ void MF::validate() const {
 
 void MF::validate_tensor_shape(const std::string &name,
                                const std::vector<int64_t> &expected_shape) const {
-    const MFTensorView &tensor = get_tensor_view(name);
+    const Tensor &tensor = get_tensor_view(name);
     if (tensor.shape != expected_shape) {
         throw std::runtime_error("tensor shape 不匹配: " + name +
                                  " expected=" + shape_to_string(expected_shape) +

@@ -17,10 +17,12 @@
 
 #include <cuda_runtime.h>
 
-MoERouter::MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool)
-    : config_(config), lw_(weights), pool_(pool) {}
+MoERouter::MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
+    : config_(config), lw_(weights) {}
 
-MoERoute MoERouter::forward(DeepseekSession &session, const float *d_normed, int input_size) {
+MoERoute MoERouter::forward(DeepseekSession &session, const Tensor &normed) {
+    const float *d_normed = normed.gpu_f32();
+    const int input_size = static_cast<int>(normed.rows());
     auto &s = session.scratch;
     const int hidden_size = config_.hidden_size;
     const int n_exp = config_.expert_count;
@@ -28,10 +30,10 @@ MoERoute MoERouter::forward(DeepseekSession &session, const float *d_normed, int
 
     float *d_router_logits = s.ensure<float>(scratch_key::kRouterLogits, static_cast<size_t>(input_size) * n_exp);
     {
-        CudaWeight ffn_gate_inp = pool_->cached_weight(*lw_.ffn_gate_inp)->try_dequant();
+        CudaWeight ffn_gate_inp = lw_.ffn_gate_inp->cached_weight()->try_dequant();
         uint16_t *d_ffn_in_lowp = s.ensure<uint16_t>(scratch_key::kFfnInLowp, static_cast<size_t>(input_size) * hidden_size);
         GemmInput router_in = prepare_gemm_input(d_normed, d_ffn_in_lowp, input_size * hidden_size, ffn_gate_inp.type, nullptr);
-        gemm_weight(pool_->handle, ffn_gate_inp, router_in.ptr, d_router_logits, n_exp, hidden_size, input_size, router_in.type, "ds.gemm.router");
+        gemm_weight(global_cuda_weight_pool().handle, ffn_gate_inp, router_in.ptr, d_router_logits, n_exp, hidden_size, input_size, router_in.type, "ds.gemm.router");
     }
 
     int *d_top_idx = s.ensure<int>(scratch_key::kTopIdx, static_cast<size_t>(input_size) * k);
