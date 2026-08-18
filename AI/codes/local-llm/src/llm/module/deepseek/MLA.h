@@ -10,18 +10,18 @@
 class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
-class DeepseekWeights;
+struct DeepseekLayerWeights;
 
-// MLA attention 子层。
+// MLA attention 子层（每层一个实例，持有该层的权重引用）。
 class MLA : public Module {
 public:
-    MLA(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool);
+    MLA(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, int layer, float *d_hidden, int input_size, int start_pos);
+    void forward(DeepseekSession &session, float *d_hidden, int input_size, int start_pos);
 
 private:
     const DeepseekConfig &config_;
-    const DeepseekWeights &weights_;
+    const DeepseekLayerWeights &lw_;
     CudaWeightPool *pool_ = nullptr;
 };
 

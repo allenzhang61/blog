@@ -13,17 +13,17 @@
 class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
-class DeepseekWeights;
+struct DeepseekLayerWeights;
 
 class MoE : public Module {
 public:
-    MoE(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool);
+    MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, int layer, float *d_hidden, int input_size);
+    void forward(DeepseekSession &session, float *d_hidden, int input_size);
 
 private:
     const DeepseekConfig &config_;
-    const DeepseekWeights &weights_;
+    const DeepseekLayerWeights &weights_;
     CudaWeightPool *pool_ = nullptr;
     MoERouter router_;
     RoutedExperts routed_experts_;

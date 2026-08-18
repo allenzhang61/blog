@@ -19,6 +19,9 @@
 // shape 约定见 MF：逻辑行主序 [out, in]（GGUF 内部 dims 已在容器层反转）。
 
 struct DeepseekLayerWeights {
+    // 本层在所有层中的下标，用于索引 DeepseekSession::kv_caches。
+    int layer_index = 0;
+
     // 归一化
     const MFTensorView *attn_norm = nullptr;  // blk.i.attn_norm.weight [hidden]
     const MFTensorView *ffn_norm = nullptr;   // blk.i.ffn_norm.weight  [hidden]

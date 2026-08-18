@@ -24,14 +24,13 @@ Embedding::Embedding(const MFTensorView &weight, CudaWeightPool *pool)
 }
 
 void Embedding::forward(const std::vector<int> &input, float *d_hidden,
-                        CudaScratch &scratch,
-                        const std::string &input_buffer_name) {
+                        CudaScratch &scratch) {
     CudaWeight table = pool_->cached_weight(weight_)->try_dequant();
 
     const int lowp_type = (table.dtype == DType::F16) ? 1 : 0;
     const size_t input_size = input.size();
 
-    int *d_input = scratch.ensure<int>(scratch_key::kInput, input_size, input_buffer_name);
+    int *d_input = scratch.ensure<int>(scratch_key::kInput, input_size);
     cuda_memcpy_h2d(d_input, input.data(), input_size * sizeof(int),
                     "cudaMemcpy embedding token ids 失败");
 

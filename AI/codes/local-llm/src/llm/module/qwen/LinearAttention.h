@@ -11,7 +11,6 @@
 
 struct LinearAttnWeights;
 struct TextConfig;
-struct LinearAttnRecurrentState;
 class QwenSession;
 class CudaWeightPool;
 
@@ -22,25 +21,25 @@ class CudaWeightPool;
 //   - gated delta 递归更新 recurrent state；
 //   - norm / out_proj：输出归一化与投影。
 // 维护 recurrent state（conv 滑窗 + 递归状态）而非 KV cache，跨 token 存活，
-// 来自 QwenSession（按 layer 取 LinearAttnRecurrentState）。中间量走 session.scratch。
+// 来自 QwenSession（按 type_index 取 linear_attn_recurrent_states）。中间量走 session.scratch。
 class LinearAttention : public Module {
 public:
     LinearAttention(const LinearAttnWeights &weights, const TextConfig &config, CudaWeightPool *pool);
 
     // prefill：一次处理 tokens 个位置，扫描更新 recurrent state 并算出输出。
     // d_hidden：[tokens, hidden_size]；d_out：[tokens, hidden_size]。
-    void prefill(QwenSession &session, const float *d_hidden, float *d_out, size_t input_size,
-                 LinearAttnRecurrentState &state);
+    void prefill(QwenSession &session, const float *d_hidden, float *d_out, size_t input_size);
 
     // decode：处理单个新 token，基于已有 recurrent state 递推一步。
     // d_hidden：[1, hidden_size]；d_out：[1, hidden_size]。
-    void decode(QwenSession &session, const float *d_hidden, float *d_out,
-                LinearAttnRecurrentState &state);
+    void decode(QwenSession &session, const float *d_hidden, float *d_out);
 
 private:
     const LinearAttnWeights &weights_;
     const TextConfig &config_;
     CudaWeightPool *pool_ = nullptr;
+    // 本层在 linear attention 层序列中的下标，用于索引 QwenSession::linear_attn_recurrent_states。
+    size_t type_index_ = 0;
 };
 
 

@@ -16,10 +16,14 @@ DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, cons
       max_output_tokens_(max_output_tokens),
       sampler_(sampling),
       embedding_(*weights_.token_embd, &global_cuda_weight_pool()),
-      mla_(config_, weights_, &global_cuda_weight_pool()),
-      mlp_(config_, weights_, &global_cuda_weight_pool()),
       lm_head_(*weights_.output, &global_cuda_weight_pool()) {
     config_.DebugDump();
+    mla_layers_.reserve(config_.num_layers);
+    mlp_layers_.reserve(config_.num_layers);
+    for (int i = 0; i < config_.num_layers; ++i) {
+        mla_layers_.emplace_back(weights_.layers[i], config_, &global_cuda_weight_pool());
+        mlp_layers_.emplace_back(weights_.layers[i], config_, &global_cuda_weight_pool());
+    }
 }
 
 DeepseekModel::~DeepseekModel() = default;
@@ -30,17 +34,17 @@ int DeepseekModel::forward_session(DeepseekSession &session, const std::vector<i
     const int hidden_size = config_.hidden_size;
     const int vocab_size = config_.vocab_size;
 
-    float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, input_size * hidden_size, "ds.hidden");
-    embedding_.forward(input, d_hidden, scratch, "ds.embedding.ids");
+    float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, input_size * hidden_size);
+    embedding_.forward(input, d_hidden, scratch);
 
     for (int i = 0; i < config_.num_layers; ++i) {
-        mla_.forward(session, i, d_hidden, input_size, start_pos);
-        mlp_.forward(session, i, d_hidden, input_size);
+        mla_layers_[i].forward(session, d_hidden, input_size, start_pos);
+        mlp_layers_[i].forward(session, d_hidden, input_size);
     }
 
     const int last = input_size - 1;
     float *d_last = d_hidden + static_cast<size_t>(last) * hidden_size;
-    float *d_normed = scratch.ensure<float>(scratch_key::kNormed, static_cast<size_t>(hidden_size), "ds.final_normed");
+    float *d_normed = scratch.ensure<float>(scratch_key::kNormed, static_cast<size_t>(hidden_size));
     RMSNorm::forward(&global_cuda_weight_pool(), *weights_.output_norm, d_last, d_normed, 1,
                      hidden_size, config_.rms_norm_eps, /*one_plus=*/false);
 

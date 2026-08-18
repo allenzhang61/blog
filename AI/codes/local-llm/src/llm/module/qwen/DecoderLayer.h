@@ -21,12 +21,10 @@ class CudaWeightPool;
 //   h = x + attn( input_norm(x) )
 //   y = h + mlp ( post_norm(h) )
 // 其中 attn 子层按层类型二选一：full_attention 或 linear_attention。
-// 跨 token 状态（KV cache / recurrent state）从 QwenSession 按 layer_index 取。
+// 跨 token 状态（KV cache / recurrent state）从 QwenSession 按 LayerWeights::type_index 取。
 class DecoderLayer : public Module {
 public:
-    // layer_index：本层在 32 层中的下标，用于从 QwenSession 取对应 KV/state。
-    DecoderLayer(const LayerWeights &weights, const TextConfig &text_config, CudaWeightPool *pool,
-                 size_t layer_index);
+    DecoderLayer(const LayerWeights &weights, const TextConfig &config, CudaWeightPool *pool);
 
     // prefill：处理整段输入 [tokens, hidden_size]，原位更新隐状态。
     void prefill(QwenSession &session, float *d_hidden, size_t input_size);
@@ -40,9 +38,6 @@ public:
 private:
     const TextConfig &text_config_;
     CudaWeightPool *pool_ = nullptr;
-    size_t layer_index_ = 0;
-    // 本层在同类型层中的下标，用于索引 QwenSession 的 fullAttnKVCaches / linearAttnRecurrentStates。
-    size_t type_index_ = 0;
     bool is_full_ = false;
 
     const MFTensorView &input_norm_weight_;

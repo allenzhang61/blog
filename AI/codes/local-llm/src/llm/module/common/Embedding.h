@@ -24,9 +24,8 @@ public:
 
     // 按 token id 逐行拷贝嵌入到 d_hidden（device），形状 [tokens, hidden_size]。
     // scratch 提供 token id 的 int 临时缓冲（key = scratch_key::kInput），用于把 host
-    // token id 搬到 device；input_buffer_name 仅用于分配失败时的错误信息。
-    void forward(const std::vector<int> &input, float *d_hidden, CudaScratch &scratch,
-                 const std::string &input_buffer_name);
+    // token id 搬到 device。
+    void forward(const std::vector<int> &input, float *d_hidden, CudaScratch &scratch);
 
 private:
     const MFTensorView &weight_;

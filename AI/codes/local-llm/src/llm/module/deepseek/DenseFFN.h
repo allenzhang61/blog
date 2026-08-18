@@ -10,17 +10,17 @@
 class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
-class DeepseekWeights;
+struct DeepseekLayerWeights;
 
 class DenseFFN : public Module {
 public:
-    DenseFFN(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool);
+    DenseFFN(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, int layer, float *d_hidden, int input_size);
+    void forward(DeepseekSession &session, float *d_hidden, int input_size);
 
 private:
     const DeepseekConfig &config_;
-    const DeepseekWeights &weights_;
+    const DeepseekLayerWeights &weights_;
     CudaWeightPool *pool_ = nullptr;
 };
 

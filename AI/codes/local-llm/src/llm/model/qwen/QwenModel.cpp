@@ -27,7 +27,7 @@ QwenModel::QwenModel(std::unique_ptr<MF> mf, int max_output_tokens, const Sampli
     const TextConfig &text_config = config_.data.text;
     layers_.reserve(weights_.layers.size());
     for (size_t i = 0; i < weights_.layers.size(); ++i) {
-        layers_.emplace_back(weights_.layers[i], text_config, &global_cuda_weight_pool(), i);
+        layers_.emplace_back(weights_.layers[i], text_config, &global_cuda_weight_pool());
     }
 }
 
@@ -69,8 +69,8 @@ int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &inp
     CudaScratch &scratch = session.scratch;
 
     // 隐状态 buffer [tokens, hidden]，逐层原位更新。
-    float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, input_size * hidden_size, "prefill hidden");
-    embedding_.forward(input, d_hidden, scratch, "qwen.embedding.ids");
+    float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, input_size * hidden_size);
+    embedding_.forward(input, d_hidden, scratch);
 
     for (DecoderLayer &layer : layers_) {
         layer.prefill(session, d_hidden, input_size);
@@ -78,7 +78,7 @@ int QwenModel::prefill_session(QwenSession &session, const std::vector<int> &inp
 
     // final_norm 仅作用于最后一个 token（下一步预测只需末位隐状态）。
     float *d_last = d_hidden + (input_size - 1) * hidden_size;
-    float *d_normed = scratch.ensure<float>(scratch_key::kTokenHiddenA, hidden_size, "prefill final normed");
+    float *d_normed = scratch.ensure<float>(scratch_key::kTokenHiddenA, hidden_size);
     RMSNorm::forward(&global_cuda_weight_pool(), weights_.output_norm, d_last, d_normed, 1,
                      hidden_size, config_.data.text.rms_norm_eps, /*one_plus=*/true);
 
@@ -92,14 +92,14 @@ int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) 
     const int hidden_size = text_config.hidden_size;
     CudaScratch &scratch = session.scratch;
 
-    float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, hidden_size, "decode hidden");
-    embedding_.forward(std::vector<int>{prev_token_id}, d_hidden, scratch, "qwen.embedding.ids");
+    float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, hidden_size);
+    embedding_.forward(std::vector<int>{prev_token_id}, d_hidden, scratch);
 
     for (DecoderLayer &layer : layers_) {
         layer.decode(session, d_hidden, pos);
     }
 
-    float *d_normed = scratch.ensure<float>(scratch_key::kTokenHiddenA, hidden_size, "decode final normed");
+    float *d_normed = scratch.ensure<float>(scratch_key::kTokenHiddenA, hidden_size);
     RMSNorm::forward(&global_cuda_weight_pool(), weights_.output_norm, d_hidden, d_normed, 1,
                      hidden_size, config_.data.text.rms_norm_eps, /*one_plus=*/true);
 

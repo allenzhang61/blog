@@ -21,13 +21,13 @@ struct MoERoute {
 
 class MoERouter : public Module {
 public:
-    MoERouter(const DeepseekConfig &config, CudaWeightPool *pool);
+    MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
 
-    MoERoute forward(DeepseekSession &session, const DeepseekLayerWeights &weights,
-                     const float *d_normed, int input_size);
+    MoERoute forward(DeepseekSession &session, const float *d_normed, int input_size);
 
 private:
     const DeepseekConfig &config_;
+    const DeepseekLayerWeights &lw_;
     CudaWeightPool *pool_ = nullptr;
 };
 

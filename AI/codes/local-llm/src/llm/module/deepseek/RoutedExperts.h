@@ -15,13 +15,14 @@ struct DeepseekLayerWeights;
 
 class RoutedExperts : public Module {
 public:
-    RoutedExperts(const DeepseekConfig &config, CudaWeightPool *pool);
+    RoutedExperts(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, const DeepseekLayerWeights &weights,
-                 const float *d_normed, const MoERoute &route, int input_size, float *d_moe);
+    void forward(DeepseekSession &session, const float *d_normed, const MoERoute &route,
+                 int input_size, float *d_moe);
 
 private:
     const DeepseekConfig &config_;
+    const DeepseekLayerWeights &lw_;
     CudaWeightPool *pool_ = nullptr;
 };
 

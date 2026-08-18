@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 std::string QwenWeights::shape_to_string(const std::vector<int64_t> &shape) {
     std::ostringstream out;
@@ -106,17 +107,21 @@ QwenWeights::QwenWeights(const MF &mf, const QwenConfig &config)
     output_norm = mf_.get_tensor_view(root + "norm.weight");
     layers.resize(num_hidden_layers);
 
+    // 每种注意力类型独立计数，得到本层在同类型层序列中的下标。
+    std::unordered_map<std::string, size_t> type_counts;
     for (int layer = 0; layer < num_hidden_layers; ++layer) {
         const std::string prefix = root + "layers." + std::to_string(layer) + ".";
         LayerWeights &lw = layers[layer];
         lw.type = layer_types[layer];
-        lw.attn_norm = mf_.get_tensor_view(prefix + "input_layernorm.weight");
-        lw.ffn_norm = mf_.get_tensor_view(prefix + "post_attention_layernorm.weight");
-        lw.mlp.gate = mf_.get_tensor_view(prefix + "mlp.gate_proj.weight");
-        lw.mlp.up = mf_.get_tensor_view(prefix + "mlp.up_proj.weight");
-        lw.mlp.down = mf_.get_tensor_view(prefix + "mlp.down_proj.weight");
+        lw.type_index = type_counts[lw.type]++;
+        lw.input_layernorm = mf_.get_tensor_view(prefix + "input_layernorm.weight");
+        lw.post_attention_layernorm = mf_.get_tensor_view(prefix + "post_attention_layernorm.weight");
+        lw.mlp.gate_proj = mf_.get_tensor_view(prefix + "mlp.gate_proj.weight");
+        lw.mlp.up_proj = mf_.get_tensor_view(prefix + "mlp.up_proj.weight");
+        lw.mlp.down_proj = mf_.get_tensor_view(prefix + "mlp.down_proj.weight");
 
         if (lw.type == "linear_attention") {
+            lw.lin.type_index = lw.type_index;
             lw.lin.in_proj_qkv = mf_.get_tensor_view(prefix + "linear_attn.in_proj_qkv.weight");
             lw.lin.in_proj_z = mf_.get_tensor_view(prefix + "linear_attn.in_proj_z.weight");
             lw.lin.in_proj_b = mf_.get_tensor_view(prefix + "linear_attn.in_proj_b.weight");
@@ -127,6 +132,7 @@ QwenWeights::QwenWeights(const MF &mf, const QwenConfig &config)
             lw.lin.norm = mf_.get_tensor_view(prefix + "linear_attn.norm.weight");
             lw.lin.out_proj = mf_.get_tensor_view(prefix + "linear_attn.out_proj.weight");
         } else {
+            lw.full.type_index = lw.type_index;
             lw.full.q_proj = mf_.get_tensor_view(prefix + "self_attn.q_proj.weight");
             lw.full.k_proj = mf_.get_tensor_view(prefix + "self_attn.k_proj.weight");
             lw.full.v_proj = mf_.get_tensor_view(prefix + "self_attn.v_proj.weight");
@@ -221,11 +227,11 @@ void QwenWeights::DebugDump() {
     for (size_t i = 0; i < layers.size(); ++i) {
         const LayerWeights &lw = layers[i];
         out << "  layer[" << i << "] type=" << lw.type << "\n";
-        dump_one("  attn_norm", lw.attn_norm);
-        dump_one("  ffn_norm", lw.ffn_norm);
-        dump_one("  mlp.gate", lw.mlp.gate);
-        dump_one("  mlp.up", lw.mlp.up);
-        dump_one("  mlp.down", lw.mlp.down);
+        dump_one("  input_layernorm", lw.input_layernorm);
+        dump_one("  post_attention_layernorm", lw.post_attention_layernorm);
+        dump_one("  mlp.gate_proj", lw.mlp.gate_proj);
+        dump_one("  mlp.up_proj", lw.mlp.up_proj);
+        dump_one("  mlp.down_proj", lw.mlp.down_proj);
         if (lw.type == "linear_attention") {
             dump_one("  lin.in_proj_qkv", lw.lin.in_proj_qkv);
             dump_one("  lin.in_proj_z", lw.lin.in_proj_z);

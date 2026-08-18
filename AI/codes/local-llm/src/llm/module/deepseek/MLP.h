@@ -12,17 +12,17 @@
 class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
-class DeepseekWeights;
+struct DeepseekLayerWeights;
 
-// DeepSeek FFN 子层：前若干层为 dense FFN，后续为 MoE FFN。
+// DeepSeek FFN 子层（每层一个实例）：dense 层用 dense FFN，MoE 层用 MoE FFN。
 class MLP : public Module {
 public:
-    MLP(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool);
+    MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, int layer, float *d_hidden, int input_size);
+    void forward(DeepseekSession &session, float *d_hidden, int input_size);
 
 private:
-    const DeepseekWeights &weights_;
+    const DeepseekLayerWeights &weights_;
     DenseFFN dense_;
     MoE moe_;
 };

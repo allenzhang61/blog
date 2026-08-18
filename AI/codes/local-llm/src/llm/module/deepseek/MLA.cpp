@@ -16,12 +16,12 @@
 
 #include <cuda_runtime.h>
 
-MLA::MLA(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool)
-    : config_(config), weights_(weights), pool_(pool) {}
+MLA::MLA(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool)
+    : config_(config), lw_(weights), pool_(pool) {}
 
-void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int input_size, int start_pos) {
+void MLA::forward(DeepseekSession &session, float *d_hidden, int input_size, int start_pos) {
     auto &scratch = session.scratch;
-    const DeepseekLayerWeights &lw = weights_.layers[layer];
+    const int layer = lw_.layer_index;
     const int hidden_size = config_.hidden_size;
     const int n_heads = config_.num_heads;
     const int qk_nope = config_.qk_nope_head_dim;
@@ -33,16 +33,16 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
     const int q_dim = n_heads * qk_head;             // 3072
     const int kvb_out = n_heads * (qk_nope + v_head); // 4096
 
-    float *d_normed = scratch.ensure<float>(scratch_key::kNormed, static_cast<size_t>(input_size) * hidden_size, "ds.normed");
-    RMSNorm::forward(pool_, *lw.attn_norm, d_hidden, d_normed, input_size, hidden_size,
+    float *d_normed = scratch.ensure<float>(scratch_key::kNormed, static_cast<size_t>(input_size) * hidden_size);
+    RMSNorm::forward(pool_, *lw_.attn_norm, d_hidden, d_normed, input_size, hidden_size,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    float *d_q = scratch.ensure<float>(scratch_key::kQ, static_cast<size_t>(input_size) * q_dim, "ds.q");
+    float *d_q = scratch.ensure<float>(scratch_key::kQ, static_cast<size_t>(input_size) * q_dim);
     {
-        CudaWeight w = pool_->cached_weight(*lw.attn_q)->try_dequant();
-        uint16_t *xlow = scratch.ensure<uint16_t>(scratch_key::kNormedLowp, static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
-        GemmInput q_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, w.type, nullptr);
-        gemm_weight(pool_->handle, w, q_in.ptr, d_q, q_dim, hidden_size, input_size, q_in.type, "ds.gemm.attn_q");
+        CudaWeight attn_q = pool_->cached_weight(*lw_.attn_q)->try_dequant();
+        uint16_t *d_normed_lowp = scratch.ensure<uint16_t>(scratch_key::kNormedLowp, static_cast<size_t>(input_size) * hidden_size);
+        GemmInput q_in = prepare_gemm_input(d_normed, d_normed_lowp, input_size * hidden_size, attn_q.type, nullptr);
+        gemm_weight(pool_->handle, attn_q, q_in.ptr, d_q, q_dim, hidden_size, input_size, q_in.type, "ds.gemm.attn_q");
     }
     if (input_size == 1) {
         launch_mla_rope_q(d_q, n_heads, qk_nope, qk_rope, start_pos, static_cast<const float *>(session.inv_freq.ptr), nullptr);
@@ -50,16 +50,16 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
         launch_mla_rope_q_batch(d_q, input_size, n_heads, qk_nope, qk_rope, start_pos, static_cast<const float *>(session.inv_freq.ptr), nullptr);
     }
 
-    float *d_kv_a = scratch.ensure<float>(scratch_key::kKvA, static_cast<size_t>(input_size) * kv_total, "ds.kv_a");
+    float *d_kv_a = scratch.ensure<float>(scratch_key::kKvA, static_cast<size_t>(input_size) * kv_total);
     {
-        CudaWeight w = pool_->cached_weight(*lw.attn_kv_a_mqa)->try_dequant();
-        uint16_t *xlow = scratch.ensure<uint16_t>(scratch_key::kNormedLowp, static_cast<size_t>(input_size) * hidden_size, "ds.normed_lowp");
-        GemmInput kv_a_in = prepare_gemm_input(d_normed, xlow, input_size * hidden_size, w.type, nullptr);
-        gemm_weight(pool_->handle, w, kv_a_in.ptr, d_kv_a, kv_total, hidden_size, input_size, kv_a_in.type, "ds.gemm.kv_a");
+        CudaWeight attn_kv_a_mqa = pool_->cached_weight(*lw_.attn_kv_a_mqa)->try_dequant();
+        uint16_t *d_normed_lowp = scratch.ensure<uint16_t>(scratch_key::kNormedLowp, static_cast<size_t>(input_size) * hidden_size);
+        GemmInput kv_a_in = prepare_gemm_input(d_normed, d_normed_lowp, input_size * hidden_size, attn_kv_a_mqa.type, nullptr);
+        gemm_weight(pool_->handle, attn_kv_a_mqa, kv_a_in.ptr, d_kv_a, kv_total, hidden_size, input_size, kv_a_in.type, "ds.gemm.kv_a");
     }
 
     float *d_cache = static_cast<float *>(session.kv_caches[layer].cache.ptr);
-    CudaWeight *kv_a_norm_weight = pool_->cached_weight(*lw.attn_kv_a_norm);
+    CudaWeight *kv_a_norm_weight = pool_->cached_weight(*lw_.attn_kv_a_norm);
     const float *kv_a_norm = static_cast<const float *>(kv_a_norm_weight->ptr);
     if (input_size == 1) {
         launch_mla_kv_a(d_kv_a, kv_a_norm, d_cache, kv_lora, qk_rope, session.max_seq_len,
@@ -74,36 +74,36 @@ void MLA::forward(DeepseekSession &session, int layer, float *d_hidden, int inpu
     session.kv_caches[layer].seq_len = start_pos + input_size;
 
     const int seq = start_pos + input_size;
-    float *d_kvb = scratch.ensure<float>(scratch_key::kKvBOut, static_cast<size_t>(seq) * kvb_out, "ds.kv_b_out");
+    float *d_kv_b_out = scratch.ensure<float>(scratch_key::kKvBOut, static_cast<size_t>(seq) * kvb_out);
     {
-        CudaWeight w = pool_->cached_weight(*lw.attn_kv_b)->try_dequant();
-        uint16_t *latent_low = scratch.ensure<uint16_t>(scratch_key::kLatentLowp, static_cast<size_t>(seq) * kv_lora, "ds.latent_lowp");
-        float *latent_f32 = scratch.ensure<float>(scratch_key::kAttn, static_cast<size_t>(seq) * kv_lora, "ds.latent_f32");
+        CudaWeight attn_kv_b = pool_->cached_weight(*lw_.attn_kv_b)->try_dequant();
+        uint16_t *d_latent_lowp = scratch.ensure<uint16_t>(scratch_key::kLatentLowp, static_cast<size_t>(seq) * kv_lora);
+        float *latent_f32 = scratch.ensure<float>(scratch_key::kAttn, static_cast<size_t>(seq) * kv_lora);
         cuda_memcpy2d_d2d(latent_f32, kv_lora * sizeof(float), d_cache,
                           kv_total * sizeof(float), kv_lora * sizeof(float), seq,
                           "ds.gather.latent");
-        GemmInput latent_in = prepare_gemm_input(latent_f32, latent_low, seq * kv_lora, w.type, nullptr);
-        gemm_weight(pool_->handle, w, latent_in.ptr, d_kvb, kvb_out, kv_lora, seq, latent_in.type, "ds.gemm.kv_b");
+        GemmInput latent_in = prepare_gemm_input(latent_f32, d_latent_lowp, seq * kv_lora, attn_kv_b.type, nullptr);
+        gemm_weight(pool_->handle, attn_kv_b, latent_in.ptr, d_kv_b_out, kvb_out, kv_lora, seq, latent_in.type, "ds.gemm.kv_b");
     }
 
-    float *d_attn = scratch.ensure<float>(scratch_key::kAttn, static_cast<size_t>(input_size) * n_heads * v_head, "ds.attn");
+    float *d_attn = scratch.ensure<float>(scratch_key::kAttn, static_cast<size_t>(input_size) * n_heads * v_head);
     if (input_size == 1) {
-        launch_mla_attend(d_q, d_kvb, d_cache, d_attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
+        launch_mla_attend(d_q, d_kv_b_out, d_cache, d_attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
                           session.max_seq_len, start_pos, session.attn_softmax_scale, nullptr);
     } else {
-        launch_mla_attend_batch(d_q, d_kvb, d_cache, d_attn, input_size, n_heads, qk_nope, qk_rope,
+        launch_mla_attend_batch(d_q, d_kv_b_out, d_cache, d_attn, input_size, n_heads, qk_nope, qk_rope,
                                 v_head, kv_lora, session.max_seq_len, start_pos,
                                 session.attn_softmax_scale, nullptr);
     }
 
-    float *d_out = scratch.ensure<float>(scratch_key::kAttnOut, static_cast<size_t>(input_size) * hidden_size, "ds.attn_out");
+    float *d_attn_out = scratch.ensure<float>(scratch_key::kAttnOut, static_cast<size_t>(input_size) * hidden_size);
     {
-        CudaWeight w = pool_->cached_weight(*lw.attn_output)->try_dequant();
+        CudaWeight attn_output = pool_->cached_weight(*lw_.attn_output)->try_dequant();
         const int in_dim = n_heads * v_head; // 2048
-        uint16_t *xlow = scratch.ensure<uint16_t>(scratch_key::kAttnLowp, static_cast<size_t>(input_size) * in_dim, "ds.attn_lowp");
-        GemmInput attn_in = prepare_gemm_input(d_attn, xlow, input_size * in_dim, w.type, nullptr);
-        gemm_weight(pool_->handle, w, attn_in.ptr, d_out, hidden_size, in_dim, input_size, attn_in.type, "ds.gemm.attn_output");
+        uint16_t *d_attn_lowp = scratch.ensure<uint16_t>(scratch_key::kAttnLowp, static_cast<size_t>(input_size) * in_dim);
+        GemmInput attn_in = prepare_gemm_input(d_attn, d_attn_lowp, input_size * in_dim, attn_output.type, nullptr);
+        gemm_weight(pool_->handle, attn_output, attn_in.ptr, d_attn_out, hidden_size, in_dim, input_size, attn_in.type, "ds.gemm.attn_output");
     }
 
-    launch_add(d_hidden, d_out, d_hidden, input_size * hidden_size, nullptr);
+    launch_add(d_hidden, d_attn_out, d_hidden, input_size * hidden_size, nullptr);
 }

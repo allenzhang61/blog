@@ -16,6 +16,8 @@ class QwenConfig;
 //       value_total=linear_num_value_heads*linear_value_head_dim；
 //       conv_dim=key_total*2+value_total；kernel=linear_conv_kernel_dim。
 struct LinearAttnWeights {
+    // 本层在 linear attention 层序列中的下标，用于索引 QwenSession::linear_attn_recurrent_states。
+    size_t type_index = 0;
     MFTensorView in_proj_qkv;  // [conv_dim, hidden]
     MFTensorView in_proj_z;    // [value_total, hidden]
     MFTensorView in_proj_b;    // [linear_num_value_heads, hidden]
@@ -31,6 +33,8 @@ struct LinearAttnWeights {
 // 记号：hidden=hidden_size；q_total=num_attention_heads*head_dim；
 //       kv_total=num_key_value_heads*head_dim。
 struct FullAttnWeights {
+    // 本层在 full attention 层序列中的下标，用于索引 QwenSession::full_attn_kv_cache。
+    size_t type_index = 0;
     MFTensorView q_proj;  // [q_total*2, hidden]（每 head 交错输出 [q, gate]）
     MFTensorView k_proj;  // [kv_total, hidden]
     MFTensorView v_proj;  // [kv_total, hidden]
@@ -42,17 +46,19 @@ struct FullAttnWeights {
 // MLP 层一次性解析好的权重引用。
 // 记号：hidden=hidden_size；intermediate=intermediate_size。
 struct MlpWeights {
-    MFTensorView gate;  // [intermediate, hidden]
-    MFTensorView up;    // [intermediate, hidden]
-    MFTensorView down;  // [hidden, intermediate]
+    MFTensorView gate_proj;  // [intermediate, hidden]
+    MFTensorView up_proj;    // [intermediate, hidden]
+    MFTensorView down_proj;  // [hidden, intermediate]
 };
 
 // 单个 transformer 层解析好的权重引用集合。
 struct LayerWeights {
     // 层类型："linear_attention" 或 "full_attention"。
     std::string type;
-    MFTensorView attn_norm;  // [hidden_size]（注意力前 RMSNorm）
-    MFTensorView ffn_norm;   // [hidden_size]（MLP 前 RMSNorm）
+    // 本层在同类型层序列中的下标，用于索引 QwenSession 的 fullAttnKVCaches / linearAttnRecurrentStates。
+    size_t type_index = 0;
+    MFTensorView input_layernorm;           // [hidden_size]（注意力前 RMSNorm）
+    MFTensorView post_attention_layernorm;   // [hidden_size]（MLP 前 RMSNorm）
     // 仅 linear_attention 层有效。
     LinearAttnWeights lin;
     // 仅 full_attention 层有效。

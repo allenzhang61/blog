@@ -14,13 +14,13 @@ struct DeepseekLayerWeights;
 
 class SharedExperts : public Module {
 public:
-    SharedExperts(const DeepseekConfig &config, CudaWeightPool *pool);
+    SharedExperts(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool);
 
-    void forward(DeepseekSession &session, const DeepseekLayerWeights &weights,
-                 const float *d_normed, int input_size, float *d_moe);
+    void forward(DeepseekSession &session, const float *d_normed, int input_size, float *d_moe);
 
 private:
     const DeepseekConfig &config_;
+    const DeepseekLayerWeights &lw_;
     CudaWeightPool *pool_ = nullptr;
 };
 

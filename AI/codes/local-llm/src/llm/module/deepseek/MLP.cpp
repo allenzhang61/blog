@@ -6,15 +6,15 @@
 
 #include "llm/model/deepseek/DeepseekWeights.h"
 
-MLP::MLP(const DeepseekConfig &config, const DeepseekWeights &weights, CudaWeightPool *pool)
+MLP::MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config, CudaWeightPool *pool)
     : weights_(weights),
-      dense_(config, weights, pool),
-      moe_(config, weights, pool) {}
+      dense_(weights, config, pool),
+      moe_(weights, config, pool) {}
 
-void MLP::forward(DeepseekSession &session, int layer, float *d_hidden, int input_size) {
-    if (weights_.layers[layer].is_moe) {
-        moe_.forward(session, layer, d_hidden, input_size);
+void MLP::forward(DeepseekSession &session, float *d_hidden, int input_size) {
+    if (weights_.is_moe) {
+        moe_.forward(session, d_hidden, input_size);
     } else {
-        dense_.forward(session, layer, d_hidden, input_size);
+        dense_.forward(session, d_hidden, input_size);
     }
 }

@@ -59,6 +59,7 @@ DeepseekWeights::DeepseekWeights(const MF &mf, const DeepseekConfig &config)
     layers.resize(config.num_layers);
     for (int i = 0; i < config.num_layers; ++i) {
         DeepseekLayerWeights &lw = layers[i];
+        lw.layer_index = i;
         const std::string p = "blk." + std::to_string(i) + ".";
 
         lw.attn_norm = &mf_.get_tensor_view(p + "attn_norm.weight");

@@ -48,8 +48,8 @@ private:
     int max_output_tokens_ = 0;
     Sampler sampler_;
     common::Embedding embedding_;
-    MLA mla_;
-    MLP mlp_;
+    std::vector<MLA> mla_layers_;
+    std::vector<MLP> mlp_layers_;
     common::LMHead lm_head_;
     std::unique_ptr<DeepseekSession> session_;
 };
