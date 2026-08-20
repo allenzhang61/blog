@@ -28,17 +28,14 @@ DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, cons
 
 DeepseekModel::~DeepseekModel() = default;
 
-int DeepseekModel::forward_session(DeepseekSession &session, const std::vector<int> &input, int start_pos) {
+int DeepseekModel::forward_session(DeepseekSession &session, const Tensor &input, int start_pos) {
     auto &scratch = session.scratch;
-    const int input_size = static_cast<int>(input.size());
+    const int input_size = static_cast<int>(input.numel());
     const int hidden_size = config_.hidden_size;
 
-    float *d_hidden = scratch.ensure<float>(scratch_key::kHidden, input_size * hidden_size);
-    Tensor hidden = Tensor::gpu_activation(
-        d_hidden, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)});
-    Tensor input_view = Tensor::host_view(
-        input.data(), {static_cast<int64_t>(input_size)}, DType::I32);
-    embedding_.forward(input_view, hidden, scratch);
+    Tensor hidden = Tensor::gpu_scratch(
+        scratch, scratch_key::kHidden, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)});
+    embedding_.forward(input, hidden, scratch);
 
     for (int i = 0; i < config_.num_layers; ++i) {
         mla_layers_[i].forward(session, hidden, start_pos);
@@ -46,23 +43,25 @@ int DeepseekModel::forward_session(DeepseekSession &session, const std::vector<i
     }
 
     const int last = input_size - 1;
+    float *d_hidden = hidden.gpu_f32();
     float *d_last = d_hidden + static_cast<size_t>(last) * hidden_size;
-    float *d_normed = scratch.ensure<float>(scratch_key::kNormed, static_cast<size_t>(hidden_size));
-    Tensor last_view = Tensor::gpu_activation(d_last, {1, static_cast<int64_t>(hidden_size)});
-    Tensor normed = Tensor::gpu_activation(d_normed, {1, static_cast<int64_t>(hidden_size)});
+    Tensor last_view = Tensor::gpu_view(d_last, {1, static_cast<int64_t>(hidden_size)});
+    Tensor normed = Tensor::gpu_scratch(
+        scratch, scratch_key::kNormed, {1, static_cast<int64_t>(hidden_size)});
     RMSNorm::forward(*weights_.output_norm, last_view, normed,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
     return lm_head_.forward(session, normed, sampler_);
 }
 
-int DeepseekModel::prefill(const std::vector<int> &input) {
+int DeepseekModel::prefill(const Tensor &input) {
     session_ = std::make_unique<DeepseekSession>(config_, input, max_output_tokens_);
     return forward_session(*session_, input, 0);
 }
 
 int DeepseekModel::decode(int prev_token_id, int pos) {
-    return forward_session(*session_, {prev_token_id}, pos);
+    Tensor input = Tensor::host_view(&prev_token_id, {1}, DType::I32);
+    return forward_session(*session_, input, pos);
 }
 
 void DeepseekModel::append_output(int token_id) {

@@ -4,6 +4,17 @@
 
 #include "tensor/Tensor.h"
 
+#include "backend/cuda/mem/CudaScratch.h"
+#include "backend/cuda/mem/CudaWeight.h"
+#include "backend/cuda/mem/CudaWeightPool.h"
+#include "backend/cuda/ops/gemm.h"
+#include "backend/cuda/ops/kernel.cuh"
+
+#include <stdexcept>
+#include <utility>
+
+#include <cuda_runtime.h>
+
 const char *dtype_name(DType dt) {
     switch (dt) {
         case DType::F32: return "F32";
@@ -51,6 +62,199 @@ bool is_supported_dtype(DType dt) {
     }
 }
 
-// 注意：Tensor::cached_weight() 的实现定义在
+namespace {
+
+size_t dtype_byte_size(DType dt) {
+    switch (dt) {
+        case DType::F32:
+        case DType::I32:
+            return 4;
+        case DType::F16:
+        case DType::BF16:
+            return 2;
+        default:
+            throw std::runtime_error(std::string("Tensor copy 不支持 dtype: ") + dtype_name(dt));
+    }
+}
+
+void check_tensor_cuda(cudaError_t status, const std::string &what) {
+    if (status != cudaSuccess) {
+        throw std::runtime_error(what + ": " + cudaGetErrorString(status));
+    }
+}
+
+const void *host_or_disk_data(const Tensor &t) {
+    if (t.has_location(TensorLocation::CpuMem)) {
+        return t.cpu_data;
+    }
+    if (t.has_location(TensorLocation::DiskMmap)) {
+        return t.disk_data;
+    }
+    return nullptr;
+}
+
+int norm_weight_type_of(DType dtype) {
+    if (dtype == DType::BF16) return 0;
+    if (dtype == DType::F16) return 1;
+    if (dtype == DType::F32) return 2;
+    throw std::runtime_error(std::string("RMSNorm 不支持的 norm dtype：") + dtype_name(dtype));
+}
+
+} // namespace
+
+TensorLocation operator|(TensorLocation a, TensorLocation b) {
+    return static_cast<TensorLocation>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+
+void Tensor::mark_location(TensorLocation loc) const {
+    locations |= static_cast<uint32_t>(loc);
+}
+
+bool Tensor::has_location(TensorLocation loc) const {
+    return (locations & static_cast<uint32_t>(loc)) != 0;
+}
+
+Tensor Tensor::gpu_scratch(CudaScratch &scratch, const std::string &key,
+                      std::vector<int64_t> shape, DType dt) {
+    int64_t count = 0;
+    if (!shape.empty()) {
+        count = 1;
+        for (int64_t d : shape) { count *= d; }
+    }
+
+    void *device_ptr = nullptr;
+    switch (dt) {
+        case DType::F32:
+            device_ptr = scratch.ensure<float>(key, static_cast<size_t>(count));
+            break;
+        case DType::F16:
+        case DType::BF16:
+            device_ptr = scratch.ensure<uint16_t>(key, static_cast<size_t>(count));
+            break;
+        case DType::I32:
+            device_ptr = scratch.ensure<int>(key, static_cast<size_t>(count));
+            break;
+        default:
+            throw std::runtime_error(std::string("Tensor::gpu_scratch 不支持 dtype: ") + dtype_name(dt));
+    }
+
+    return gpu_view(device_ptr, std::move(shape), dt);
+}
+
+Tensor Tensor::gpu_view(void *device_ptr, std::vector<int64_t> shape, DType dt) {
+    Tensor t;
+    t.shape = std::move(shape);
+    t.dtype = dt;
+    t.gpu_data = device_ptr;
+    t.mark_location(TensorLocation::GpuMem);
+    return t;
+}
+
+Tensor Tensor::host_view(const void *host_ptr, std::vector<int64_t> shape, DType dt) {
+    Tensor t;
+    t.shape = std::move(shape);
+    t.dtype = dt;
+    t.cpu_data = const_cast<void *>(host_ptr);
+    t.mark_location(TensorLocation::CpuMem);
+    return t;
+}
+
+float *Tensor::gpu_f32() const {
+    return static_cast<float *>(gpu_data);
+}
+
+int *Tensor::gpu_i32() const {
+    return static_cast<int *>(gpu_data);
+}
+
+const int *Tensor::host_i32() const {
+    return static_cast<const int *>(cpu_data);
+}
+
+void Tensor::to_gpu(CudaScratch &scratch, const std::string &key, const std::string &what) {
+    const void *src = host_or_disk_data(*this);
+    if (!src) {
+        throw std::runtime_error("Tensor::to_gpu 需要 CpuMem 或 DiskMmap 源: " + name);
+    }
+
+    Tensor dst = gpu_scratch(scratch, key, shape, dtype);
+    check_tensor_cuda(cudaMemcpy(dst.gpu_data, src, byte_size(), cudaMemcpyHostToDevice), what);
+    gpu_data = dst.gpu_data;
+    mark_location(TensorLocation::GpuMem);
+}
+
+void Tensor::to_gpu(void *device_ptr, const std::string &what) const {
+    const void *src = host_or_disk_data(*this);
+    if (!src) {
+        throw std::runtime_error("Tensor::to_gpu 需要 CpuMem 或 DiskMmap 源: " + name);
+    }
+    check_tensor_cuda(cudaMemcpy(device_ptr, src, byte_size(), cudaMemcpyHostToDevice), what);
+}
+
+void Tensor::to_host(void *host_ptr, const std::string &what) const {
+    if (!has_location(TensorLocation::GpuMem) || !gpu_data) {
+        throw std::runtime_error("Tensor::to_host 需要 GpuMem 源: " + name);
+    }
+    check_tensor_cuda(cudaMemcpy(host_ptr, gpu_data, byte_size(), cudaMemcpyDeviceToHost), what);
+}
+
+size_t Tensor::byte_size() const {
+    return static_cast<size_t>(numel()) * dtype_byte_size(dtype);
+}
+
+void Tensor::gemm(const Tensor &input, const Tensor &output, CudaScratch &scratch,
+                  const std::string &lowp_key, const char *name) const {
+    CudaWeight w = to_gpu()->try_dequant();
+    const int out_dim = static_cast<int>(shape[0]);
+    const int in_dim = static_cast<int>(shape[1]);
+    const size_t input_size = static_cast<size_t>(input.rows());
+    uint16_t *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(input.numel()));
+    GemmInput gemm_in = prepare_gemm_input(input.gpu_f32(), d_input_lowp,
+                                           static_cast<size_t>(input.numel()), w.type, nullptr);
+    gemm_weight(global_cuda_weight_pool().handle, w, gemm_in.ptr, output.gpu_f32(),
+                out_dim, in_dim, input_size, gemm_in.type, name);
+}
+
+void Tensor::embedding_lookup(const Tensor &input, const Tensor &hidden) const {
+    CudaWeight table = to_gpu()->try_dequant();
+    const int lowp_type = (table.dtype == DType::F16) ? 1 : 0;
+    launch_embedding_lookup(input.gpu_i32(), hidden.gpu_f32(), static_cast<const uint16_t *>(table.ptr),
+                            static_cast<int>(input.numel()), static_cast<int>(shape[0]),
+                            static_cast<int>(shape[1]), lowp_type, nullptr);
+}
+
+void Tensor::rms_norm(const Tensor &input, const Tensor &output, float eps, bool one_plus) const {
+    CudaWeight w = to_gpu()->try_dequant();
+    launch_rms_norm(input.gpu_f32(), output.gpu_f32(), w.ptr, norm_weight_type_of(w.dtype),
+                    static_cast<int>(input.rows()), static_cast<int>(input.cols()), eps, one_plus,
+                    nullptr);
+}
+
+const void *Tensor::weight_gpu_data() const {
+    auto w = std::make_shared<CudaWeight>(to_gpu()->try_dequant());
+    const void *ptr = w->ptr;
+    weight_view_lease = std::move(w);
+    return ptr;
+}
+
+int64_t Tensor::numel() const {
+    if (shape.empty()) { return 0; }
+    int64_t n = 1;
+    for (int64_t d : shape) { n *= d; }
+    return n;
+}
+
+int64_t Tensor::rows() const {
+    if (shape.empty()) { return 0; }
+    int64_t r = 1;
+    for (size_t i = 0; i + 1 < shape.size(); ++i) { r *= shape[i]; }
+    return r;
+}
+
+int64_t Tensor::cols() const {
+    return shape.empty() ? 0 : shape.back();
+}
+
+// 注意：Tensor::to_gpu() 的权重上传实现定义在
 // backend/cuda/mem/CudaWeightPool.cpp，以便访问 CudaWeightPool 全量类型，
-// 保持本 tensor 层的 .cpp 零 CUDA 依赖。
+// 避免在头文件引入 CUDA backend 细节。

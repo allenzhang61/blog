@@ -8,8 +8,8 @@
 // 所有 LLM 前向 Module 的抽象基类（概念上类比 PyTorch 的 nn.Module）。
 //
 // 与 PyTorch 的关键区别（本项目为手写 CUDA 推理）：
-//  1) Module 不拥有权重：权重是 mmap 的 TensorView 引用，device 副本由
-//     CudaWeightPool 惰性上传并缓存；Module 只持引用与 pool 指针。
+//  1) Module 不拥有权重：权重是 mmap 的 Tensor 引用，device 副本由 Tensor 内部
+//     惰性上传并缓存；Module 只持 Tensor 引用。
 //  2) Module 不持有临时激活：前向中反复覆盖的中间 buffer 由模型自己的 Scratch
 //     统一管理，作为参数传入 forward 或经 Session 访问。
 //  3) Module 不持有跨 token 状态：KV cache / recurrent state 在模型自己的 Session

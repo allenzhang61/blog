@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,7 @@ bool is_supported_dtype(DType dt);
 class CudaWeightPool;
 // device 端权重缓冲（CUDA backend），此处仅前向声明用于返回指针。
 class CudaWeight;
+class CudaScratch;
 
 // 一份张量数据可能同时驻留在多个存储位置上（位掩码，可按位组合）。
 enum class TensorLocation : uint32_t {
@@ -59,9 +61,7 @@ enum class TensorLocation : uint32_t {
     GpuMem = 1u << 2,
 };
 
-inline TensorLocation operator|(TensorLocation a, TensorLocation b) {
-    return static_cast<TensorLocation>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-}
+TensorLocation operator|(TensorLocation a, TensorLocation b);
 
 // 单个张量的统一视图，记录同一份值在 disk mmap / cpu mem / gpu mem 上的驻留情况，
 // 同一份值可以同时存在于多个位置。本对象不拥有 disk mmap 内存（disk_data 指向
@@ -80,66 +80,66 @@ public:
     void *cpu_data = nullptr;
     // gpu mem 位置（权重）：指向 device 权重缓存池，使得持有本 tensor 的 module 无需再单独传入 pool。
     CudaWeightPool *pool = nullptr;
-    // gpu mem 位置（激活/非池化）：直接持有的 device 内存裸指针。权重经 pool 惰性上传
-    // 并由 cached_weight() 返回；而运行时激活（scratch buffer）不进 pool，直接用本字段
-    // 包住 scratch 指针构成一个 device 视图（见 gpu_activation）。本对象不拥有该内存。
+    // gpu mem 位置（激活/非池化）：直接持有的 device 内存裸指针。权重经 to_gpu() 走 pool
+    // 惰性上传；而运行时激活（scratch buffer）不进 pool，直接用本字段
+    // 包住 scratch 指针构成一个 device 视图（见 gpu_view）。本对象不拥有该内存。
     void *gpu_data = nullptr;
 
-    // 当前值驻留的位置集合（位掩码）。cached_weight() 为 const 但会补标 GpuMem，故用 mutable。
+    // 当前值驻留的位置集合（位掩码）。权重 to_gpu() 为 const 但会补标 GpuMem，故用 mutable。
     mutable uint32_t locations = static_cast<uint32_t>(TensorLocation::None);
 
     // 标记 / 查询某个位置是否驻留了本张量的值。
-    void mark_location(TensorLocation loc) const { locations |= static_cast<uint32_t>(loc); }
-    bool has_location(TensorLocation loc) const {
-        return (locations & static_cast<uint32_t>(loc)) != 0;
-    }
+    void mark_location(TensorLocation loc) const;
+    bool has_location(TensorLocation loc) const;
 
     // === 运行时激活视图工厂（不拥有内存，仅包住已有指针）===
+    // 从 scratch 中按 shape/dtype 申请一段 device 激活内存，并构造成 gpu view。
+    static Tensor gpu_scratch(CudaScratch &scratch, const std::string &key,
+                         std::vector<int64_t> shape, DType dt = DType::F32);
     // 用一段已在 device 上的激活内存构造视图（不进 pool、不拥有）。
-    static Tensor gpu_activation(void *device_ptr, std::vector<int64_t> shape, DType dt = DType::F32) {
-        Tensor t;
-        t.shape = std::move(shape);
-        t.dtype = dt;
-        t.gpu_data = device_ptr;
-        t.mark_location(TensorLocation::GpuMem);
-        return t;
-    }
+    static Tensor gpu_view(void *device_ptr, std::vector<int64_t> shape, DType dt = DType::F32);
     // 用一段 host 内存构造视图（如 token id 序列），不拥有。
-    static Tensor host_view(const void *host_ptr, std::vector<int64_t> shape, DType dt) {
-        Tensor t;
-        t.shape = std::move(shape);
-        t.dtype = dt;
-        t.cpu_data = const_cast<void *>(host_ptr);
-        t.mark_location(TensorLocation::CpuMem);
-        return t;
-    }
+    static Tensor host_view(const void *host_ptr, std::vector<int64_t> shape, DType dt);
 
     // === 便捷访问器 ===
     // device 激活指针（gpu_data，运行时激活路径）。
-    float *gpu_f32() const { return static_cast<float *>(gpu_data); }
+    float *gpu_f32() const;
+    // device 侧 int 视图指针（gpu_data，如 token id / top-k expert id）。
+    int *gpu_i32() const;
     // host 侧 int 视图指针（cpu_data，如 token id）。
-    const int *host_i32() const { return static_cast<const int *>(cpu_data); }
+    const int *host_i32() const;
+
+    // === host/device 搬运 ===
+    // 把当前 host/disk view 拷贝到一段 scratch GPU buffer，并让本 Tensor 同时持有 GpuMem view。
+    void to_gpu(CudaScratch &scratch, const std::string &key, const std::string &what);
+    // 把当前 host/disk view 拷贝到调用方提供的 GPU buffer。
+    void to_gpu(void *device_ptr, const std::string &what) const;
+    // 权重路径：经由 CudaWeightPool 惰性上传到 GPU，并返回 device 权重缓存。
+    CudaWeight *to_gpu() const;
+    // 把当前 GPU view 拷贝到调用方提供的 host buffer。
+    void to_host(void *host_ptr, const std::string &what) const;
+    // 按 dtype/shape 推导出的逻辑字节数（不用于量化权重物理大小）。
+    size_t byte_size() const;
+
+    // 当前 Tensor 作为权重 [out_dim, in_dim]，对 input 做线性投影写入 output。
+    // input/output 均为 GPU float 激活视图；lowp_key 用于权重为 F16/BF16 时的输入低精度 scratch。
+    void gemm(const Tensor &input, const Tensor &output, CudaScratch &scratch,
+              const std::string &lowp_key, const char *name = "") const;
+    // 当前 Tensor 作为 embedding table [vocab, hidden]，按 GPU token id 查表写入 hidden。
+    void embedding_lookup(const Tensor &input, const Tensor &hidden) const;
+    // 当前 Tensor 作为 RMSNorm 权重，对 input 归一化后写入 output。
+    void rms_norm(const Tensor &input, const Tensor &output, float eps, bool one_plus) const;
+    // 返回当前权重的 device 指针；Tensor 内部持有必要的 dequant/cache view 生命周期。
+    const void *weight_gpu_data() const;
 
     // 元素总数（shape 各维乘积；空 shape 视为 0）。
-    int64_t numel() const {
-        if (shape.empty()) { return 0; }
-        int64_t n = 1;
-        for (int64_t d : shape) { n *= d; }
-        return n;
-    }
+    int64_t numel() const;
     // 二维视角下的行数 / 列数（约定最后一维为列，其余维乘积为行）。
-    int64_t rows() const {
-        if (shape.empty()) { return 0; }
-        int64_t r = 1;
-        for (size_t i = 0; i + 1 < shape.size(); ++i) { r *= shape[i]; }
-        return r;
-    }
-    int64_t cols() const { return shape.empty() ? 0 : shape.back(); }
+    int64_t rows() const;
+    int64_t cols() const;
 
-    // 惰性把本 tensor 上传到 device 并返回缓存条目（等价于 pool->cached_weight(*this)），
-    // 同时把 gpu mem 标记进 locations。实现见 CudaWeightPool.cpp，避免 tensor 层依赖
-    // CUDA 头。pool 为空时行为未定义（调用方须保证已填充 pool）。
-    CudaWeight *cached_weight() const;
+    // 最近一次 weight_gpu_data() 的权重 view 生命周期保持器。
+    mutable std::shared_ptr<void> weight_view_lease;
 };
 
 #endif // LOCAL_LLM_TENSOR_H

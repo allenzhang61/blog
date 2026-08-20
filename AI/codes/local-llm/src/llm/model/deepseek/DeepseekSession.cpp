@@ -4,13 +4,9 @@
 
 #include "DeepseekSession.h"
 
-#include "backend/cuda/common.h"
-
 #include <algorithm>
 #include <cmath>
 #include <vector>
-
-#include <cuda_runtime.h>
 
 namespace {
 
@@ -22,9 +18,9 @@ float yarn_corr_dim(float num_rot, int dim, float base, int orig_ctx) {
 
 } // namespace
 
-DeepseekSession::DeepseekSession(const DeepseekConfig &config, const std::vector<int> &inputs,
+DeepseekSession::DeepseekSession(const DeepseekConfig &config, const Tensor &inputs,
                                  int max_output_tokens) {
-    max_seq_len = static_cast<int>(inputs.size()) + max_output_tokens;
+    max_seq_len = static_cast<int>(inputs.numel()) + max_output_tokens;
 
     // latent KV cache：每层 [max_seq_len, kv_lora + qk_rope] float。
     const int kv_total = config.kv_lora_rank + config.qk_rope_head_dim;
@@ -73,9 +69,7 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const std::vector
     attn_softmax_scale = 1.0f / std::sqrt(static_cast<float>(config.qk_head_dim()));
     inv_freq = CudaWeight(static_cast<size_t>(half) * sizeof(float), CUDA_R_32F, false,
                           "deepseek.inv_freq");
-    cuda_memcpy_h2d(inv_freq.ptr, h_inv_freq.data(),
-                    static_cast<size_t>(half) * sizeof(float),
-                    "deepseek.inv_freq h2d");
+    Tensor::host_view(h_inv_freq.data(), {half}, DType::F32).to_gpu(inv_freq.ptr, "deepseek.inv_freq h2d");
 }
 
 size_t DeepseekSession::kv_state_bytes() const {

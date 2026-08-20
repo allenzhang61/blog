@@ -10,7 +10,6 @@
 #include "llm/module/deepseek/DenseFFN.h"
 #include "llm/module/deepseek/MoE.h"
 
-class CudaWeightPool;
 class DeepseekConfig;
 class DeepseekSession;
 struct DeepseekLayerWeights;

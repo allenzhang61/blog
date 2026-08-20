@@ -9,8 +9,6 @@
 
 #include "format/MF.h"
 
-class CudaWeightPool;
-
 // RMSNorm（无 bias）：对最后一维做 RMS 归一化后乘以可学习权重。
 //   y = x / sqrt(mean(x^2) + eps) * weight
 // 权重形状 [hidden_size]，逐通道缩放。

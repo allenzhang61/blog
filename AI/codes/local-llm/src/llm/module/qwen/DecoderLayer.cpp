@@ -40,10 +40,8 @@ void DecoderLayer::prefill(QwenSession &session, const Tensor &hidden) {
     const std::vector<int64_t> act_shape = {static_cast<int64_t>(input_size),
                                             static_cast<int64_t>(hidden_size)};
 
-    float *d_token_hidden_a = scratch.ensure<float>(scratch_key::kTokenHiddenA, n);
-    float *d_mixer = scratch.ensure<float>(scratch_key::kMixer, n);
-    Tensor token_hidden_a = Tensor::gpu_activation(d_token_hidden_a, act_shape);
-    Tensor mixer = Tensor::gpu_activation(d_mixer, act_shape);
+    Tensor token_hidden_a = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenA, act_shape);
+    Tensor mixer = Tensor::gpu_scratch(scratch, scratch_key::kMixer, act_shape);
 
     // h = x + attn( input_norm(x) )
     RMSNorm::forward(input_norm_weight_, hidden, token_hidden_a,
@@ -55,17 +53,15 @@ void DecoderLayer::prefill(QwenSession &session, const Tensor &hidden) {
         static_cast<LinearAttention *>(attn_.get())->prefill(
             session, token_hidden_a, mixer);
     }
-    launch_add(d_hidden, d_mixer, d_hidden, static_cast<int>(n), nullptr);
+    launch_add(d_hidden, mixer.gpu_f32(), d_hidden, static_cast<int>(n), nullptr);
 
     // y = h + mlp( post_norm(h) )
-    float *d_token_hidden_b = scratch.ensure<float>(scratch_key::kTokenHiddenB, n);
-    float *d_mlp_out = scratch.ensure<float>(scratch_key::kMlpOut, n);
-    Tensor token_hidden_b = Tensor::gpu_activation(d_token_hidden_b, act_shape);
-    Tensor mlp_out = Tensor::gpu_activation(d_mlp_out, act_shape);
+    Tensor token_hidden_b = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenB, act_shape);
+    Tensor mlp_out = Tensor::gpu_scratch(scratch, scratch_key::kMlpOut, act_shape);
     RMSNorm::forward(post_norm_weight_, hidden, token_hidden_b,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
     mlp_.forward(session, token_hidden_b, mlp_out);
-    launch_add(d_hidden, d_mlp_out, d_hidden, static_cast<int>(n), nullptr);
+    launch_add(d_hidden, mlp_out.gpu_f32(), d_hidden, static_cast<int>(n), nullptr);
 
     check_cuda(cudaDeviceSynchronize(), "DecoderLayer prefill 同步失败");
 }
@@ -76,10 +72,8 @@ void DecoderLayer::decode(QwenSession &session, const Tensor &hidden, int pos) {
     const int hidden_size = text_config_.hidden_size;
     const std::vector<int64_t> act_shape = {1, static_cast<int64_t>(hidden_size)};
 
-    float *d_token_hidden_a = scratch.ensure<float>(scratch_key::kTokenHiddenA, hidden_size);
-    float *d_mixer = scratch.ensure<float>(scratch_key::kMixer, hidden_size);
-    Tensor token_hidden_a = Tensor::gpu_activation(d_token_hidden_a, act_shape);
-    Tensor mixer = Tensor::gpu_activation(d_mixer, act_shape);
+    Tensor token_hidden_a = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenA, act_shape);
+    Tensor mixer = Tensor::gpu_scratch(scratch, scratch_key::kMixer, act_shape);
 
     RMSNorm::forward(input_norm_weight_, hidden, token_hidden_a,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
@@ -90,16 +84,14 @@ void DecoderLayer::decode(QwenSession &session, const Tensor &hidden, int pos) {
         static_cast<LinearAttention *>(attn_.get())->decode(
             session, token_hidden_a, mixer);
     }
-    launch_add(d_hidden, d_mixer, d_hidden, hidden_size, nullptr);
+    launch_add(d_hidden, mixer.gpu_f32(), d_hidden, hidden_size, nullptr);
 
-    float *d_token_hidden_b = scratch.ensure<float>(scratch_key::kTokenHiddenB, hidden_size);
-    float *d_mlp_out = scratch.ensure<float>(scratch_key::kMlpOut, hidden_size);
-    Tensor token_hidden_b = Tensor::gpu_activation(d_token_hidden_b, act_shape);
-    Tensor mlp_out = Tensor::gpu_activation(d_mlp_out, act_shape);
+    Tensor token_hidden_b = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenB, act_shape);
+    Tensor mlp_out = Tensor::gpu_scratch(scratch, scratch_key::kMlpOut, act_shape);
     RMSNorm::forward(post_norm_weight_, hidden, token_hidden_b,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
     mlp_.forward(session, token_hidden_b, mlp_out);
-    launch_add(d_hidden, d_mlp_out, d_hidden, hidden_size, nullptr);
+    launch_add(d_hidden, mlp_out.gpu_f32(), d_hidden, hidden_size, nullptr);
 
     check_cuda(cudaDeviceSynchronize(), "DecoderLayer decode 同步失败");
 }

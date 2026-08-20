@@ -5,8 +5,6 @@
 #include "RoutedExperts.h"
 
 #include "backend/cuda/mem/CudaScratch.h"
-#include "backend/cuda/mem/CudaWeightPool.h"
-#include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
 #include "format/MF.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
@@ -55,33 +53,33 @@ void RoutedExperts::forward(DeepseekSession &session, const Tensor &normed, cons
     const int n_exp = config_.expert_count;
     const int k = config_.expert_used;
 
-    float *d_gate = s.ensure<float>(scratch_key::kGate, static_cast<size_t>(ffn));
-    float *d_up = s.ensure<float>(scratch_key::kUp, static_cast<size_t>(ffn));
-    float *d_act = s.ensure<float>(scratch_key::kAct, static_cast<size_t>(ffn));
-    float *d_expert_out = s.ensure<float>(scratch_key::kExpertOut, static_cast<size_t>(hidden_size));
-    uint16_t *d_ffn_in_lowp = s.ensure<uint16_t>(scratch_key::kFfnInLowp, static_cast<size_t>(hidden_size));
-    uint16_t *d_act_lowp = s.ensure<uint16_t>(scratch_key::kActLowp, static_cast<size_t>(ffn));
+    Tensor gate_out = Tensor::gpu_scratch(s, scratch_key::kGate, {1, static_cast<int64_t>(ffn)});
+    Tensor up_out = Tensor::gpu_scratch(s, scratch_key::kUp, {1, static_cast<int64_t>(ffn)});
+    Tensor act = Tensor::gpu_scratch(s, scratch_key::kAct, {1, static_cast<int64_t>(ffn)});
+    Tensor expert_out = Tensor::gpu_scratch(s, scratch_key::kExpertOut, {1, static_cast<int64_t>(hidden_size)});
 
     for (int tok = 0; tok < input_size; ++tok) {
-        const float *tok_in = d_normed + static_cast<size_t>(tok) * hidden_size;
+        Tensor tok_in = Tensor::gpu_view(
+            const_cast<float *>(d_normed + static_cast<size_t>(tok) * hidden_size),
+            {1, static_cast<int64_t>(hidden_size)});
         for (int r = 0; r < k; ++r) {
             const size_t route_idx = static_cast<size_t>(tok) * k + r;
             const int e = route.expert_ids[route_idx];
             const float w = route.weights[route_idx];
             Tensor gate = expert_tensor_view(*lw_.ffn_gate_exps, e, n_exp);
-            CudaWeight ffn_gate_exps = gate.cached_weight()->try_dequant();
-            GemmInput egate_in = prepare_gemm_input(tok_in, d_ffn_in_lowp, hidden_size, ffn_gate_exps.type, nullptr);
-            gemm_weight(global_cuda_weight_pool().handle, ffn_gate_exps, egate_in.ptr, d_gate, ffn, hidden_size, 1, egate_in.type, "ds.gemm.egate");
+            gate.shape = {static_cast<int64_t>(ffn), static_cast<int64_t>(hidden_size)};
+            gate.to_gpu();
+            gate.gemm(tok_in, gate_out, s, scratch_key::kFfnInLowp, "ds.gemm.egate");
             Tensor up = expert_tensor_view(*lw_.ffn_up_exps, e, n_exp);
-            CudaWeight ffn_up_exps = up.cached_weight()->try_dequant();
-            GemmInput eup_in = prepare_gemm_input(tok_in, d_ffn_in_lowp, hidden_size, ffn_up_exps.type, nullptr);
-            gemm_weight(global_cuda_weight_pool().handle, ffn_up_exps, eup_in.ptr, d_up, ffn, hidden_size, 1, eup_in.type, "ds.gemm.eup");
-            launch_silu_mul(d_gate, d_up, d_act, ffn, nullptr);
+            up.shape = {static_cast<int64_t>(ffn), static_cast<int64_t>(hidden_size)};
+            up.to_gpu();
+            up.gemm(tok_in, up_out, s, scratch_key::kFfnInLowp, "ds.gemm.eup");
+            launch_silu_mul(gate_out.gpu_f32(), up_out.gpu_f32(), act.gpu_f32(), ffn, nullptr);
             Tensor down = expert_tensor_view(*lw_.ffn_down_exps, e, n_exp);
-            CudaWeight ffn_down_exps = down.cached_weight()->try_dequant();
-            GemmInput edown_in = prepare_gemm_input(d_act, d_act_lowp, ffn, ffn_down_exps.type, nullptr);
-            gemm_weight(global_cuda_weight_pool().handle, ffn_down_exps, edown_in.ptr, d_expert_out, hidden_size, ffn, 1, edown_in.type, "ds.gemm.edown");
-            launch_moe_accumulate(d_expert_out, w, d_moe + static_cast<size_t>(tok) * hidden_size, hidden_size, nullptr);
+            down.shape = {static_cast<int64_t>(hidden_size), static_cast<int64_t>(ffn)};
+            down.to_gpu();
+            down.gemm(act, expert_out, s, scratch_key::kActLowp, "ds.gemm.edown");
+            launch_moe_accumulate(expert_out.gpu_f32(), w, d_moe + static_cast<size_t>(tok) * hidden_size, hidden_size, nullptr);
         }
     }
 }

@@ -24,12 +24,10 @@ public:
     // 按 token id 逐行拷贝嵌入到 hidden（device 激活视图），形状 [tokens, hidden_size]。
     // input 为 host 侧 token id 视图（Tensor::host_view，dtype=I32）；scratch 提供 token id
     // 的 int 临时缓冲（key = scratch_key::kInput），用于把 host token id 搬到 device。
-    void forward(const Tensor &input, const Tensor &hidden, CudaScratch &scratch);
+    void forward(Tensor input, const Tensor &hidden, CudaScratch &scratch);
 
 private:
     const Tensor &weight_;
-    int vocab_size_ = 0;
-    int hidden_size_ = 0;
 };
 
 } // namespace common

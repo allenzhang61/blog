@@ -15,7 +15,6 @@
 struct LayerWeights;
 struct TextConfig;
 class QwenSession;
-class CudaWeightPool;
 
 // 单个 Decoder 层，对应 LayerWeights。结构（pre-norm + 残差）：
 //   h = x + attn( input_norm(x) )

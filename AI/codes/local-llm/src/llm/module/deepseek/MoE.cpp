@@ -6,7 +6,6 @@
 
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
-#include "backend/cuda/mem/CudaWeightPool.h"
 #include "backend/cuda/ops/kernel.cuh"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
@@ -32,16 +31,15 @@ void MoE::forward(DeepseekSession &session, const Tensor &hidden) {
     const std::vector<int64_t> act_shape = {static_cast<int64_t>(input_size),
                                             static_cast<int64_t>(hidden_size)};
 
-    float *d_normed = s.ensure<float>(scratch_key::kNormed, static_cast<size_t>(input_size) * hidden_size);
-    Tensor normed = Tensor::gpu_activation(d_normed, act_shape);
+    Tensor normed = Tensor::gpu_scratch(s, scratch_key::kNormed, act_shape);
     RMSNorm::forward(*weights_.ffn_norm, hidden, normed,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
     MoERoute route = router_.forward(session, normed);
 
-    float *d_moe_out = s.ensure<float>(scratch_key::kMoeOut, static_cast<size_t>(input_size) * hidden_size);
+    Tensor moe_out = Tensor::gpu_scratch(s, scratch_key::kMoeOut, act_shape);
+    float *d_moe_out = moe_out.gpu_f32();
     check_cuda(cudaMemset(d_moe_out, 0, static_cast<size_t>(input_size) * hidden_size * sizeof(float)), "ds.moe.zero");
-    Tensor moe_out = Tensor::gpu_activation(d_moe_out, act_shape);
 
     routed_experts_.forward(session, normed, route, moe_out);
     shared_experts_.forward(session, normed, moe_out);

@@ -28,8 +28,8 @@ void set_global_cuda_weight_pool(CudaWeightPool *pool) {
     g_weight_pool = pool;
 }
 
-// 定义在此（而非 tensor/Tensor.cpp）以便访问 CudaWeightPool 全量类型，保持 tensor 层零 CUDA 依赖。
-CudaWeight *Tensor::cached_weight() const {
+// 定义在此（而非 tensor/Tensor.cpp）以便访问 CudaWeightPool 全量类型。
+CudaWeight *Tensor::to_gpu() const {
     CudaWeight *w = pool->cached_weight(*this);
     mark_location(TensorLocation::GpuMem);
     return w;

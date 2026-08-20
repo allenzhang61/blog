@@ -5,7 +5,7 @@
 #include "SwiGLUMlp.h"
 
 #include <cstddef>
-#include <stdexcept>
+#include <vector>
 
 #include <cuda_runtime.h>
 
@@ -13,48 +13,37 @@
 #include "llm/model/qwen/QwenSession.h"
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
-#include "backend/cuda/mem/CudaWeight.h"
-#include "backend/cuda/mem/CudaWeightPool.h"
-#include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
 
 SwiGLUMlp::SwiGLUMlp(const MlpWeights &weights)
     : weights_(weights) {}
 
 void SwiGLUMlp::forward(QwenSession &session, const Tensor &in, const Tensor &out) {
-    const float *d_in = in.gpu_f32();
-    float *d_out = out.gpu_f32();
     const size_t rows = static_cast<size_t>(in.rows());
-    const int hidden_size = static_cast<int>(in.cols());
     CudaScratch &scratch = session.scratch;
     // gate / up：[intermediate, hidden]；down：[hidden, intermediate]。
     const int intermediate = static_cast<int>(weights_.gate_proj.shape[0]);
     const size_t n = rows * static_cast<size_t>(intermediate);
 
-    float *d_gate = scratch.ensure<float>(scratch_key::kGate, n);
-    float *d_up = scratch.ensure<float>(scratch_key::kUp, n);
-    float *d_prod = scratch.ensure<float>(scratch_key::kProd, n);
+    const std::vector<int64_t> intermediate_shape = {static_cast<int64_t>(rows),
+                                                     static_cast<int64_t>(intermediate)};
+    Tensor gate = Tensor::gpu_scratch(scratch, scratch_key::kGate, intermediate_shape);
+    Tensor up = Tensor::gpu_scratch(scratch, scratch_key::kUp, intermediate_shape);
+    Tensor prod = Tensor::gpu_scratch(scratch, scratch_key::kProd, intermediate_shape);
 
     // 输入激活转成权重 dtype（BF16/F16）后再投影；gate/up 同 dtype，只需转一次。
-    uint16_t *d_input_lowp =
-        scratch.ensure<uint16_t>(scratch_key::kInputLowp, rows * static_cast<size_t>(hidden_size));
-    CudaWeight gate = weights_.gate_proj.cached_weight()->try_dequant();
-    GemmInput gemm_in = prepare_gemm_input(d_in, d_input_lowp, rows * static_cast<size_t>(hidden_size), gate.type, nullptr);
-    gemm_weight(global_cuda_weight_pool().handle, gate, gemm_in.ptr, d_gate, intermediate, hidden_size, rows, gemm_in.type, "mlp.gate");
-
-    CudaWeight up = weights_.up_proj.cached_weight()->try_dequant();
-    gemm_weight(global_cuda_weight_pool().handle, up, gemm_in.ptr, d_up, intermediate, hidden_size, rows, gemm_in.type, "mlp.up");
+    weights_.gate_proj.to_gpu();
+    weights_.gate_proj.gemm(in, gate, scratch, scratch_key::kInputLowp, "mlp.gate");
+    weights_.up_proj.to_gpu();
+    weights_.up_proj.gemm(in, up, scratch, scratch_key::kInputLowp, "mlp.up");
 
     // prod = SiLU(gate) * up。
-    launch_silu_mul(d_gate, d_up, d_prod, static_cast<int>(n), /*stream=*/nullptr);
+    launch_silu_mul(gate.gpu_f32(), up.gpu_f32(), prod.gpu_f32(), static_cast<int>(n), /*stream=*/nullptr);
 
     // prod 转成 down 权重 dtype 后做 down 投影。
-    uint16_t *d_prod_lowp = scratch.ensure<uint16_t>(scratch_key::kProdLowp, n);
-    CudaWeight down = weights_.down_proj.cached_weight()->try_dequant();
-    GemmInput prod_in = prepare_gemm_input(d_prod, d_prod_lowp, n, down.type, nullptr);
-
     // down：[hidden, intermediate] · prod[intermediate, rows] -> [hidden, rows]。
-    gemm_weight(global_cuda_weight_pool().handle, down, prod_in.ptr, d_out, hidden_size, intermediate, rows, prod_in.type, "mlp.down");
+    weights_.down_proj.to_gpu();
+    weights_.down_proj.gemm(prod, out, scratch, scratch_key::kProdLowp, "mlp.down");
 
     check_cuda(cudaDeviceSynchronize(), "SwiGLUMlp 同步失败");
 }

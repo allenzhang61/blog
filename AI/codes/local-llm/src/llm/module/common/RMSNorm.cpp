@@ -4,27 +4,8 @@
 
 #include "llm/module/common/RMSNorm.h"
 
-#include "backend/cuda/mem/CudaWeight.h"
-#include "backend/cuda/mem/CudaWeightPool.h"
-#include "backend/cuda/ops/kernel.cuh"
-
-#include <cstddef>
-#include <stdexcept>
-
-namespace {
-// DType -> kernel weight_type：0=bf16，1=f16，2=f32。
-int weight_type_of(DType dtype) {
-    if (dtype == DType::BF16) return 0;
-    if (dtype == DType::F16) return 1;
-    if (dtype == DType::F32) return 2;
-    throw std::runtime_error(std::string("RMSNorm 不支持的 norm dtype：") + dtype_name(dtype));
-}
-} // namespace
-
 void RMSNorm::forward(const Tensor &weight, const Tensor &input, const Tensor &output,
                       float eps, bool one_plus) {
-    CudaWeight w = weight.pool->cached_weight(weight)->try_dequant();
-    launch_rms_norm(input.gpu_f32(), output.gpu_f32(), w.ptr, weight_type_of(w.dtype),
-                    static_cast<int>(input.rows()), static_cast<int>(input.cols()), eps, one_plus,
-                    nullptr);
+    weight.to_gpu();
+    weight.rms_norm(input, output, eps, one_plus);
 }

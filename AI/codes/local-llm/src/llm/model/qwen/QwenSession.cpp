@@ -6,10 +6,10 @@
 
 #include "QwenConfig.h"
 
-QwenSession::QwenSession(const QwenConfig &config, const std::vector<int> &inputs,
+QwenSession::QwenSession(const QwenConfig &config, const Tensor &inputs,
                          int max_output_tokens) {
     const TextConfig &text_config = config.data.text;
-    max_seq_len = inputs.size() + static_cast<size_t>(max_output_tokens);
+    max_seq_len = static_cast<size_t>(inputs.numel()) + static_cast<size_t>(max_output_tokens);
     outputs.reserve(static_cast<size_t>(max_output_tokens));
 
     // full attention 维度。

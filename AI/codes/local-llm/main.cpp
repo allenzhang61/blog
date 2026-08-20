@@ -11,6 +11,7 @@
 #include "format/MFFactory.h"
 #include "llm/model/BaseModel.h"
 #include "llm/model/ModelFactory.h"
+#include "tensor/Tensor.h"
 #include "backend/cuda/mem/CudaWeightDequantPool.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "utils/stats/DeviceMonitor.h"
@@ -35,7 +36,10 @@ int main(int argc, char **argv) {
                                                     args.max_output_tokens, args.sampling);
     CudaWeightPool &pool = global_cuda_weight_pool();
 
-    std::vector<int> input = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
+    std::vector<int> encoded_input = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
+    Tensor input = Tensor::host_view(encoded_input.data(),
+                                     {static_cast<int64_t>(encoded_input.size())}, DType::I32);
+    const int input_tokens = static_cast<int>(input.numel());
     const int eos = model->eos_token_id();
 
     // 性能采集：仅 --profile 时开启，所有埋点否则零开销。
@@ -55,7 +59,7 @@ int main(int argc, char **argv) {
     // BaseModel::prefill 每次会重建内部 session，因此 warmup 与正式跑天然隔离。
     {
         int wnext = model->prefill(input);
-        int wpos = static_cast<int>(input.size());
+        int wpos = input_tokens;
         for (int i = 0; i < 4 && wnext != eos; ++i) {
             model->append_output(wnext);
             wnext = model->decode(wnext, wpos);
@@ -80,7 +84,7 @@ int main(int argc, char **argv) {
     }
 
     // decode：从 prompt 之后的位置开始逐 token 生成。
-    int pos = static_cast<int>(input.size());
+    int pos = input_tokens;
     int decode_tokens = 0;
     // 基础墙钟计时：与 profile 埋点无关，无 CUDA 同步、无落盘，恒定开销可忽略。
     const auto decode_wall_start = std::chrono::steady_clock::now();
@@ -157,7 +161,7 @@ int main(int argc, char **argv) {
 
     // 同时在 stdout 打印稳态端到端指标，便于快速查看。
     std::cout << "PROFILE model=" << model->name()
-              << " input_tokens=" << input.size()
+              << " input_tokens=" << input_tokens
               << " decode_tokens=" << decode_tokens
               << " reports=" << prefix << ".{jsonl,_summary.json,_summary.md}"
               << std::endl;
