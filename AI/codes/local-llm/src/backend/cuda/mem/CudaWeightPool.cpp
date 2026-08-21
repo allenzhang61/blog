@@ -29,10 +29,9 @@ void set_global_cuda_weight_pool(CudaWeightPool *pool) {
 }
 
 // 定义在此（而非 tensor/Tensor.cpp）以便访问 CudaWeightPool 全量类型。
-CudaWeight *Tensor::to_gpu() const {
-    CudaWeight *w = pool->cached_weight(*this);
+void Tensor::to_gpu() const {
+    pool->cached_weight(*this);
     mark_location(TensorLocation::GpuMem);
-    return w;
 }
 
 CudaWeightPool &global_cuda_weight_pool() {
@@ -172,4 +171,12 @@ CudaWeight *CudaWeightPool::cached_weight(const Tensor &weight) {
         tracker_->record(WeightLoadEventKind::Upload, weight.name, bytes, h2d_ms, bytes_);
     }
     return &it->second;
+}
+
+CudaWeight *CudaWeightPool::find_cached_weight(const Tensor &weight) {
+    auto found = items_.find(weight.name);
+    if (found == items_.end()) {
+        return nullptr;
+    }
+    return &found->second;
 }

@@ -23,7 +23,7 @@ public:
 
     // 生成的 token id（host），逐步追加，请求结束返回给调用方；
     // 同时作为重复惩罚所需的历史 token 序列。
-    std::vector<int> outputs;
+    std::vector<int> output;
 
     // 本次请求前向过程的临时激活暂存区（grow-only 复用），随 Session 存活。
     // 放在 Session 内保证并发请求间天然隔离：每个请求独享一份，互不覆盖。

@@ -14,7 +14,7 @@
 #include "llm/model/qwen/QwenSession.h"
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
-#include "backend/cuda/ops/kernel.cuh"
+#include "tensor/TensorTool.h"
 
 FullAttention::FullAttention(const FullAttnWeights &weights, const TextConfig &config)
     : weights_(weights), config_(config), type_index_(weights.type_index) {}
@@ -44,30 +44,25 @@ void FullAttention::prefill(QwenSession &session, const Tensor &hidden, const Te
     Tensor full_projection = Tensor::gpu_view(d_full_projection, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total * 2)});
     Tensor full_k = Tensor::gpu_view(d_full_k, {static_cast<int64_t>(input_size), static_cast<int64_t>(kv_total)});
     Tensor full_v = Tensor::gpu_view(d_full_v, {static_cast<int64_t>(input_size), static_cast<int64_t>(kv_total)});
-    weights_.q_proj.to_gpu();
-    weights_.q_proj.gemm(hidden, full_projection, scratch, scratch_key::kInputLowp, "fullattn.q_proj");
-    weights_.k_proj.to_gpu();
-    weights_.k_proj.gemm(hidden, full_k, scratch, scratch_key::kInputLowp, "fullattn.k_proj");
-    weights_.v_proj.to_gpu();
-    weights_.v_proj.gemm(hidden, full_v, scratch, scratch_key::kInputLowp, "fullattn.v_proj");
+    Tensor full_q = Tensor::gpu_view(d_full_q, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
+    Tensor full_gate = Tensor::gpu_view(d_full_gate, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
+    Tensor full_attn = Tensor::gpu_view(d_full_attn, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
+    TensorTool::gemm(weights_.q_proj, hidden, full_projection, scratch, scratch_key::kInputLowp, "fullattn.q_proj");
+    TensorTool::gemm(weights_.k_proj, hidden, full_k, scratch, scratch_key::kInputLowp, "fullattn.k_proj");
+    TensorTool::gemm(weights_.v_proj, hidden, full_v, scratch, scratch_key::kInputLowp, "fullattn.v_proj");
 
-    float *key_cache = static_cast<float *>(kv.key_cache.ptr);
-    float *value_cache = static_cast<float *>(kv.value_cache.ptr);
+    Tensor key_cache = Tensor::gpu_view(kv.key_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
+    Tensor value_cache = Tensor::gpu_view(kv.value_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
 
-    weights_.q_norm.to_gpu();
-    launch_full_attention_q_batch(d_full_projection, static_cast<const uint16_t *>(weights_.q_norm.weight_gpu_data()), d_full_q, d_full_gate,
-                                  input_size, n_heads, head_dim, start_pos, theta, partial, eps, nullptr);
-    weights_.k_norm.to_gpu();
-    launch_full_attention_kv_batch(d_full_k, d_full_v, static_cast<const uint16_t *>(weights_.k_norm.weight_gpu_data()),
-                                   key_cache, value_cache, input_size, kv_heads, head_dim,
-                                   /*max_seq_len=*/0, start_pos, theta, partial, eps, nullptr);
-    launch_full_attention_attend_batch(d_full_q, d_full_gate, key_cache, value_cache, d_full_attn, input_size, n_heads,
-                                       kv_heads, head_dim, /*max_seq_len=*/0, start_pos, nullptr);
+    TensorTool::full_attention_q_batch(full_projection, weights_.q_norm, full_q, full_gate,
+                                  n_heads, head_dim, start_pos, theta, partial, eps);
+    TensorTool::full_attention_kv_batch(full_k, full_v, weights_.k_norm, key_cache, value_cache,
+                                   kv_heads, head_dim, /*max_seq_len=*/0, start_pos, theta, partial, eps);
+    TensorTool::full_attention_attend_batch(full_q, full_gate, key_cache, value_cache, full_attn,
+                                       n_heads, kv_heads, head_dim, /*max_seq_len=*/0, start_pos);
 
     // o_proj：[hidden, q_total] · attn[q_total, tokens] -> [hidden, tokens]。
-    Tensor full_attn = Tensor::gpu_view(d_full_attn, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
-    weights_.o_proj.to_gpu();
-    weights_.o_proj.gemm(full_attn, out, scratch, scratch_key::kFullAttnLowp, "fullattn.o_proj");
+    TensorTool::gemm(weights_.o_proj, full_attn, out, scratch, scratch_key::kFullAttnLowp, "fullattn.o_proj");
 
     kv.seq_len += input_size;
     check_cuda(cudaDeviceSynchronize(), "FullAttention prefill 同步失败");
@@ -95,29 +90,24 @@ void FullAttention::decode(QwenSession &session, const Tensor &hidden, const Ten
     Tensor full_projection = Tensor::gpu_view(d_full_projection, {1, static_cast<int64_t>(q_total * 2)});
     Tensor full_k = Tensor::gpu_view(d_full_k, {1, static_cast<int64_t>(kv_total)});
     Tensor full_v = Tensor::gpu_view(d_full_v, {1, static_cast<int64_t>(kv_total)});
-    weights_.q_proj.to_gpu();
-    weights_.q_proj.gemm(hidden, full_projection, scratch, scratch_key::kInputLowp, "fullattn.q_proj");
-    weights_.k_proj.to_gpu();
-    weights_.k_proj.gemm(hidden, full_k, scratch, scratch_key::kInputLowp, "fullattn.k_proj");
-    weights_.v_proj.to_gpu();
-    weights_.v_proj.gemm(hidden, full_v, scratch, scratch_key::kInputLowp, "fullattn.v_proj");
-
-    float *key_cache = static_cast<float *>(kv.key_cache.ptr);
-    float *value_cache = static_cast<float *>(kv.value_cache.ptr);
-
-    weights_.q_norm.to_gpu();
-    launch_full_attention_q(d_full_projection, static_cast<const uint16_t *>(weights_.q_norm.weight_gpu_data()), d_full_q, d_full_gate,
-                            n_heads, head_dim, pos, theta, partial, eps, nullptr);
-    weights_.k_norm.to_gpu();
-    launch_full_attention_kv(d_full_k, d_full_v, static_cast<const uint16_t *>(weights_.k_norm.weight_gpu_data()),
-                             key_cache, value_cache, kv_heads, head_dim, /*max_seq_len=*/0, pos,
-                             theta, partial, eps, nullptr);
-    launch_full_attention_attend(d_full_q, d_full_gate, key_cache, value_cache, d_full_attn, n_heads, kv_heads,
-                                 head_dim, /*max_seq_len=*/0, pos, nullptr);
-
+    Tensor full_q = Tensor::gpu_view(d_full_q, {1, static_cast<int64_t>(q_total)});
+    Tensor full_gate = Tensor::gpu_view(d_full_gate, {1, static_cast<int64_t>(q_total)});
     Tensor full_attn = Tensor::gpu_view(d_full_attn, {1, static_cast<int64_t>(q_total)});
-    weights_.o_proj.to_gpu();
-    weights_.o_proj.gemm(full_attn, out, scratch, scratch_key::kFullAttnLowp, "fullattn.o_proj");
+    TensorTool::gemm(weights_.q_proj, hidden, full_projection, scratch, scratch_key::kInputLowp, "fullattn.q_proj");
+    TensorTool::gemm(weights_.k_proj, hidden, full_k, scratch, scratch_key::kInputLowp, "fullattn.k_proj");
+    TensorTool::gemm(weights_.v_proj, hidden, full_v, scratch, scratch_key::kInputLowp, "fullattn.v_proj");
+
+    Tensor key_cache = Tensor::gpu_view(kv.key_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
+    Tensor value_cache = Tensor::gpu_view(kv.value_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
+
+    TensorTool::full_attention_q(full_projection, weights_.q_norm, full_q, full_gate,
+                            n_heads, head_dim, pos, theta, partial, eps);
+    TensorTool::full_attention_kv(full_k, full_v, weights_.k_norm, key_cache, value_cache,
+                             kv_heads, head_dim, /*max_seq_len=*/0, pos, theta, partial, eps);
+    TensorTool::full_attention_attend(full_q, full_gate, key_cache, value_cache, full_attn,
+                                 n_heads, kv_heads, head_dim, /*max_seq_len=*/0, pos);
+
+    TensorTool::gemm(weights_.o_proj, full_attn, out, scratch, scratch_key::kFullAttnLowp, "fullattn.o_proj");
 
     kv.seq_len = pos + 1;
     check_cuda(cudaDeviceSynchronize(), "FullAttention decode 同步失败");

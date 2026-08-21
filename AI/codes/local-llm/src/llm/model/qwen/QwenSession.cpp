@@ -6,11 +6,11 @@
 
 #include "QwenConfig.h"
 
-QwenSession::QwenSession(const QwenConfig &config, const Tensor &inputs,
+QwenSession::QwenSession(const QwenConfig &config, const Tensor &input,
                          int max_output_tokens) {
     const TextConfig &text_config = config.data.text;
-    max_seq_len = static_cast<size_t>(inputs.numel()) + static_cast<size_t>(max_output_tokens);
-    outputs.reserve(static_cast<size_t>(max_output_tokens));
+    max_seq_len = static_cast<size_t>(input.numel()) + static_cast<size_t>(max_output_tokens);
+    output.reserve(static_cast<size_t>(max_output_tokens));
 
     // full attention 维度。
     const size_t kv_total =

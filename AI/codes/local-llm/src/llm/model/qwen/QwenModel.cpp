@@ -34,10 +34,10 @@ QwenModel::QwenModel(std::unique_ptr<MF> mf, int max_output_tokens, const Sampli
 // 在 QwenSession 完整定义可见处生成析构，供 unique_ptr<QwenSession> 正确销毁。
 QwenModel::~QwenModel() = default;
 
-int QwenModel::prefill(const Tensor &inputs) {
+int QwenModel::prefill(const Tensor &input) {
     // 为一次新生成重建 session（丢弃上一次请求的 KV cache / recurrent state）。
-    session_ = std::make_unique<QwenSession>(config_, inputs, max_output_tokens_);
-    return prefill_session(*session_, inputs);
+    session_ = std::make_unique<QwenSession>(config_, input, max_output_tokens_);
+    return prefill_session(*session_, input);
 }
 
 int QwenModel::decode(int prev_token_id, int pos) {
@@ -55,11 +55,11 @@ const MemoryUsageProvider &QwenModel::memory_usage() const {
 }
 
 void QwenModel::append_output(int token_id) {
-    session_->outputs.push_back(token_id);
+    session_->output.push_back(token_id);
 }
 
-const std::vector<int> &QwenModel::outputs() const {
-    return session_->outputs;
+const std::vector<int> &QwenModel::output() const {
+    return session_->output;
 }
 
 int QwenModel::prefill_session(QwenSession &session, const Tensor &input) {

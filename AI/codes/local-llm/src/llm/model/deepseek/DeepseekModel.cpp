@@ -65,11 +65,11 @@ int DeepseekModel::decode(int prev_token_id, int pos) {
 }
 
 void DeepseekModel::append_output(int token_id) {
-    session_->outputs.push_back(token_id);
+    session_->output.push_back(token_id);
 }
 
-const std::vector<int> &DeepseekModel::outputs() const {
-    return session_->outputs;
+const std::vector<int> &DeepseekModel::output() const {
+    return session_->output;
 }
 
 const MemoryUsageProvider &DeepseekModel::memory_usage() const {

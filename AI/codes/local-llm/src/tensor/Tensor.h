@@ -46,8 +46,6 @@ bool is_supported_dtype(DType dt);
 // （format -> tensor -> backend -> format）。指针指向进程内唯一的全局 pool
 // （见 global_cuda_weight_pool），在权重解析阶段被填充。
 class CudaWeightPool;
-// device 端权重缓冲（CUDA backend），此处仅前向声明用于返回指针。
-class CudaWeight;
 class CudaScratch;
 
 // 一份张量数据可能同时驻留在多个存储位置上（位掩码，可按位组合）。
@@ -84,6 +82,11 @@ public:
     // 惰性上传；而运行时激活（scratch buffer）不进 pool，直接用本字段
     // 包住 scratch 指针构成一个 device 视图（见 gpu_view）。本对象不拥有该内存。
     void *gpu_data = nullptr;
+    // gpu mem 位置（权重反量化/可计算 view）：普通 F16/BF16/F32 权重指向原始 GPU 权重，
+    // 量化权重指向 dequant pool 中的 F16 view。本对象通过 weight_view_lease 持有 view 生命周期。
+    mutable void *gpu_data_dequant = nullptr;
+    mutable DType dtype_dequant = DType::UNKNOWN;
+    mutable size_t nbytes_dequant = 0;
 
     // 当前值驻留的位置集合（位掩码）。权重 to_gpu() 为 const 但会补标 GpuMem，故用 mutable。
     mutable uint32_t locations = static_cast<uint32_t>(TensorLocation::None);
@@ -114,21 +117,16 @@ public:
     void to_gpu(CudaScratch &scratch, const std::string &key, const std::string &what);
     // 把当前 host/disk view 拷贝到调用方提供的 GPU buffer。
     void to_gpu(void *device_ptr, const std::string &what) const;
-    // 权重路径：经由 CudaWeightPool 惰性上传到 GPU，并返回 device 权重缓存。
-    CudaWeight *to_gpu() const;
+    // 权重路径：经由 CudaWeightPool 惰性上传到 GPU。
+    void to_gpu() const;
     // 把当前 GPU view 拷贝到调用方提供的 host buffer。
     void to_host(void *host_ptr, const std::string &what) const;
     // 按 dtype/shape 推导出的逻辑字节数（不用于量化权重物理大小）。
     size_t byte_size() const;
 
-    // 当前 Tensor 作为权重 [out_dim, in_dim]，对 input 做线性投影写入 output。
-    // input/output 均为 GPU float 激活视图；lowp_key 用于权重为 F16/BF16 时的输入低精度 scratch。
-    void gemm(const Tensor &input, const Tensor &output, CudaScratch &scratch,
-              const std::string &lowp_key, const char *name = "") const;
-    // 当前 Tensor 作为 embedding table [vocab, hidden]，按 GPU token id 查表写入 hidden。
-    void embedding_lookup(const Tensor &input, const Tensor &hidden) const;
-    // 当前 Tensor 作为 RMSNorm 权重，对 input 归一化后写入 output。
-    void rms_norm(const Tensor &input, const Tensor &output, float eps, bool one_plus) const;
+    // 当前 Tensor 作为权重，返回可直接参与计算的 device Tensor view。
+    // 调用前应由 module 显式调用 to_gpu()。
+    Tensor try_dequant() const;
     // 返回当前权重的 device 指针；Tensor 内部持有必要的 dequant/cache view 生命周期。
     const void *weight_gpu_data() const;
 
@@ -138,7 +136,7 @@ public:
     int64_t rows() const;
     int64_t cols() const;
 
-    // 最近一次 weight_gpu_data() 的权重 view 生命周期保持器。
+    // 最近一次 try_dequant()/weight_gpu_data() 的权重 view 生命周期保持器。
     mutable std::shared_ptr<void> weight_view_lease;
 };
 

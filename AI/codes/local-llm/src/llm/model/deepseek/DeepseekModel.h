@@ -35,7 +35,7 @@ public:
     int prefill(const Tensor &input) override;
     int decode(int prev_token_id, int pos) override;
     void append_output(int token_id) override;
-    const std::vector<int> &outputs() const override;
+    const std::vector<int> &output() const override;
     const MemoryUsageProvider &memory_usage() const override;
     CudaWeightPool &weight_pool() override { return global_cuda_weight_pool(); }
 

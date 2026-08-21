@@ -5,11 +5,11 @@
 #include "RoutedExperts.h"
 
 #include "backend/cuda/mem/CudaScratch.h"
-#include "backend/cuda/ops/kernel.cuh"
 #include "format/MF.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
+#include "tensor/TensorTool.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -68,18 +68,18 @@ void RoutedExperts::forward(DeepseekSession &session, const Tensor &normed, cons
             const float w = route.weights[route_idx];
             Tensor gate = expert_tensor_view(*lw_.ffn_gate_exps, e, n_exp);
             gate.shape = {static_cast<int64_t>(ffn), static_cast<int64_t>(hidden_size)};
-            gate.to_gpu();
-            gate.gemm(tok_in, gate_out, s, scratch_key::kFfnInLowp, "ds.gemm.egate");
+            TensorTool::gemm(gate, tok_in, gate_out, s, scratch_key::kFfnInLowp, "ds.gemm.egate");
             Tensor up = expert_tensor_view(*lw_.ffn_up_exps, e, n_exp);
             up.shape = {static_cast<int64_t>(ffn), static_cast<int64_t>(hidden_size)};
-            up.to_gpu();
-            up.gemm(tok_in, up_out, s, scratch_key::kFfnInLowp, "ds.gemm.eup");
-            launch_silu_mul(gate_out.gpu_f32(), up_out.gpu_f32(), act.gpu_f32(), ffn, nullptr);
+            TensorTool::gemm(up, tok_in, up_out, s, scratch_key::kFfnInLowp, "ds.gemm.eup");
+            TensorTool::silu_mul(gate_out, up_out, act);
             Tensor down = expert_tensor_view(*lw_.ffn_down_exps, e, n_exp);
             down.shape = {static_cast<int64_t>(hidden_size), static_cast<int64_t>(ffn)};
-            down.to_gpu();
-            down.gemm(act, expert_out, s, scratch_key::kActLowp, "ds.gemm.edown");
-            launch_moe_accumulate(expert_out.gpu_f32(), w, d_moe + static_cast<size_t>(tok) * hidden_size, hidden_size, nullptr);
+            TensorTool::gemm(down, act, expert_out, s, scratch_key::kActLowp, "ds.gemm.edown");
+            Tensor tok_moe = Tensor::gpu_view(
+                d_moe + static_cast<size_t>(tok) * hidden_size,
+                {1, static_cast<int64_t>(hidden_size)});
+            TensorTool::moe_accumulate(expert_out, w, tok_moe);
         }
     }
 }

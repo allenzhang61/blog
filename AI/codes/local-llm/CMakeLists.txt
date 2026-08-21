@@ -62,6 +62,8 @@ add_executable(local_llm main.cpp
         src/format/MF.h
         src/tensor/Tensor.cpp
         src/tensor/Tensor.h
+        src/tensor/TensorTool.cpp
+        src/tensor/TensorTool.h
         src/format/MFFactory.cpp
         src/format/MFFactory.h
         src/format/hf/HFFile.cpp

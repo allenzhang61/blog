@@ -5,6 +5,7 @@
 #include "llm/module/common/Embedding.h"
 
 #include "backend/cuda/mem/CudaScratch.h"
+#include "tensor/TensorTool.h"
 
 namespace common {
 
@@ -12,9 +13,7 @@ Embedding::Embedding(const Tensor &weight)
     : weight_(weight) {}
 
 void Embedding::forward(Tensor input, const Tensor &hidden, CudaScratch &scratch) {
-    input.to_gpu(scratch, scratch_key::kInput, "cudaMemcpy embedding token ids 失败");
-    weight_.to_gpu();
-    weight_.embedding_lookup(input, hidden);
+    TensorTool::embedding_lookup(weight_, input, hidden, scratch);
 }
 
 } // namespace common

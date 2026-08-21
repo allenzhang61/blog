@@ -7,8 +7,6 @@
 #include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
-#include "backend/cuda/ops/gemm.h"
-#include "backend/cuda/ops/kernel.cuh"
 
 #include <stdexcept>
 #include <utility>
@@ -91,13 +89,6 @@ const void *host_or_disk_data(const Tensor &t) {
         return t.disk_data;
     }
     return nullptr;
-}
-
-int norm_weight_type_of(DType dtype) {
-    if (dtype == DType::BF16) return 0;
-    if (dtype == DType::F16) return 1;
-    if (dtype == DType::F32) return 2;
-    throw std::runtime_error(std::string("RMSNorm 不支持的 norm dtype：") + dtype_name(dtype));
 }
 
 } // namespace
@@ -202,39 +193,31 @@ size_t Tensor::byte_size() const {
     return static_cast<size_t>(numel()) * dtype_byte_size(dtype);
 }
 
-void Tensor::gemm(const Tensor &input, const Tensor &output, CudaScratch &scratch,
-                  const std::string &lowp_key, const char *name) const {
-    CudaWeight w = to_gpu()->try_dequant();
-    const int out_dim = static_cast<int>(shape[0]);
-    const int in_dim = static_cast<int>(shape[1]);
-    const size_t input_size = static_cast<size_t>(input.rows());
-    uint16_t *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(input.numel()));
-    GemmInput gemm_in = prepare_gemm_input(input.gpu_f32(), d_input_lowp,
-                                           static_cast<size_t>(input.numel()), w.type, nullptr);
-    gemm_weight(global_cuda_weight_pool().handle, w, gemm_in.ptr, output.gpu_f32(),
-                out_dim, in_dim, input_size, gemm_in.type, name);
-}
+Tensor Tensor::try_dequant() const {
+    CudaWeight *w = pool->find_cached_weight(*this);
+    if (w == nullptr) {
+        throw std::runtime_error("Tensor::try_dequant 需要先调用 to_gpu(): " + name);
+    }
 
-void Tensor::embedding_lookup(const Tensor &input, const Tensor &hidden) const {
-    CudaWeight table = to_gpu()->try_dequant();
-    const int lowp_type = (table.dtype == DType::F16) ? 1 : 0;
-    launch_embedding_lookup(input.gpu_i32(), hidden.gpu_f32(), static_cast<const uint16_t *>(table.ptr),
-                            static_cast<int>(input.numel()), static_cast<int>(shape[0]),
-                            static_cast<int>(shape[1]), lowp_type, nullptr);
-}
-
-void Tensor::rms_norm(const Tensor &input, const Tensor &output, float eps, bool one_plus) const {
-    CudaWeight w = to_gpu()->try_dequant();
-    launch_rms_norm(input.gpu_f32(), output.gpu_f32(), w.ptr, norm_weight_type_of(w.dtype),
-                    static_cast<int>(input.rows()), static_cast<int>(input.cols()), eps, one_plus,
-                    nullptr);
+    auto dequant = std::make_shared<CudaWeight>(w->try_dequant());
+    Tensor view = *this;
+    view.name = dequant->name;
+    dtype_dequant = dequant->dtype;
+    nbytes_dequant = dequant->bytes;
+    gpu_data_dequant = dequant->ptr;
+    weight_view_lease = dequant;
+    view.dtype_dequant = dtype_dequant;
+    view.nbytes_dequant = nbytes_dequant;
+    view.gpu_data_dequant = gpu_data_dequant;
+    view.weight_view_lease = std::move(dequant);
+    view.mark_location(TensorLocation::GpuMem);
+    return view;
 }
 
 const void *Tensor::weight_gpu_data() const {
-    auto w = std::make_shared<CudaWeight>(to_gpu()->try_dequant());
-    const void *ptr = w->ptr;
-    weight_view_lease = std::move(w);
-    return ptr;
+    Tensor weight = try_dequant();
+    weight_view_lease = weight.weight_view_lease;
+    return weight.gpu_data_dequant;
 }
 
 int64_t Tensor::numel() const {

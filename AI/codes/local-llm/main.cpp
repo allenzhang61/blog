@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
         device_monitor.stop();
     }
 
-    std::cout << "生成结果：" << model->decode_text(model->outputs()) << std::endl;
+    std::cout << "生成结果：" << model->decode_text(model->output()) << std::endl;
 
     // 基础耗时：无论是否 profile 都打印（仅墙钟，无逐算子埋点/同步/落盘）。
     if (decode_tokens > 0 && decode_wall_ms > 0.0) {

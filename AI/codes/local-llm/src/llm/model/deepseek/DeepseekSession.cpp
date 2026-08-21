@@ -18,9 +18,9 @@ float yarn_corr_dim(float num_rot, int dim, float base, int orig_ctx) {
 
 } // namespace
 
-DeepseekSession::DeepseekSession(const DeepseekConfig &config, const Tensor &inputs,
+DeepseekSession::DeepseekSession(const DeepseekConfig &config, const Tensor &input,
                                  int max_output_tokens) {
-    max_seq_len = static_cast<int>(inputs.numel()) + max_output_tokens;
+    max_seq_len = static_cast<int>(input.numel()) + max_output_tokens;
 
     // latent KV cache：每层 [max_seq_len, kv_lora + qk_rope] float。
     const int kv_total = config.kv_lora_rank + config.qk_rope_head_dim;

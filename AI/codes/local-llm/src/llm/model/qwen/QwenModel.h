@@ -46,7 +46,7 @@ public:
     std::string decode_text(const std::vector<int> &ids) const override { return mf_->tokenizer_decode(ids); }
 
     // prefill：为一次新生成开启内部 session（喂入整段 prompt），跑完各层，返回首个生成 token id。
-    int prefill(const Tensor &inputs) override;
+    int prefill(const Tensor &input) override;
     // decode：喂入上一个 token（位置 pos），返回下一个 token id，复用 prefill 建立的 session。
     int decode(int prev_token_id, int pos) override;
 
@@ -56,7 +56,7 @@ public:
     // 供 main 追加已确定的生成 token（用于 attention 上下文记录与最终解码）。
     void append_output(int token_id) override;
     // 本次请求已生成的 token id 序列。
-    const std::vector<int> &outputs() const override;
+    const std::vector<int> &output() const override;
 
 private:
     // 内部前向：喂入整段 prompt token，跑完各层，返回首个生成 token id。

@@ -42,7 +42,7 @@ public:
     virtual std::string decode_text(const std::vector<int> &ids) const = 0;
 
     // prefill：为一次新生成开启内部 Session，喂入整段 prompt token，返回首个生成 token id。
-    virtual int prefill(const Tensor &inputs) = 0;
+    virtual int prefill(const Tensor &input) = 0;
 
     // decode：喂入上一个 token（位置 pos），返回下一个 token id。复用 prefill 建立的 Session。
     virtual int decode(int prev_token_id, int pos) = 0;
@@ -50,7 +50,7 @@ public:
     // 把一个已确定的生成 token 记入当前 Session（供 attention 上下文与最终解码使用）。
     virtual void append_output(int token_id) = 0;
     // 当前 Session 已生成的 token id 序列（prefill 之后有效）。
-    virtual const std::vector<int> &outputs() const = 0;
+    virtual const std::vector<int> &output() const = 0;
 
     // === 供性能采集设施使用（与具体 Session/Weights 形态解耦）===
     // 本次请求的显存用量（跨 token 状态 + 临时激活），由内部 Session 实现该接口。

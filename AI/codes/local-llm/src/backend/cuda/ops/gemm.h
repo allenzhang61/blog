@@ -11,7 +11,7 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
-class CudaWeight;
+#include "tensor/Tensor.h"
 
 // cuBLAS 矩阵乘封装：统一处理“权重 × 激活”这一类线性投影。
 //
@@ -23,17 +23,16 @@ class CudaWeight;
 // 取 CUBLAS_OP_T 还原成 [out_dim,in_dim] 再与 X[in_dim,tokens] 相乘，
 // 得到 Y[out_dim,tokens]。计算精度固定 CUBLAS_COMPUTE_32F，输出恒为 CUDA_R_32F。
 //
-// 维度需显式传入：CudaWeight 只记录字节数与 dtype，不含 shape，
-// 调用方从 TensorView.shape 取 out_dim / in_dim。
+// 维度需显式传入：调用方从 Tensor.shape 取 out_dim / in_dim。
 // x_type 指明激活数据类型（CUDA_R_32F 或 CUDA_R_16BF / CUDA_R_16F）；
-// 权重类型取自 weight.type。
+// 权重类型取自 weight.dtype_dequant。
 
 // 批量投影：Y[out_dim,tokens] = W[out_dim,in_dim] · X[in_dim,tokens]。
 // tokens=1 即单 token 情形。
 // name 非空时，用 ScopedGpuTimer 以该名埋点，并以 weight.bytes 作为访存字节数
 // （decode 为访存瓶颈，投影耗时主体即读取权重），供 Profiler 算有效带宽；
 // 传空串（默认）则不埋点、零开销。
-void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
+void gemm_weight(cublasHandle_t handle, const Tensor &weight,
                  const void *d_x, float *d_y,
                  int out_dim, int in_dim, size_t input_size, cudaDataType_t x_type,
                  const char *name = "");
@@ -44,7 +43,7 @@ void gemm_weight(cublasHandle_t handle, const CudaWeight &weight,
 //   d_x      : float 激活，元素数 n；
 //   d_x_lowp : 低精度输出 buffer（元素数 >= n，通常取自 scratch）。
 void float_to_lowp(const float *d_x, uint16_t *d_x_lowp, size_t n,
-                   cudaDataType_t weight_dtype, void *stream);
+                   DType weight_dtype, void *stream);
 
 // 准备可直接喂给 gemm_weight 的激活指针与 dtype（cublasGemmEx 要求激活与权重同 dtype）。
 //   - 权重为 F16/BF16：把 float 激活压成对应 16-bit 写入 d_x_lowp，返回该 buffer 与 weight_dtype；
@@ -55,6 +54,6 @@ struct GemmInput {
     cudaDataType_t type;
 };
 GemmInput prepare_gemm_input(const float *d_x, uint16_t *d_x_lowp, size_t n,
-                             cudaDataType_t weight_dtype, void *stream);
+                             DType weight_dtype, void *stream);
 
 #endif // LOCAL_LLM_GEMM_H

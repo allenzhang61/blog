@@ -41,6 +41,8 @@ public:
     // BF16/F16/F32 权重可直接用于 GEMM；量化权重以 CUDA_R_8I 标记原始字节，
     // 使用前需由 Quant 反量化。单个权重超过上限时返回 nullptr。
     CudaWeight *cached_weight(const Tensor &weight);
+    // 只查询已经上传的 device 权重缓存；miss 时返回 nullptr，不触发上传。
+    CudaWeight *find_cached_weight(const Tensor &weight);
 
     // 已缓存权重的总字节数。
     size_t cached_bytes() const { return bytes_; }

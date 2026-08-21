@@ -14,7 +14,7 @@
 #include "llm/model/qwen/QwenSession.h"
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
-#include "backend/cuda/ops/kernel.cuh"
+#include "tensor/TensorTool.h"
 
 LinearAttention::LinearAttention(const LinearAttnWeights &weights, const TextConfig &config)
     : weights_(weights), config_(config), type_index_(weights.type_index) {}
@@ -32,7 +32,6 @@ void LinearAttention::prefill(QwenSession &session, const Tensor &hidden, const 
     const int value_total = value_heads * v_dim;
     const int conv_dim = key_total * 2 + value_total;
     const float eps = config_.rms_norm_eps;
-    const int token_count = static_cast<int>(input_size);
 
     float *d_linear_projection = scratch.ensure<float>(scratch_key::kLinearProjection, input_size * static_cast<size_t>(conv_dim));
     float *d_linear_z = scratch.ensure<float>(scratch_key::kLinearZ, input_size * static_cast<size_t>(value_total));
@@ -45,33 +44,24 @@ void LinearAttention::prefill(QwenSession &session, const Tensor &hidden, const 
     Tensor linear_z = Tensor::gpu_view(d_linear_z, {static_cast<int64_t>(input_size), static_cast<int64_t>(value_total)});
     Tensor linear_b = Tensor::gpu_view(d_linear_b, {static_cast<int64_t>(input_size), static_cast<int64_t>(value_heads)});
     Tensor linear_a = Tensor::gpu_view(d_linear_a, {static_cast<int64_t>(input_size), static_cast<int64_t>(value_heads)});
-    weights_.in_proj_qkv.to_gpu();
-    weights_.in_proj_qkv.gemm(hidden, linear_projection, scratch, scratch_key::kInputLowp, "linattn.in_proj_qkv");
-    weights_.in_proj_z.to_gpu();
-    weights_.in_proj_z.gemm(hidden, linear_z, scratch, scratch_key::kInputLowp, "linattn.in_proj_z");
-    weights_.in_proj_b.to_gpu();
-    weights_.in_proj_b.gemm(hidden, linear_b, scratch, scratch_key::kInputLowp, "linattn.in_proj_b");
-    weights_.in_proj_a.to_gpu();
-    weights_.in_proj_a.gemm(hidden, linear_a, scratch, scratch_key::kInputLowp, "linattn.in_proj_a");
+    Tensor linear_conv_out = Tensor::gpu_view(d_linear_conv_out, {static_cast<int64_t>(input_size), static_cast<int64_t>(conv_dim)});
+    Tensor linear_gated = Tensor::gpu_view(d_linear_gated, {static_cast<int64_t>(input_size), static_cast<int64_t>(value_total)});
+    TensorTool::gemm(weights_.in_proj_qkv, hidden, linear_projection, scratch, scratch_key::kInputLowp, "linattn.in_proj_qkv");
+    TensorTool::gemm(weights_.in_proj_z, hidden, linear_z, scratch, scratch_key::kInputLowp, "linattn.in_proj_z");
+    TensorTool::gemm(weights_.in_proj_b, hidden, linear_b, scratch, scratch_key::kInputLowp, "linattn.in_proj_b");
+    TensorTool::gemm(weights_.in_proj_a, hidden, linear_a, scratch, scratch_key::kInputLowp, "linattn.in_proj_a");
 
-    float *conv_state = static_cast<float *>(state.conv_state.ptr);
-    float *recurrent_state = static_cast<float *>(state.recurrent_state.ptr);
+    Tensor conv_state = Tensor::gpu_view(state.conv_state.ptr, {static_cast<int64_t>(conv_dim), static_cast<int64_t>(kernel)});
+    Tensor recurrent_state = Tensor::gpu_view(state.recurrent_state.ptr,
+        {static_cast<int64_t>(value_heads), static_cast<int64_t>(k_dim), static_cast<int64_t>(v_dim)});
 
-    weights_.conv1d.to_gpu();
-    launch_linear_attention_conv_batch(d_linear_projection, static_cast<const uint16_t *>(weights_.conv1d.weight_gpu_data()),
-                                       conv_state, d_linear_conv_out, token_count, conv_dim, kernel, nullptr);
-    weights_.a_log.to_gpu();
-    weights_.dt_bias.to_gpu();
-    weights_.norm.to_gpu();
-    launch_linear_attention_recurrent_batch(
-        d_linear_conv_out, d_linear_z, d_linear_b, d_linear_a, static_cast<const float *>(weights_.a_log.weight_gpu_data()),
-        static_cast<const uint16_t *>(weights_.dt_bias.weight_gpu_data()), static_cast<const float *>(weights_.norm.weight_gpu_data()),
-        recurrent_state, d_linear_gated, token_count, key_heads, value_heads, k_dim, v_dim, eps, nullptr);
+    TensorTool::linear_attention_conv_batch(linear_projection, weights_.conv1d, conv_state, linear_conv_out, kernel);
+    TensorTool::linear_attention_recurrent_batch(linear_conv_out, linear_z, linear_b, linear_a,
+        weights_.a_log, weights_.dt_bias, weights_.norm, recurrent_state, linear_gated,
+        key_heads, value_heads, k_dim, v_dim, eps);
 
     // out_proj：[hidden, value_total] · gated[value_total, tokens] -> [hidden, tokens]。
-    Tensor linear_gated = Tensor::gpu_view(d_linear_gated, {static_cast<int64_t>(input_size), static_cast<int64_t>(value_total)});
-    weights_.out_proj.to_gpu();
-    weights_.out_proj.gemm(linear_gated, out, scratch, scratch_key::kLinearGatedLowp, "linattn.out_proj");
+    TensorTool::gemm(weights_.out_proj, linear_gated, out, scratch, scratch_key::kLinearGatedLowp, "linattn.out_proj");
 
     check_cuda(cudaDeviceSynchronize(), "LinearAttention prefill 同步失败");
 }
@@ -100,32 +90,23 @@ void LinearAttention::decode(QwenSession &session, const Tensor &hidden, const T
     Tensor linear_z = Tensor::gpu_view(d_linear_z, {1, static_cast<int64_t>(value_total)});
     Tensor linear_b = Tensor::gpu_view(d_linear_b, {1, static_cast<int64_t>(value_heads)});
     Tensor linear_a = Tensor::gpu_view(d_linear_a, {1, static_cast<int64_t>(value_heads)});
-    weights_.in_proj_qkv.to_gpu();
-    weights_.in_proj_qkv.gemm(hidden, linear_projection, scratch, scratch_key::kInputLowp, "linattn.in_proj_qkv");
-    weights_.in_proj_z.to_gpu();
-    weights_.in_proj_z.gemm(hidden, linear_z, scratch, scratch_key::kInputLowp, "linattn.in_proj_z");
-    weights_.in_proj_b.to_gpu();
-    weights_.in_proj_b.gemm(hidden, linear_b, scratch, scratch_key::kInputLowp, "linattn.in_proj_b");
-    weights_.in_proj_a.to_gpu();
-    weights_.in_proj_a.gemm(hidden, linear_a, scratch, scratch_key::kInputLowp, "linattn.in_proj_a");
-
-    float *conv_state = static_cast<float *>(state.conv_state.ptr);
-    float *recurrent_state = static_cast<float *>(state.recurrent_state.ptr);
-
-    weights_.conv1d.to_gpu();
-    launch_linear_attention_conv(d_linear_projection, static_cast<const uint16_t *>(weights_.conv1d.weight_gpu_data()),
-                                 conv_state, d_linear_conv_out, conv_dim, kernel, nullptr);
-    weights_.a_log.to_gpu();
-    weights_.dt_bias.to_gpu();
-    weights_.norm.to_gpu();
-    launch_linear_attention_recurrent(
-        d_linear_conv_out, d_linear_z, d_linear_b, d_linear_a, static_cast<const float *>(weights_.a_log.weight_gpu_data()),
-        static_cast<const uint16_t *>(weights_.dt_bias.weight_gpu_data()), static_cast<const float *>(weights_.norm.weight_gpu_data()),
-        recurrent_state, d_linear_gated, key_heads, value_heads, k_dim, v_dim, eps, nullptr);
-
+    Tensor linear_conv_out = Tensor::gpu_view(d_linear_conv_out, {1, static_cast<int64_t>(conv_dim)});
     Tensor linear_gated = Tensor::gpu_view(d_linear_gated, {1, static_cast<int64_t>(value_total)});
-    weights_.out_proj.to_gpu();
-    weights_.out_proj.gemm(linear_gated, out, scratch, scratch_key::kLinearGatedLowp, "linattn.out_proj");
+    TensorTool::gemm(weights_.in_proj_qkv, hidden, linear_projection, scratch, scratch_key::kInputLowp, "linattn.in_proj_qkv");
+    TensorTool::gemm(weights_.in_proj_z, hidden, linear_z, scratch, scratch_key::kInputLowp, "linattn.in_proj_z");
+    TensorTool::gemm(weights_.in_proj_b, hidden, linear_b, scratch, scratch_key::kInputLowp, "linattn.in_proj_b");
+    TensorTool::gemm(weights_.in_proj_a, hidden, linear_a, scratch, scratch_key::kInputLowp, "linattn.in_proj_a");
+
+    Tensor conv_state = Tensor::gpu_view(state.conv_state.ptr, {static_cast<int64_t>(conv_dim), static_cast<int64_t>(kernel)});
+    Tensor recurrent_state = Tensor::gpu_view(state.recurrent_state.ptr,
+        {static_cast<int64_t>(value_heads), static_cast<int64_t>(k_dim), static_cast<int64_t>(v_dim)});
+
+    TensorTool::linear_attention_conv(linear_projection, weights_.conv1d, conv_state, linear_conv_out, kernel);
+    TensorTool::linear_attention_recurrent(linear_conv_out, linear_z, linear_b, linear_a,
+        weights_.a_log, weights_.dt_bias, weights_.norm, recurrent_state, linear_gated,
+        key_heads, value_heads, k_dim, v_dim, eps);
+
+    TensorTool::gemm(weights_.out_proj, linear_gated, out, scratch, scratch_key::kLinearGatedLowp, "linattn.out_proj");
 
     check_cuda(cudaDeviceSynchronize(), "LinearAttention decode 同步失败");
 }

@@ -6,11 +6,11 @@
 
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
-#include "backend/cuda/ops/kernel.cuh"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
 #include "llm/module/common/RMSNorm.h"
+#include "tensor/TensorTool.h"
 
 #include <cstddef>
 
@@ -24,7 +24,6 @@ MoE::MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
       shared_experts_(weights, config) {}
 
 void MoE::forward(DeepseekSession &session, const Tensor &hidden) {
-    float *d_hidden = hidden.gpu_f32();
     const int input_size = static_cast<int>(hidden.rows());
     auto &s = session.scratch;
     const int hidden_size = config_.hidden_size;
@@ -44,5 +43,5 @@ void MoE::forward(DeepseekSession &session, const Tensor &hidden) {
     routed_experts_.forward(session, normed, route, moe_out);
     shared_experts_.forward(session, normed, moe_out);
 
-    launch_add(d_hidden, d_moe_out, d_hidden, input_size * hidden_size, nullptr);
+    TensorTool::add(hidden, moe_out, hidden);
 }

@@ -38,7 +38,7 @@ class QwenSession : public SessionBase {
 public:
     // 按 config 为每一层分配对应的 KV cache / recurrent state。
     // max_seq_len = inputs.numel() + max_output_tokens。
-    QwenSession(const QwenConfig &config, const Tensor &inputs, int max_output_tokens);
+    QwenSession(const QwenConfig &config, const Tensor &input, int max_output_tokens);
 
     // 每个 full_attention 层一份 KV cache；顺序与 config.layer_types 中 full 层出现顺序一致。
     std::vector<FullAttnKVCache> full_attn_kv_cache;
