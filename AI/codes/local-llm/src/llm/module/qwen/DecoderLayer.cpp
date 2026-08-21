@@ -31,15 +31,15 @@ DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &config
     }
 }
 
-void DecoderLayer::prefill(QwenSession &session, const Tensor &hidden) {
+void DecoderLayer::prefill(QwenSession &session, const GPUTensor &hidden) {
     const size_t input_size = static_cast<size_t>(hidden.rows());
     CudaScratch &scratch = session.scratch;
     const int hidden_size = text_config_.hidden_size;
     const std::vector<int64_t> act_shape = {static_cast<int64_t>(input_size),
                                             static_cast<int64_t>(hidden_size)};
 
-    Tensor token_hidden_a = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenA, act_shape);
-    Tensor mixer = Tensor::gpu_scratch(scratch, scratch_key::kMixer, act_shape);
+    GPUTensor token_hidden_a = GPUTensor::gpu_scratch(scratch, scratch_key::kTokenHiddenA, act_shape);
+    GPUTensor mixer = GPUTensor::gpu_scratch(scratch, scratch_key::kMixer, act_shape);
 
     // h = x + attn( input_norm(x) )
     RMSNorm::forward(input_norm_weight_, hidden, token_hidden_a,
@@ -54,8 +54,8 @@ void DecoderLayer::prefill(QwenSession &session, const Tensor &hidden) {
     TensorTool::add(hidden, mixer, hidden);
 
     // y = h + mlp( post_norm(h) )
-    Tensor token_hidden_b = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenB, act_shape);
-    Tensor mlp_out = Tensor::gpu_scratch(scratch, scratch_key::kMlpOut, act_shape);
+    GPUTensor token_hidden_b = GPUTensor::gpu_scratch(scratch, scratch_key::kTokenHiddenB, act_shape);
+    GPUTensor mlp_out = GPUTensor::gpu_scratch(scratch, scratch_key::kMlpOut, act_shape);
     RMSNorm::forward(post_norm_weight_, hidden, token_hidden_b,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
     mlp_.forward(session, token_hidden_b, mlp_out);
@@ -64,13 +64,13 @@ void DecoderLayer::prefill(QwenSession &session, const Tensor &hidden) {
     check_cuda(cudaDeviceSynchronize(), "DecoderLayer prefill 同步失败");
 }
 
-void DecoderLayer::decode(QwenSession &session, const Tensor &hidden, int pos) {
+void DecoderLayer::decode(QwenSession &session, const GPUTensor &hidden, int pos) {
     CudaScratch &scratch = session.scratch;
     const int hidden_size = text_config_.hidden_size;
     const std::vector<int64_t> act_shape = {1, static_cast<int64_t>(hidden_size)};
 
-    Tensor token_hidden_a = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenA, act_shape);
-    Tensor mixer = Tensor::gpu_scratch(scratch, scratch_key::kMixer, act_shape);
+    GPUTensor token_hidden_a = GPUTensor::gpu_scratch(scratch, scratch_key::kTokenHiddenA, act_shape);
+    GPUTensor mixer = GPUTensor::gpu_scratch(scratch, scratch_key::kMixer, act_shape);
 
     RMSNorm::forward(input_norm_weight_, hidden, token_hidden_a,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
@@ -83,8 +83,8 @@ void DecoderLayer::decode(QwenSession &session, const Tensor &hidden, int pos) {
     }
     TensorTool::add(hidden, mixer, hidden);
 
-    Tensor token_hidden_b = Tensor::gpu_scratch(scratch, scratch_key::kTokenHiddenB, act_shape);
-    Tensor mlp_out = Tensor::gpu_scratch(scratch, scratch_key::kMlpOut, act_shape);
+    GPUTensor token_hidden_b = GPUTensor::gpu_scratch(scratch, scratch_key::kTokenHiddenB, act_shape);
+    GPUTensor mlp_out = GPUTensor::gpu_scratch(scratch, scratch_key::kMlpOut, act_shape);
     RMSNorm::forward(post_norm_weight_, hidden, token_hidden_b,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
     mlp_.forward(session, token_hidden_b, mlp_out);

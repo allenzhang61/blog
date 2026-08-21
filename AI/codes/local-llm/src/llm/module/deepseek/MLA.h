@@ -6,7 +6,8 @@
 #define LOCAL_LLM_DEEPSEEK_MLA_H
 
 #include "llm/module/Module.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 
 class DeepseekConfig;
 class DeepseekSession;
@@ -18,7 +19,7 @@ public:
     MLA(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
     // hidden：输入/原位更新的隐状态 [input_size, hidden_size]，input_size 由 shape 推出。
-    void forward(DeepseekSession &session, const Tensor &hidden, int start_pos);
+    void forward(DeepseekSession &session, const GPUTensor &hidden, int start_pos);
 
 private:
     const DeepseekConfig &config_;

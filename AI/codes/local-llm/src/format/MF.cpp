@@ -55,7 +55,7 @@ void MF::validate() const {
             throw std::runtime_error("模型文件存在重复 tensor: " + name);
         }
 
-        const Tensor &tensor = get_tensor_view(name);
+        const DiskTensor &tensor = get_tensor_view(name);
         if (tensor.name != name) {
             throw std::runtime_error("tensor 索引名与视图名不一致: index=" + name +
                                      " view=" + tensor.name);
@@ -74,7 +74,7 @@ void MF::validate() const {
                                      " dtype=" + dtype_name(tensor.dtype) +
                                      "（仅支持 F32/F16/BF16/Q4_K/Q5_0/Q6_K/Q8_0）");
         }
-        if (tensor.disk_data == nullptr) {
+        if (tensor.data == nullptr) {
             throw std::runtime_error("tensor data 为空: " + name);
         }
         if (tensor.nbytes == 0) {
@@ -85,7 +85,7 @@ void MF::validate() const {
 
 void MF::validate_tensor_shape(const std::string &name,
                                const std::vector<int64_t> &expected_shape) const {
-    const Tensor &tensor = get_tensor_view(name);
+    const DiskTensor &tensor = get_tensor_view(name);
     if (tensor.shape != expected_shape) {
         throw std::runtime_error("tensor shape 不匹配: " + name +
                                  " expected=" + shape_to_string(expected_shape) +

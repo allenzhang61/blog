@@ -6,7 +6,7 @@
 
 #include "QwenConfig.h"
 
-QwenSession::QwenSession(const QwenConfig &config, const Tensor &input,
+QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &input,
                          int max_output_tokens) {
     const TextConfig &text_config = config.data.text;
     max_seq_len = static_cast<size_t>(input.numel()) + static_cast<size_t>(max_output_tokens);

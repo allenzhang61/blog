@@ -6,7 +6,7 @@
 
 #include "tensor/TensorTool.h"
 
-void RMSNorm::forward(const Tensor &weight, const Tensor &input, const Tensor &output,
+void RMSNorm::forward(const DiskTensor &weight, const GPUTensor &input, const GPUTensor &output,
                       float eps, bool one_plus) {
     TensorTool::rms_norm(weight, input, output, eps, one_plus);
 }

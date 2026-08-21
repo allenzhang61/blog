@@ -19,7 +19,7 @@ int dtype_code(DType dtype);
 bool is_quantized_dtype(DType dtype);
 
 // shape 各维乘积 = 张量元素总数。
-int64_t num_elements(const Tensor &tensor);
+int64_t num_elements(const DiskTensor &tensor);
 
 // 按 GGML 类型码把常驻量化权重反量化到 device f16。
 // ggml_type：0=F32, 6=Q5_0, 8=Q8_0, 12=Q4_K, 14=Q6_K。

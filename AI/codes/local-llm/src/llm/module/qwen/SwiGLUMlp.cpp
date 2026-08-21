@@ -18,16 +18,16 @@
 SwiGLUMlp::SwiGLUMlp(const MlpWeights &weights)
     : weights_(weights) {}
 
-void SwiGLUMlp::forward(QwenSession &session, const Tensor &in, const Tensor &out) {
+void SwiGLUMlp::forward(QwenSession &session, const GPUTensor &in, const GPUTensor &out) {
     const size_t rows = static_cast<size_t>(in.rows());
     CudaScratch &scratch = session.scratch;
     // gate / up：[intermediate, hidden]；down：[hidden, intermediate]。
     const int intermediate = static_cast<int>(weights_.gate_proj.shape[0]);
     const std::vector<int64_t> intermediate_shape = {static_cast<int64_t>(rows),
                                                      static_cast<int64_t>(intermediate)};
-    Tensor gate = Tensor::gpu_scratch(scratch, scratch_key::kGate, intermediate_shape);
-    Tensor up = Tensor::gpu_scratch(scratch, scratch_key::kUp, intermediate_shape);
-    Tensor prod = Tensor::gpu_scratch(scratch, scratch_key::kProd, intermediate_shape);
+    GPUTensor gate = GPUTensor::gpu_scratch(scratch, scratch_key::kGate, intermediate_shape);
+    GPUTensor up = GPUTensor::gpu_scratch(scratch, scratch_key::kUp, intermediate_shape);
+    GPUTensor prod = GPUTensor::gpu_scratch(scratch, scratch_key::kProd, intermediate_shape);
 
     // 输入激活转成权重 dtype（BF16/F16）后再投影；gate/up 同 dtype，只需转一次。
     TensorTool::gemm(weights_.gate_proj, in, gate, scratch, scratch_key::kInputLowp, "mlp.gate");

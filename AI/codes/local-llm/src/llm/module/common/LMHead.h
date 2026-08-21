@@ -22,15 +22,15 @@ namespace common {
 // logits 及输入低精度中间量走 session.scratch；重复惩罚所需历史 token 取自 session.outputs。
 class LMHead : public Module {
 public:
-    LMHead(const Tensor &weight);
+    LMHead(const DiskTensor &weight);
 
     // 对单行隐状态 [1, hidden_size] 计算 logits，拷回 host 后交由 sampler 采样，返回下一个 token id。
     // hidden 为已过 final/output norm 的隐状态激活视图（形状最后一维即 hidden_size）；
     // vocab_size 由权重 shape[0] 推出。仅在需要下一个 token 的位置调用（decode 每步、prefill 末位）。
-    int forward(SessionBase &session, const Tensor &hidden, Sampler &sampler);
+    int forward(SessionBase &session, const GPUTensor &hidden, Sampler &sampler);
 
 private:
-    const Tensor &weight_;
+    const DiskTensor &weight_;
 };
 
 } // namespace common

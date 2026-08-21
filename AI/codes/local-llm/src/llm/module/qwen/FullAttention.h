@@ -6,7 +6,8 @@
 #define LOCAL_LLM_FULLATTENTION_H
 
 #include "llm/module/Module.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 
 struct FullAttnWeights;
 struct TextConfig;
@@ -24,11 +25,11 @@ public:
 
     // prefill：一次处理 tokens 个位置，写满 KV cache 并算出注意力输出。
     // hidden：输入隐状态 [tokens, hidden_size]；out：注意力输出 [tokens, hidden_size]。
-    void prefill(QwenSession &session, const Tensor &hidden, const Tensor &out);
+    void prefill(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out);
 
     // decode：处理位置 pos 的单个 token，追加写入 KV cache 并算出注意力输出。
     // hidden：[1, hidden_size]；out：[1, hidden_size]。
-    void decode(QwenSession &session, const Tensor &hidden, const Tensor &out, int pos);
+    void decode(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out, int pos);
 
 private:
     const FullAttnWeights &weights_;

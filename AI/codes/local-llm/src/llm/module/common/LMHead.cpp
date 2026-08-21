@@ -13,15 +13,15 @@
 
 namespace common {
 
-LMHead::LMHead(const Tensor &weight)
+LMHead::LMHead(const DiskTensor &weight)
     : weight_(weight) {}
 
-int LMHead::forward(SessionBase &session, const Tensor &hidden, Sampler &sampler) {
+int LMHead::forward(SessionBase &session, const GPUTensor &hidden, Sampler &sampler) {
     CudaScratch &scratch = session.scratch;
 
     const int vocab_size = static_cast<int>(weight_.shape[0]);
 
-    Tensor logits = Tensor::gpu_scratch(scratch, scratch_key::kLogits, {static_cast<int64_t>(vocab_size)});
+    GPUTensor logits = GPUTensor::gpu_scratch(scratch, scratch_key::kLogits, {static_cast<int64_t>(vocab_size)});
     TensorTool::gemm(weight_, hidden, logits, scratch, scratch_key::kLogitsInLowp, "lm_head");
 
     // logits 拷回 host，交由 Sampler 做温度/top-k/top-p/重复惩罚（greedy 时内部走 argmax）。

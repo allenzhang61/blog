@@ -6,7 +6,8 @@
 #define LOCAL_LLM_LINEARATTENTION_H
 
 #include "llm/module/Module.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 
 struct LinearAttnWeights;
 struct TextConfig;
@@ -26,11 +27,11 @@ public:
 
     // prefill：一次处理 tokens 个位置，扫描更新 recurrent state 并算出输出。
     // hidden：[tokens, hidden_size]；out：[tokens, hidden_size]。
-    void prefill(QwenSession &session, const Tensor &hidden, const Tensor &out);
+    void prefill(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out);
 
     // decode：处理单个新 token，基于已有 recurrent state 递推一步。
     // hidden：[1, hidden_size]；out：[1, hidden_size]。
-    void decode(QwenSession &session, const Tensor &hidden, const Tensor &out);
+    void decode(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out);
 
 private:
     const LinearAttnWeights &weights_;

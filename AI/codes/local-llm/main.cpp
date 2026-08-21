@@ -11,7 +11,8 @@
 #include "format/MFFactory.h"
 #include "llm/model/BaseModel.h"
 #include "llm/model/ModelFactory.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 #include "backend/cuda/mem/CudaWeightDequantPool.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "utils/stats/DeviceMonitor.h"
@@ -37,8 +38,8 @@ int main(int argc, char **argv) {
     CudaWeightPool &pool = global_cuda_weight_pool();
 
     std::vector<int> encoded_input = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
-    Tensor input = Tensor::host_view(encoded_input.data(),
-                                     {static_cast<int64_t>(encoded_input.size())}, DType::I32);
+    CPUTensor input = CPUTensor::host_view(encoded_input.data(),
+                                           {static_cast<int64_t>(encoded_input.size())}, DType::I32);
     const int input_tokens = static_cast<int>(input.numel());
     const int eos = model->eos_token_id();
 

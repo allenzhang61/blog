@@ -17,7 +17,7 @@
 DenseFFN::DenseFFN(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config), weights_(weights) {}
 
-void DenseFFN::forward(DeepseekSession &session, const Tensor &hidden) {
+void DenseFFN::forward(DeepseekSession &session, const GPUTensor &hidden) {
     const int input_size = static_cast<int>(hidden.rows());
     auto &scratch = session.scratch;
     const int hidden_size = config_.hidden_size;
@@ -25,20 +25,20 @@ void DenseFFN::forward(DeepseekSession &session, const Tensor &hidden) {
 
     const std::vector<int64_t> act_shape = {static_cast<int64_t>(input_size),
                                             static_cast<int64_t>(hidden_size)};
-    Tensor normed = Tensor::gpu_scratch(scratch, scratch_key::kNormed, act_shape);
+    GPUTensor normed = GPUTensor::gpu_scratch(scratch, scratch_key::kNormed, act_shape);
     RMSNorm::forward(*weights_.ffn_norm, hidden, normed,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
     const std::vector<int64_t> ffn_shape = {static_cast<int64_t>(input_size), static_cast<int64_t>(ffn)};
-    Tensor gate = Tensor::gpu_scratch(scratch, scratch_key::kGate, ffn_shape);
-    Tensor up = Tensor::gpu_scratch(scratch, scratch_key::kUp, ffn_shape);
+    GPUTensor gate = GPUTensor::gpu_scratch(scratch, scratch_key::kGate, ffn_shape);
+    GPUTensor up = GPUTensor::gpu_scratch(scratch, scratch_key::kUp, ffn_shape);
     TensorTool::gemm(*weights_.ffn_gate, normed, gate, scratch, scratch_key::kFfnInLowp, "ds.gemm.ffn_gate");
     TensorTool::gemm(*weights_.ffn_up, normed, up, scratch, scratch_key::kFfnInLowp, "ds.gemm.ffn_up");
 
-    Tensor act = Tensor::gpu_scratch(scratch, scratch_key::kAct, ffn_shape);
+    GPUTensor act = GPUTensor::gpu_scratch(scratch, scratch_key::kAct, ffn_shape);
     TensorTool::silu_mul(gate, up, act);
 
-    Tensor ffn_out = Tensor::gpu_scratch(scratch, scratch_key::kFfnOut, act_shape);
+    GPUTensor ffn_out = GPUTensor::gpu_scratch(scratch, scratch_key::kFfnOut, act_shape);
     TensorTool::gemm(*weights_.ffn_down, act, ffn_out, scratch, scratch_key::kActLowp, "ds.gemm.ffn_down");
     TensorTool::add(hidden, ffn_out, hidden);
 }

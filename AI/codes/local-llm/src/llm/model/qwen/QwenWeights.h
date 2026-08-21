@@ -18,15 +18,15 @@ class QwenConfig;
 struct LinearAttnWeights {
     // 本层在 linear attention 层序列中的下标，用于索引 QwenSession::linear_attn_recurrent_states。
     size_t type_index = 0;
-    Tensor in_proj_qkv;  // [conv_dim, hidden]
-    Tensor in_proj_z;    // [value_total, hidden]
-    Tensor in_proj_b;    // [linear_num_value_heads, hidden]
-    Tensor in_proj_a;    // [linear_num_value_heads, hidden]
-    Tensor conv1d;       // [conv_dim, kernel]（深度可分离，逐通道）
-    Tensor a_log;        // [linear_num_value_heads]
-    Tensor dt_bias;      // [linear_num_value_heads]
-    Tensor norm;         // [linear_value_head_dim]（每 head 的 gated RMSNorm）
-    Tensor out_proj;     // [hidden, value_total]
+    DiskTensor in_proj_qkv;  // [conv_dim, hidden]
+    DiskTensor in_proj_z;    // [value_total, hidden]
+    DiskTensor in_proj_b;    // [linear_num_value_heads, hidden]
+    DiskTensor in_proj_a;    // [linear_num_value_heads, hidden]
+    DiskTensor conv1d;       // [conv_dim, kernel]（深度可分离，逐通道）
+    DiskTensor a_log;        // [linear_num_value_heads]
+    DiskTensor dt_bias;      // [linear_num_value_heads]
+    DiskTensor norm;         // [linear_value_head_dim]（每 head 的 gated RMSNorm）
+    DiskTensor out_proj;     // [hidden, value_total]
 };
 
 // full attention 层一次性解析好的权重引用。
@@ -35,20 +35,20 @@ struct LinearAttnWeights {
 struct FullAttnWeights {
     // 本层在 full attention 层序列中的下标，用于索引 QwenSession::full_attn_kv_cache。
     size_t type_index = 0;
-    Tensor q_proj;  // [q_total*2, hidden]（每 head 交错输出 [q, gate]）
-    Tensor k_proj;  // [kv_total, hidden]
-    Tensor v_proj;  // [kv_total, hidden]
-    Tensor q_norm;  // [head_dim]
-    Tensor k_norm;  // [head_dim]
-    Tensor o_proj;  // [hidden, q_total]
+    DiskTensor q_proj;  // [q_total*2, hidden]（每 head 交错输出 [q, gate]）
+    DiskTensor k_proj;  // [kv_total, hidden]
+    DiskTensor v_proj;  // [kv_total, hidden]
+    DiskTensor q_norm;  // [head_dim]
+    DiskTensor k_norm;  // [head_dim]
+    DiskTensor o_proj;  // [hidden, q_total]
 };
 
 // MLP 层一次性解析好的权重引用。
 // 记号：hidden=hidden_size；intermediate=intermediate_size。
 struct MlpWeights {
-    Tensor gate_proj;  // [intermediate, hidden]
-    Tensor up_proj;    // [intermediate, hidden]
-    Tensor down_proj;  // [hidden, intermediate]
+    DiskTensor gate_proj;  // [intermediate, hidden]
+    DiskTensor up_proj;    // [intermediate, hidden]
+    DiskTensor down_proj;  // [hidden, intermediate]
 };
 
 // 单个 transformer 层解析好的权重引用集合。
@@ -57,8 +57,8 @@ struct LayerWeights {
     std::string type;
     // 本层在同类型层序列中的下标，用于索引 QwenSession 的 fullAttnKVCaches / linearAttnRecurrentStates。
     size_t type_index = 0;
-    Tensor input_layernorm;           // [hidden_size]（注意力前 RMSNorm）
-    Tensor post_attention_layernorm;   // [hidden_size]（MLP 前 RMSNorm）
+    DiskTensor input_layernorm;           // [hidden_size]（注意力前 RMSNorm）
+    DiskTensor post_attention_layernorm;   // [hidden_size]（MLP 前 RMSNorm）
     // 仅 linear_attention 层有效。
     LinearAttnWeights lin;
     // 仅 full_attention 层有效。
@@ -68,55 +68,55 @@ struct LayerWeights {
 
 // 视觉塔单个 transformer block 的权重引用；当前未使用（纯文本推理不走视觉分支）。
 struct VisionBlockWeights {
-    Tensor norm1_weight;
-    Tensor norm1_bias;
-    Tensor norm2_weight;
-    Tensor norm2_bias;
-    Tensor attn_qkv_weight;
-    Tensor attn_qkv_bias;
-    Tensor attn_proj_weight;
-    Tensor attn_proj_bias;
-    Tensor mlp_fc1_weight;
-    Tensor mlp_fc1_bias;
-    Tensor mlp_fc2_weight;
-    Tensor mlp_fc2_bias;
+    DiskTensor norm1_weight;
+    DiskTensor norm1_bias;
+    DiskTensor norm2_weight;
+    DiskTensor norm2_bias;
+    DiskTensor attn_qkv_weight;
+    DiskTensor attn_qkv_bias;
+    DiskTensor attn_proj_weight;
+    DiskTensor attn_proj_bias;
+    DiskTensor mlp_fc1_weight;
+    DiskTensor mlp_fc1_bias;
+    DiskTensor mlp_fc2_weight;
+    DiskTensor mlp_fc2_bias;
 };
 
 // 视觉塔（model.visual.*）解析好的权重引用集合；当前未使用。
 struct VisionWeights {
-    Tensor patch_embed_proj_weight;
-    Tensor patch_embed_proj_bias;
-    Tensor pos_embed_weight;
+    DiskTensor patch_embed_proj_weight;
+    DiskTensor patch_embed_proj_bias;
+    DiskTensor pos_embed_weight;
     std::vector<VisionBlockWeights> blocks;
-    Tensor merger_norm_weight;
-    Tensor merger_norm_bias;
-    Tensor merger_fc1_weight;
-    Tensor merger_fc1_bias;
-    Tensor merger_fc2_weight;
-    Tensor merger_fc2_bias;
+    DiskTensor merger_norm_weight;
+    DiskTensor merger_norm_bias;
+    DiskTensor merger_fc1_weight;
+    DiskTensor merger_fc1_bias;
+    DiskTensor merger_fc2_weight;
+    DiskTensor merger_fc2_bias;
 };
 
 // MTP（多 token 预测）单层权重引用；当前未使用。
 struct MtpLayerWeights {
-    Tensor attn_norm;
-    Tensor ffn_norm;
-    Tensor self_attn_q_proj;
-    Tensor self_attn_k_proj;
-    Tensor self_attn_v_proj;
-    Tensor self_attn_o_proj;
-    Tensor self_attn_q_norm;
-    Tensor self_attn_k_norm;
-    Tensor mlp_gate;
-    Tensor mlp_up;
-    Tensor mlp_down;
+    DiskTensor attn_norm;
+    DiskTensor ffn_norm;
+    DiskTensor self_attn_q_proj;
+    DiskTensor self_attn_k_proj;
+    DiskTensor self_attn_v_proj;
+    DiskTensor self_attn_o_proj;
+    DiskTensor self_attn_q_norm;
+    DiskTensor self_attn_k_norm;
+    DiskTensor mlp_gate;
+    DiskTensor mlp_up;
+    DiskTensor mlp_down;
 };
 
 // MTP（mtp.*）解析好的权重引用集合；当前未使用。
 struct MtpWeights {
-    Tensor fc_weight;
-    Tensor norm_weight;
-    Tensor pre_fc_norm_embedding_weight;
-    Tensor pre_fc_norm_hidden_weight;
+    DiskTensor fc_weight;
+    DiskTensor norm_weight;
+    DiskTensor pre_fc_norm_embedding_weight;
+    DiskTensor pre_fc_norm_hidden_weight;
     std::vector<MtpLayerWeights> layers;
 };
 
@@ -126,8 +126,8 @@ public:
 
     void DebugDump();
 
-    Tensor token_embd;  // [vocab_size, hidden_size]
-    Tensor output_norm; // [hidden_size]
+    DiskTensor token_embd;  // [vocab_size, hidden_size]
+    DiskTensor output_norm; // [hidden_size]
     std::vector<LayerWeights> layers;
 
     // 视觉塔权重（model.visual.*）；已解析但当前未使用（纯文本推理不走视觉分支）。

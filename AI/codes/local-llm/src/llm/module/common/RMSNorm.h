@@ -18,12 +18,12 @@
 //   - DeepSeek 风格：one_plus 传 false（权重按原值缩放）。
 class RMSNorm {
 public:
-    // 对 input 做归一化写入 output。input / output 均为 device 激活视图（Tensor），
+    // 对 input 做归一化写入 output。input / output 均为 device 激活视图（GPUTensor），
     // 形状 [rows, hidden_size]（prefill 时 rows=tokens，decode 时 rows=1），rows/hidden_size
     // 由 input.shape 推出。允许 input 与 output 指向同一 device 内存做原位归一化。
     // weight：gamma 权重；eps：数值稳定项；
     // one_plus：权重是否按 (1 + gamma) 缩放。
-    static void forward(const Tensor &weight, const Tensor &input, const Tensor &output,
+    static void forward(const DiskTensor &weight, const GPUTensor &input, const GPUTensor &output,
                         float eps, bool one_plus);
 };
 

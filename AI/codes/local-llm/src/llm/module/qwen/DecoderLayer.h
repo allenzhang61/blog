@@ -26,10 +26,10 @@ public:
     DecoderLayer(const LayerWeights &weights, const TextConfig &config);
 
     // prefill：处理整段输入 [tokens, hidden_size]，原位更新隐状态。
-    void prefill(QwenSession &session, const Tensor &hidden);
+    void prefill(QwenSession &session, const GPUTensor &hidden);
 
     // decode：处理位置 pos 的单个 token [1, hidden_size]，原位更新隐状态。
-    void decode(QwenSession &session, const Tensor &hidden, int pos);
+    void decode(QwenSession &session, const GPUTensor &hidden, int pos);
 
     // 是否为 full_attention 层（否则为 linear_attention）。
     bool is_full_attention() const { return is_full_; }
@@ -38,8 +38,8 @@ private:
     const TextConfig &text_config_;
     bool is_full_ = false;
 
-    const Tensor &input_norm_weight_;
-    const Tensor &post_norm_weight_;
+    const DiskTensor &input_norm_weight_;
+    const DiskTensor &post_norm_weight_;
     SwiGLUMlp mlp_;
     // 按层类型二选一：is_full_ 为真时用 full attention 子层，否则用 linear attention 子层。
     // 用基类指针持有，具体类型见 FullAttention / LinearAttention。

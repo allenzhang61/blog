@@ -18,7 +18,7 @@ float yarn_corr_dim(float num_rot, int dim, float base, int orig_ctx) {
 
 } // namespace
 
-DeepseekSession::DeepseekSession(const DeepseekConfig &config, const Tensor &input,
+DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &input,
                                  int max_output_tokens) {
     max_seq_len = static_cast<int>(input.numel()) + max_output_tokens;
 
@@ -69,7 +69,7 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const Tensor &inp
     attn_softmax_scale = 1.0f / std::sqrt(static_cast<float>(config.qk_head_dim()));
     inv_freq = CudaWeight(static_cast<size_t>(half) * sizeof(float), CUDA_R_32F, false,
                           "deepseek.inv_freq");
-    Tensor::host_view(h_inv_freq.data(), {half}, DType::F32).to_gpu(inv_freq.ptr, "deepseek.inv_freq h2d");
+    CPUTensor::host_view(h_inv_freq.data(), {half}, DType::F32).to_gpu(inv_freq.ptr, "deepseek.inv_freq h2d");
 }
 
 size_t DeepseekSession::kv_state_bytes() const {

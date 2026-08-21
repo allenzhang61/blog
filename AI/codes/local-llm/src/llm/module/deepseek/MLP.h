@@ -6,7 +6,8 @@
 #define LOCAL_LLM_DEEPSEEK_MLP_H
 
 #include "llm/module/Module.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 #include "llm/module/deepseek/DenseFFN.h"
 #include "llm/module/deepseek/MoE.h"
 
@@ -19,7 +20,7 @@ class MLP : public Module {
 public:
     MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, const Tensor &hidden);
+    void forward(DeepseekSession &session, const GPUTensor &hidden);
 
 private:
     const DeepseekLayerWeights &weights_;

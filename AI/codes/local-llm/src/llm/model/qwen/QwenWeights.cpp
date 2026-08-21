@@ -210,9 +210,9 @@ void QwenWeights::DebugDump() {
     out << "QwenWeights:\n";
     out << "  tensors=" << mf_.tensor_view_names().size() << "\n";
 
-    auto dump_one = [&](const std::string &label, const Tensor &w) {
+    auto dump_one = [&](const std::string &label, const DiskTensor &w) {
         out << "  " << label << ": ";
-        if (w.disk_data == nullptr) {
+        if (w.data == nullptr) {
             out << "<null>\n";
             return;
         }

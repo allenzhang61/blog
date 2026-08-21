@@ -6,7 +6,8 @@
 #define LOCAL_LLM_DEEPSEEK_MOE_H
 
 #include "llm/module/Module.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 #include "llm/module/deepseek/MoERouter.h"
 #include "llm/module/deepseek/RoutedExperts.h"
 #include "llm/module/deepseek/SharedExperts.h"
@@ -19,7 +20,7 @@ class MoE : public Module {
 public:
     MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, const Tensor &hidden);
+    void forward(DeepseekSession &session, const GPUTensor &hidden);
 
 private:
     const DeepseekConfig &config_;

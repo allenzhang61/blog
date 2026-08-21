@@ -9,10 +9,10 @@
 
 namespace common {
 
-Embedding::Embedding(const Tensor &weight)
+Embedding::Embedding(const DiskTensor &weight)
     : weight_(weight) {}
 
-void Embedding::forward(Tensor input, const Tensor &hidden, CudaScratch &scratch) {
+void Embedding::forward(CPUTensor input, const GPUTensor &hidden, CudaScratch &scratch) {
     TensorTool::embedding_lookup(weight_, input, hidden, scratch);
 }
 

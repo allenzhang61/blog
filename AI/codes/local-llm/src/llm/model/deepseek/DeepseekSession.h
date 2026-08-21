@@ -8,7 +8,8 @@
 #include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/SessionBase.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 
 #include <vector>
 
@@ -22,7 +23,7 @@ struct LatentKVCache {
 // 前向 scratch 与已生成 token。prefill 时重建，decode 时复用。
 class DeepseekSession : public SessionBase {
 public:
-    DeepseekSession(const DeepseekConfig &config, const Tensor &input,
+    DeepseekSession(const DeepseekConfig &config, const CPUTensor &input,
                     int max_output_tokens);
 
     std::vector<LatentKVCache> kv_caches;

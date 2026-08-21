@@ -6,7 +6,8 @@
 #define LOCAL_LLM_DEEPSEEK_MOE_ROUTER_H
 
 #include "llm/module/Module.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 
 #include <vector>
 
@@ -23,7 +24,7 @@ class MoERouter : public Module {
 public:
     MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    MoERoute forward(DeepseekSession &session, const Tensor &normed);
+    MoERoute forward(DeepseekSession &session, const GPUTensor &normed);
 
 private:
     const DeepseekConfig &config_;

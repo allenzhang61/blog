@@ -28,12 +28,6 @@ void set_global_cuda_weight_pool(CudaWeightPool *pool) {
     g_weight_pool = pool;
 }
 
-// 定义在此（而非 tensor/Tensor.cpp）以便访问 CudaWeightPool 全量类型。
-void Tensor::to_gpu() const {
-    pool->cached_weight(*this);
-    mark_location(TensorLocation::GpuMem);
-}
-
 CudaWeightPool &global_cuda_weight_pool() {
     if (g_weight_pool == nullptr) {
         throw std::runtime_error("全局 CudaWeightPool 未初始化");
@@ -86,7 +80,7 @@ size_t CudaWeightPool::cache_limit_bytes() {
     return static_cast<size_t>(gb * 1024.0 * 1024.0 * 1024.0);
 }
 
-cudaDataType_t CudaWeightPool::cuda_type_for(const Tensor &weight) {
+cudaDataType_t CudaWeightPool::cuda_type_for(const DiskTensor &weight) {
     const DType dtype = weight.dtype;
     if (dtype == DType::BF16) {
         return CUDA_R_16BF;
@@ -104,7 +98,7 @@ cudaDataType_t CudaWeightPool::cuda_type_for(const Tensor &weight) {
                              " tensor=" + weight.name);
 }
 
-size_t CudaWeightPool::dtype_size_for(const Tensor &weight) {
+size_t CudaWeightPool::dtype_size_for(const DiskTensor &weight) {
     const DType dtype = weight.dtype;
     if (dtype == DType::BF16 || dtype == DType::F16) {
         return sizeof(uint16_t);
@@ -126,7 +120,7 @@ CudaWeightPool::~CudaWeightPool() {
     }
 }
 
-CudaWeight *CudaWeightPool::cached_weight(const Tensor &weight) {
+CudaWeight *CudaWeightPool::cached_weight(const DiskTensor &weight) {
     auto found = items_.find(weight.name);
     if (found != items_.end()) {
         return &found->second;
@@ -161,7 +155,7 @@ CudaWeight *CudaWeightPool::cached_weight(const Tensor &weight) {
     double malloc_ms = 0.0;
     cuda_malloc_timed(&device.ptr, bytes, weight.name, tracker_ != nullptr, malloc_ms);
     double h2d_ms = 0.0;
-    memcpy_h2d_timed(device.ptr, weight.disk_data, bytes, weight.name, tracker_ != nullptr, h2d_ms);
+    memcpy_h2d_timed(device.ptr, weight.data, bytes, weight.name, tracker_ != nullptr, h2d_ms);
     auto [it, inserted] = items_.emplace(weight.name, std::move(device));
     bytes_ += bytes;
     (void) inserted;
@@ -173,7 +167,7 @@ CudaWeight *CudaWeightPool::cached_weight(const Tensor &weight) {
     return &it->second;
 }
 
-CudaWeight *CudaWeightPool::find_cached_weight(const Tensor &weight) {
+CudaWeight *CudaWeightPool::find_cached_weight(const DiskTensor &weight) {
     auto found = items_.find(weight.name);
     if (found == items_.end()) {
         return nullptr;

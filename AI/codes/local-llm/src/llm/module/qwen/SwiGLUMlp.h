@@ -6,7 +6,8 @@
 #define LOCAL_LLM_SWIGLUMLP_H
 
 #include "llm/module/Module.h"
-#include "tensor/Tensor.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/DiskTensor.h"
 
 struct MlpWeights;
 class QwenSession;
@@ -22,7 +23,7 @@ public:
 
     // 对隐状态做 MLP（prefill 时行数=tokens，decode 时行数=1，由 in.shape 推出）。
     // in / out：[rows, hidden_size]，允许原位。中间量从 session.scratch 取。
-    void forward(QwenSession &session, const Tensor &in, const Tensor &out);
+    void forward(QwenSession &session, const GPUTensor &in, const GPUTensor &out);
 
 private:
     const MlpWeights &weights_;

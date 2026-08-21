@@ -19,7 +19,7 @@
 FullAttention::FullAttention(const FullAttnWeights &weights, const TextConfig &config)
     : weights_(weights), config_(config), type_index_(weights.type_index) {}
 
-void FullAttention::prefill(QwenSession &session, const Tensor &hidden, const Tensor &out) {
+void FullAttention::prefill(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out) {
     const size_t input_size = static_cast<size_t>(hidden.rows());
     FullAttnKVCache &kv = session.full_attn_kv_cache[type_index_];
     CudaScratch &scratch = session.scratch;
@@ -41,18 +41,18 @@ void FullAttention::prefill(QwenSession &session, const Tensor &hidden, const Te
     float *d_full_gate = scratch.ensure<float>(scratch_key::kFullGate, input_size * static_cast<size_t>(q_total));
     float *d_full_attn = scratch.ensure<float>(scratch_key::kFullAttn, input_size * static_cast<size_t>(q_total));
 
-    Tensor full_projection = Tensor::gpu_view(d_full_projection, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total * 2)});
-    Tensor full_k = Tensor::gpu_view(d_full_k, {static_cast<int64_t>(input_size), static_cast<int64_t>(kv_total)});
-    Tensor full_v = Tensor::gpu_view(d_full_v, {static_cast<int64_t>(input_size), static_cast<int64_t>(kv_total)});
-    Tensor full_q = Tensor::gpu_view(d_full_q, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
-    Tensor full_gate = Tensor::gpu_view(d_full_gate, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
-    Tensor full_attn = Tensor::gpu_view(d_full_attn, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
+    GPUTensor full_projection = GPUTensor::gpu_view(d_full_projection, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total * 2)});
+    GPUTensor full_k = GPUTensor::gpu_view(d_full_k, {static_cast<int64_t>(input_size), static_cast<int64_t>(kv_total)});
+    GPUTensor full_v = GPUTensor::gpu_view(d_full_v, {static_cast<int64_t>(input_size), static_cast<int64_t>(kv_total)});
+    GPUTensor full_q = GPUTensor::gpu_view(d_full_q, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
+    GPUTensor full_gate = GPUTensor::gpu_view(d_full_gate, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
+    GPUTensor full_attn = GPUTensor::gpu_view(d_full_attn, {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)});
     TensorTool::gemm(weights_.q_proj, hidden, full_projection, scratch, scratch_key::kInputLowp, "fullattn.q_proj");
     TensorTool::gemm(weights_.k_proj, hidden, full_k, scratch, scratch_key::kInputLowp, "fullattn.k_proj");
     TensorTool::gemm(weights_.v_proj, hidden, full_v, scratch, scratch_key::kInputLowp, "fullattn.v_proj");
 
-    Tensor key_cache = Tensor::gpu_view(kv.key_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
-    Tensor value_cache = Tensor::gpu_view(kv.value_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
+    GPUTensor key_cache = GPUTensor::gpu_view(kv.key_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
+    GPUTensor value_cache = GPUTensor::gpu_view(kv.value_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
 
     TensorTool::full_attention_q_batch(full_projection, weights_.q_norm, full_q, full_gate,
                                   n_heads, head_dim, start_pos, theta, partial, eps);
@@ -68,7 +68,7 @@ void FullAttention::prefill(QwenSession &session, const Tensor &hidden, const Te
     check_cuda(cudaDeviceSynchronize(), "FullAttention prefill 同步失败");
 }
 
-void FullAttention::decode(QwenSession &session, const Tensor &hidden, const Tensor &out, int pos) {
+void FullAttention::decode(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out, int pos) {
     FullAttnKVCache &kv = session.full_attn_kv_cache[type_index_];
     CudaScratch &scratch = session.scratch;
     const int n_heads = config_.num_attention_heads;
@@ -87,18 +87,18 @@ void FullAttention::decode(QwenSession &session, const Tensor &hidden, const Ten
     float *d_full_gate = scratch.ensure<float>(scratch_key::kFullGate, q_total);
     float *d_full_attn = scratch.ensure<float>(scratch_key::kFullAttn, q_total);
 
-    Tensor full_projection = Tensor::gpu_view(d_full_projection, {1, static_cast<int64_t>(q_total * 2)});
-    Tensor full_k = Tensor::gpu_view(d_full_k, {1, static_cast<int64_t>(kv_total)});
-    Tensor full_v = Tensor::gpu_view(d_full_v, {1, static_cast<int64_t>(kv_total)});
-    Tensor full_q = Tensor::gpu_view(d_full_q, {1, static_cast<int64_t>(q_total)});
-    Tensor full_gate = Tensor::gpu_view(d_full_gate, {1, static_cast<int64_t>(q_total)});
-    Tensor full_attn = Tensor::gpu_view(d_full_attn, {1, static_cast<int64_t>(q_total)});
+    GPUTensor full_projection = GPUTensor::gpu_view(d_full_projection, {1, static_cast<int64_t>(q_total * 2)});
+    GPUTensor full_k = GPUTensor::gpu_view(d_full_k, {1, static_cast<int64_t>(kv_total)});
+    GPUTensor full_v = GPUTensor::gpu_view(d_full_v, {1, static_cast<int64_t>(kv_total)});
+    GPUTensor full_q = GPUTensor::gpu_view(d_full_q, {1, static_cast<int64_t>(q_total)});
+    GPUTensor full_gate = GPUTensor::gpu_view(d_full_gate, {1, static_cast<int64_t>(q_total)});
+    GPUTensor full_attn = GPUTensor::gpu_view(d_full_attn, {1, static_cast<int64_t>(q_total)});
     TensorTool::gemm(weights_.q_proj, hidden, full_projection, scratch, scratch_key::kInputLowp, "fullattn.q_proj");
     TensorTool::gemm(weights_.k_proj, hidden, full_k, scratch, scratch_key::kInputLowp, "fullattn.k_proj");
     TensorTool::gemm(weights_.v_proj, hidden, full_v, scratch, scratch_key::kInputLowp, "fullattn.v_proj");
 
-    Tensor key_cache = Tensor::gpu_view(kv.key_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
-    Tensor value_cache = Tensor::gpu_view(kv.value_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
+    GPUTensor key_cache = GPUTensor::gpu_view(kv.key_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
+    GPUTensor value_cache = GPUTensor::gpu_view(kv.value_cache.ptr, {static_cast<int64_t>(session.max_seq_len), static_cast<int64_t>(kv_total)});
 
     TensorTool::full_attention_q(full_projection, weights_.q_norm, full_q, full_gate,
                             n_heads, head_dim, pos, theta, partial, eps);
