@@ -5,19 +5,21 @@
 #ifndef LOCAL_LLM_CPUTENSOR_H
 #define LOCAL_LLM_CPUTENSOR_H
 
-#include "tensor/GPUTensor.h"
+#include "tensor/TensorCommon.h"
 
 class CudaScratch;
+class GPUTensor;
 
 class CPUTensor : public TensorShape {
 public:
-    void *data = nullptr;
+    CPUTensor() = default;
+    CPUTensor(const void *host_ptr, std::vector<int64_t> shape, DType dt);
 
-    static CPUTensor host_view(const void *host_ptr, std::vector<int64_t> shape, DType dt);
-
-    const int *host_i32() const;
+    const void *data() const { return data_; }
     GPUTensor to_gpu(CudaScratch &scratch, const std::string &key, const std::string &what) const;
-    void to_gpu(void *device_ptr, const std::string &what) const;
+
+private:
+    void *data_ = nullptr;
 };
 
 #endif // LOCAL_LLM_CPUTENSOR_H

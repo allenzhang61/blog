@@ -120,7 +120,7 @@ public:
     bool contain_tensor_view(const std::string &name) const override;
 
     // === MF tensor 接口 ===
-    const DiskTensor &get_tensor_view(const std::string &name) const override;
+    const StorageTensor &get_tensor_view(const std::string &name) const override;
     std::vector<std::string> tensor_view_names() const override;
     std::vector<int> tokenizer_encode(const std::string &text) const override;
     std::string tokenizer_decode(const std::vector<int> &ids) const override;
@@ -139,7 +139,7 @@ private:
     uint32_t alignment_ = 32;
 
     std::map<std::string, GgufValue> metadata_map_;
-    std::vector<DiskTensor> tensors_;
+    std::vector<StorageTensor> tensors_;
     std::unique_ptr<GGUFTokenizer> tokenizer_;
 
     // GGUF 量化类型 -> 统一 DType。

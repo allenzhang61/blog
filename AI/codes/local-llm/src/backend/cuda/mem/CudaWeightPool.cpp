@@ -41,11 +41,11 @@ void CudaWeightPool::cuda_malloc_timed(void **ptr, size_t bytes, const std::stri
                                        bool timed, double &out_ms) {
     out_ms = 0.0;
     if (!timed) {
-        check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc weight 失败 " + what);
+        check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc s_weight 失败 " + what);
         return;
     }
     const auto t0 = std::chrono::steady_clock::now();
-    check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc weight 失败 " + what);
+    check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc s_weight 失败 " + what);
     const auto t1 = std::chrono::steady_clock::now();
     out_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
@@ -56,7 +56,7 @@ void CudaWeightPool::memcpy_h2d_timed(void *dst, const void *src, size_t bytes,
                                       const std::string &what, bool timed, double &out_ms) {
     out_ms = 0.0;
     if (!timed) {
-        cuda_memcpy_h2d(dst, src, bytes, "cudaMemcpy weight 失败 " + what);
+        cuda_memcpy_h2d(dst, src, bytes, "cudaMemcpy s_weight 失败 " + what);
         return;
     }
     cudaEvent_t start = nullptr;
@@ -64,7 +64,7 @@ void CudaWeightPool::memcpy_h2d_timed(void *dst, const void *src, size_t bytes,
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
-    cuda_memcpy_h2d(dst, src, bytes, "cudaMemcpy weight 失败 " + what);
+    cuda_memcpy_h2d(dst, src, bytes, "cudaMemcpy s_weight 失败 " + what);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     float ms = 0.0f;
@@ -80,8 +80,8 @@ size_t CudaWeightPool::cache_limit_bytes() {
     return static_cast<size_t>(gb * 1024.0 * 1024.0 * 1024.0);
 }
 
-cudaDataType_t CudaWeightPool::cuda_type_for(const DiskTensor &weight) {
-    const DType dtype = weight.dtype;
+cudaDataType_t CudaWeightPool::cuda_type_for(const StorageTensor &s_weight) {
+    const DType dtype = s_weight.dtype;
     if (dtype == DType::BF16) {
         return CUDA_R_16BF;
     }
@@ -95,11 +95,11 @@ cudaDataType_t CudaWeightPool::cuda_type_for(const DiskTensor &weight) {
         return CUDA_R_8I;
     }
     throw std::runtime_error(std::string("暂不支持 CUDA dtype：") + dtype_name(dtype) +
-                             " tensor=" + weight.name);
+                             " tensor=" + s_weight.name);
 }
 
-size_t CudaWeightPool::dtype_size_for(const DiskTensor &weight) {
-    const DType dtype = weight.dtype;
+size_t CudaWeightPool::dtype_size_for(const StorageTensor &s_weight) {
+    const DType dtype = s_weight.dtype;
     if (dtype == DType::BF16 || dtype == DType::F16) {
         return sizeof(uint16_t);
     }
@@ -107,7 +107,7 @@ size_t CudaWeightPool::dtype_size_for(const DiskTensor &weight) {
         return sizeof(float);
     }
     throw std::runtime_error(std::string("暂不支持 dtype：") + dtype_name(dtype) +
-                             " tensor=" + weight.name);
+                             " tensor=" + s_weight.name);
 }
 
 CudaWeightPool::CudaWeightPool() {
@@ -120,19 +120,19 @@ CudaWeightPool::~CudaWeightPool() {
     }
 }
 
-CudaWeight *CudaWeightPool::cached_weight(const DiskTensor &weight) {
-    auto found = items_.find(weight.name);
+CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight) {
+    auto found = items_.find(s_weight.name);
     if (found != items_.end()) {
         return &found->second;
     }
 
-    size_t bytes = weight.nbytes;
-    if (!Quant::is_quantized_dtype(weight.dtype)) {
+    size_t bytes = s_weight.nbytes;
+    if (!Quant::is_quantized_dtype(s_weight.dtype)) {
         size_t elems = 1;
-        for (int64_t dim : weight.shape) {
+        for (int64_t dim : s_weight.shape) {
             elems *= static_cast<size_t>(dim);
         }
-        bytes = elems * dtype_size_for(weight);
+        bytes = elems * dtype_size_for(s_weight);
     }
     const size_t limit = cache_limit_bytes();
     if (bytes > limit) {
@@ -148,27 +148,27 @@ CudaWeight *CudaWeightPool::cached_weight(const DiskTensor &weight) {
 
     CudaWeight device;
     device.bytes = bytes;
-    device.type = cuda_type_for(weight);
-    device.dtype = weight.dtype;
-    device.num_elements = Quant::num_elements(weight);
-    device.name = weight.name;
+    device.type = cuda_type_for(s_weight);
+    device.dtype = s_weight.dtype;
+    device.num_elements = Quant::num_elements(s_weight);
+    device.name = s_weight.name;
     double malloc_ms = 0.0;
-    cuda_malloc_timed(&device.ptr, bytes, weight.name, tracker_ != nullptr, malloc_ms);
+    cuda_malloc_timed(&device.ptr, bytes, s_weight.name, tracker_ != nullptr, malloc_ms);
     double h2d_ms = 0.0;
-    memcpy_h2d_timed(device.ptr, weight.data, bytes, weight.name, tracker_ != nullptr, h2d_ms);
-    auto [it, inserted] = items_.emplace(weight.name, std::move(device));
+    memcpy_h2d_timed(device.ptr, s_weight.data(), bytes, s_weight.name, tracker_ != nullptr, h2d_ms);
+    auto [it, inserted] = items_.emplace(s_weight.name, std::move(device));
     bytes_ += bytes;
     (void) inserted;
     if (tracker_) {
         // 分配与拷贝拆成两条事件，用 kind 区分（resident 均为本次入驻后的累计量）。
-        tracker_->record(WeightLoadEventKind::Alloc, weight.name, bytes, malloc_ms, bytes_);
-        tracker_->record(WeightLoadEventKind::Upload, weight.name, bytes, h2d_ms, bytes_);
+        tracker_->record(WeightLoadEventKind::Alloc, s_weight.name, bytes, malloc_ms, bytes_);
+        tracker_->record(WeightLoadEventKind::Upload, s_weight.name, bytes, h2d_ms, bytes_);
     }
     return &it->second;
 }
 
-CudaWeight *CudaWeightPool::find_cached_weight(const DiskTensor &weight) {
-    auto found = items_.find(weight.name);
+CudaWeight *CudaWeightPool::find_cached_weight(const StorageTensor &s_weight) {
+    auto found = items_.find(s_weight.name);
     if (found == items_.end()) {
         return nullptr;
     }

@@ -46,7 +46,7 @@ public:
     std::string decode_text(const std::vector<int> &ids) const override { return mf_->tokenizer_decode(ids); }
 
     // prefill：为一次新生成开启内部 session（喂入整段 prompt），跑完各层，返回首个生成 token id。
-    int prefill(const CPUTensor &input) override;
+    int prefill(const CPUTensor &c_input) override;
     // decode：喂入上一个 token（位置 pos），返回下一个 token id，复用 prefill 建立的 session。
     int decode(int prev_token_id, int pos) override;
 
@@ -60,7 +60,7 @@ public:
 
 private:
     // 内部前向：喂入整段 prompt token，跑完各层，返回首个生成 token id。
-    int prefill_session(QwenSession &session, const CPUTensor &input);
+    int prefill_session(QwenSession &session, const CPUTensor &c_input);
     // 内部前向：喂入上一个 token（位置 pos），跑完各层，返回下一个 token id。
     int decode_session(QwenSession &session, int prev_token_id, int pos);
 

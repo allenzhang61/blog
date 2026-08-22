@@ -25,14 +25,14 @@
 //
 // 维度需显式传入：调用方从 GPUTensor.shape 取 out_dim / in_dim。
 // x_type 指明激活数据类型（CUDA_R_32F 或 CUDA_R_16BF / CUDA_R_16F）；
-// 权重类型取自 weight.dtype。
+// 权重类型取自 g_weight.dtype。
 
 // 批量投影：Y[out_dim,tokens] = W[out_dim,in_dim] · X[in_dim,tokens]。
 // tokens=1 即单 token 情形。
-// name 非空时，用 ScopedGpuTimer 以该名埋点，并以 weight.bytes 作为访存字节数
+// name 非空时，用 ScopedGpuTimer 以该名埋点，并以 g_weight.bytes 作为访存字节数
 // （decode 为访存瓶颈，投影耗时主体即读取权重），供 Profiler 算有效带宽；
 // 传空串（默认）则不埋点、零开销。
-void gemm_weight(cublasHandle_t handle, const GPUTensor &weight,
+void gemm_weight(cublasHandle_t handle, const GPUTensor &g_weight,
                  const void *d_x, float *d_y,
                  int out_dim, int in_dim, size_t input_size, cudaDataType_t x_type,
                  const char *name = "");

@@ -198,7 +198,10 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     }
 
     struct ParsedTensor {
-        DiskTensor view;
+        std::string name;
+        std::vector<int64_t> shape;
+        DType dtype = DType::UNKNOWN;
+        size_t nbytes = 0;
         uint64_t offset = 0;
     };
 
@@ -206,19 +209,19 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
     std::vector<ParsedTensor> parsed_tensors;
     parsed_tensors.reserve(tensor_count);
     for (uint64_t i = 0; i < tensor_count; ++i) {
-        ParsedTensor tensor;
-        tensor.view.name = c.read_string();
+        ParsedTensor s_tensor;
+        s_tensor.name = c.read_string();
         const uint32_t n_dims = c.read_u32();
         std::vector<int64_t> dims(n_dims);
         for (uint32_t d = 0; d < n_dims; ++d) {
             dims[d] = static_cast<int64_t>(c.read_u64());
         }
         const GgmlType type = static_cast<GgmlType>(c.read_u32());
-        tensor.offset = c.read_u64();
-        tensor.view.shape.assign(dims.rbegin(), dims.rend());
-        tensor.view.dtype = gguf_type_to_dtype(type);
-        tensor.view.nbytes = type_nbytes(type, num_elements(dims));
-        parsed_tensors.push_back(std::move(tensor));
+        s_tensor.offset = c.read_u64();
+        s_tensor.shape.assign(dims.rbegin(), dims.rend());
+        s_tensor.dtype = gguf_type_to_dtype(type);
+        s_tensor.nbytes = type_nbytes(type, num_elements(dims));
+        parsed_tensors.push_back(std::move(s_tensor));
     }
 
     // 张量数据段起始 = 张量表结束位置，向上对齐到 alignment_。
@@ -233,13 +236,14 @@ GgufFile::GgufFile(const std::string &path) : path_(path) {
 
     // 回填每个张量的数据指针。
     tensors_.reserve(parsed_tensors.size());
-    for (ParsedTensor &tensor : parsed_tensors) {
-        const uint8_t *tensor_data = data_base + tensor.offset;
-        if (tensor_data + tensor.view.nbytes > data_ + size_) {
-            throw std::runtime_error("张量数据越界: " + tensor.view.name);
+    for (ParsedTensor &s_tensor : parsed_tensors) {
+        const uint8_t *tensor_data = data_base + s_tensor.offset;
+        if (tensor_data + s_tensor.nbytes > data_ + size_) {
+            throw std::runtime_error("张量数据越界: " + s_tensor.name);
         }
-        tensor.view.data = tensor_data;
-        tensors_.push_back(std::move(tensor.view));
+        StorageTensor s_view(tensor_data, std::move(s_tensor.shape), s_tensor.dtype, s_tensor.nbytes);
+        s_view.name = std::move(s_tensor.name);
+        tensors_.push_back(std::move(s_view));
     }
 
     tokenizer_ = std::make_unique<GGUFTokenizer>(*this);
@@ -393,8 +397,8 @@ Metadata GgufFile::metadata_value(const std::string &key) const {
 }
 
 bool GgufFile::contain_tensor_view(const std::string &name) const {
-    for (const DiskTensor &tensor : tensors_) {
-        if (tensor.name == name) {
+    for (const StorageTensor &s_tensor : tensors_) {
+        if (s_tensor.name == name) {
             return true;
         }
     }
@@ -422,13 +426,10 @@ DType GgufFile::gguf_type_to_dtype(GgmlType t) {
     }
 }
 
-const DiskTensor &GgufFile::get_tensor_view(const std::string &name) const {
-    for (const DiskTensor &tensor : tensors_) {
-        if (tensor.name == name) {
-            // 权重解析发生在全局 pool 就绪之后，这里补写 pool 链接，
-            // 使持有该 view 的 module 无需再单独传 pool。
-            const_cast<DiskTensor &>(tensor).pool = &global_cuda_weight_pool();
-            return tensor;
+const StorageTensor &GgufFile::get_tensor_view(const std::string &name) const {
+    for (const StorageTensor &s_tensor : tensors_) {
+        if (s_tensor.name == name) {
+            return s_tensor;
         }
     }
     throw std::runtime_error("GGUF 缺少张量: " + name);
@@ -437,8 +438,8 @@ const DiskTensor &GgufFile::get_tensor_view(const std::string &name) const {
 std::vector<std::string> GgufFile::tensor_view_names() const {
     std::vector<std::string> names;
     names.reserve(tensors_.size());
-    for (const DiskTensor &tensor : tensors_) {
-        names.push_back(tensor.name);
+    for (const StorageTensor &s_tensor : tensors_) {
+        names.push_back(s_tensor.name);
     }
     return names;
 }
@@ -472,21 +473,21 @@ void GgufFile::debug_dump() const {
 
     // 张量类型直方图（先统计，放在张量列表之上做概览）。
     std::map<DType, size_t> type_hist;
-    for (const DiskTensor &tensor : tensors_) {
-        type_hist[tensor.dtype]++;
+    for (const StorageTensor &s_tensor : tensors_) {
+        type_hist[s_tensor.dtype]++;
     }
-    Log::debug("  === tensor type histogram ===");
+    Log::debug("  === s_tensor type histogram ===");
     for (const auto &[type, count] : type_hist) {
         Log::debug(std::string("    ") + dtype_name(type) + " : " + std::to_string(count));
     }
 
     // 全部张量元信息（不含权重数据段），按文件出现顺序。
     Log::debug("  === tensors (" + std::to_string(tensors_.size()) + ") ===");
-    for (const DiskTensor &tensor : tensors_) {
+    for (const StorageTensor &s_tensor : tensors_) {
         std::ostringstream os;
-        os << "    " << tensor.name << "  shape=" << dims_to_string(tensor.shape)
-           << " dtype=" << dtype_name(tensor.dtype)
-           << " nbytes=" << tensor.nbytes;
+        os << "    " << s_tensor.name << "  shape=" << dims_to_string(s_tensor.shape)
+           << " dtype=" << dtype_name(s_tensor.dtype)
+           << " nbytes=" << s_tensor.nbytes;
         Log::debug(os.str());
     }
 }

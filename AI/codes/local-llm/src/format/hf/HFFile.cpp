@@ -136,10 +136,10 @@ void HFFile::parse_shard_header(size_t shard_index) {
         if (data_begin > data_end || data_end > shard.size) {
             throw std::runtime_error("tensor data_offsets 越界：" + name);
         }
-        DiskTensor view = DiskTensor::disk_view(shard.data + data_begin, shape, dtype_from_string(dtype),
-                                        data_end - data_begin);
-        view.name = name;
-        views_.emplace(name, std::move(view));
+        StorageTensor s_view(shard.data + data_begin, shape, dtype_from_string(dtype),
+                        data_end - data_begin);
+        s_view.name = name;
+        views_.emplace(name, std::move(s_view));
     }
 }
 
@@ -204,14 +204,11 @@ bool HFFile::contain_tensor_view(const std::string &name) const {
     return views_.contains(name);
 }
 
-const DiskTensor &HFFile::get_tensor_view(const std::string &name) const {
+const StorageTensor &HFFile::get_tensor_view(const std::string &name) const {
     auto it = views_.find(name);
     if (it == views_.end()) {
         throw std::runtime_error("HFFile 缺少张量：" + name);
     }
-    // 权重解析发生在全局 pool 就绪之后，这里补写 pool 链接，
-    // 使持有该 view 的 module 无需再单独传 pool。
-    const_cast<DiskTensor &>(it->second).pool = &global_cuda_weight_pool();
     return it->second;
 }
 
@@ -265,11 +262,11 @@ void HFFile::debug_dump() const {
         out << "  shard=" << shard.path.filename().string() << " bytes=" << shard.size << "\n";
     }
     out << "  === tensors (" << views_.size() << ") ===\n";
-    for (const auto &[name, view]: views_) {
+    for (const auto &[name, s_view]: views_) {
         out << "  " << name
-                << " dtype=" << dtype_name(view.dtype)
-                << " shape=" << shape_to_string(view.shape)
-                << " nbytes=" << view.nbytes << "\n";
+                << " dtype=" << dtype_name(s_view.dtype)
+                << " shape=" << shape_to_string(s_view.shape)
+                << " nbytes=" << s_view.nbytes << "\n";
     }
     Log::debug(out.str());
 }

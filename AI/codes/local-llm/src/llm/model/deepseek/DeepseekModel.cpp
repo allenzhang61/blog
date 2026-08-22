@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "backend/cuda/mem/CudaScratch.h"
+#include "tensor/GPUTensor.h"
 
 DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, const SamplingConfig &sampling)
     : mf_(std::move(mf)),
@@ -15,8 +16,8 @@ DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, cons
       weights_(*mf_, config_),
       max_output_tokens_(max_output_tokens),
       sampler_(sampling),
-      embedding_(*weights_.token_embd),
-      lm_head_(*weights_.output) {
+      embedding_(*weights_.s_token_embd),
+      lm_head_(*weights_.s_output) {
     config_.DebugDump();
     mla_layers_.reserve(config_.num_layers);
     mlp_layers_.reserve(config_.num_layers);
@@ -28,40 +29,40 @@ DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, cons
 
 DeepseekModel::~DeepseekModel() = default;
 
-int DeepseekModel::forward_session(DeepseekSession &session, const CPUTensor &input, int start_pos) {
+int DeepseekModel::forward_session(DeepseekSession &session, const CPUTensor &c_input, int start_pos) {
     auto &scratch = session.scratch;
-    const int input_size = static_cast<int>(input.numel());
+    const int input_size = static_cast<int>(c_input.numel());
     const int hidden_size = config_.hidden_size;
 
-    GPUTensor hidden = GPUTensor::gpu_scratch(
-        scratch, scratch_key::kHidden, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)});
-    embedding_.forward(input, hidden, scratch);
+    GPUTensor g_hidden = GPUTensor(
+        scratch, scratch_key::kHidden, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)},
+        DType::F32);
+    embedding_.forward(c_input, g_hidden, scratch);
 
     for (int i = 0; i < config_.num_layers; ++i) {
-        mla_layers_[i].forward(session, hidden, start_pos);
-        mlp_layers_[i].forward(session, hidden);
+        mla_layers_[i].forward(session, g_hidden, start_pos);
+        mlp_layers_[i].forward(session, g_hidden);
     }
 
     const int last = input_size - 1;
-    float *d_hidden = hidden.gpu_f32();
-    float *d_last = d_hidden + static_cast<size_t>(last) * hidden_size;
-    GPUTensor last_view = GPUTensor::gpu_view(d_last, {1, static_cast<int64_t>(hidden_size)});
-    GPUTensor normed = GPUTensor::gpu_scratch(
-        scratch, scratch_key::kNormed, {1, static_cast<int64_t>(hidden_size)});
-    RMSNorm::forward(*weights_.output_norm, last_view, normed,
+    const size_t last_offset = static_cast<size_t>(last) * hidden_size * sizeof(float);
+    GPUTensor g_last_view = GPUTensor(g_hidden, last_offset, {1, static_cast<int64_t>(hidden_size)});
+    GPUTensor g_normed = GPUTensor(
+        scratch, scratch_key::kNormed, {1, static_cast<int64_t>(hidden_size)}, DType::F32);
+    RMSNorm::forward(*weights_.s_output_norm, g_last_view, g_normed,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    return lm_head_.forward(session, normed, sampler_);
+    return lm_head_.forward(session, g_normed, sampler_);
 }
 
-int DeepseekModel::prefill(const CPUTensor &input) {
-    session_ = std::make_unique<DeepseekSession>(config_, input, max_output_tokens_);
-    return forward_session(*session_, input, 0);
+int DeepseekModel::prefill(const CPUTensor &c_input) {
+    session_ = std::make_unique<DeepseekSession>(config_, c_input, max_output_tokens_);
+    return forward_session(*session_, c_input, 0);
 }
 
 int DeepseekModel::decode(int prev_token_id, int pos) {
-    CPUTensor input = CPUTensor::host_view(&prev_token_id, {1}, DType::I32);
-    return forward_session(*session_, input, pos);
+    CPUTensor c_input = CPUTensor(&prev_token_id, {1}, DType::I32);
+    return forward_session(*session_, c_input, pos);
 }
 
 void DeepseekModel::append_output(int token_id) {

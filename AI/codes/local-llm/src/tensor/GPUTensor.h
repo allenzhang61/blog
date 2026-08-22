@@ -7,21 +7,36 @@
 
 #include "tensor/TensorCommon.h"
 
+#include <memory>
+
+class CPUTensor;
 class CudaScratch;
+class CudaWeight;
+class CudaWeightPool;
+class StorageTensor;
 
 class GPUTensor : public TensorShape {
 public:
-    void *data = nullptr;
+    GPUTensor() = default;
+    GPUTensor(CudaWeight &&weight, std::vector<int64_t> shape);
+    GPUTensor(std::shared_ptr<CudaWeight> weight, std::vector<int64_t> shape);
+    GPUTensor(CudaScratch &scratch, const std::string &key,
+              std::vector<int64_t> shape, DType dt);
+    GPUTensor(const GPUTensor &parent, size_t byte_offset,
+              std::vector<int64_t> shape);
 
-    static GPUTensor gpu_scratch(CudaScratch &scratch, const std::string &key,
-                                 std::vector<int64_t> shape, DType dt = DType::F32);
-    static GPUTensor gpu_view(void *device_ptr, std::vector<int64_t> shape,
-                              DType dt = DType::F32);
+    void *data() const { return data_; }
+    CPUTensor to_host(void *host_ptr, const std::string &what) const;
 
-    float *gpu_f32() const;
-    int *gpu_i32() const;
-    void *gpu_data() const { return data; }
-    void to_host(void *host_ptr, const std::string &what) const;
+private:
+    friend class StorageTensor;
+
+    void init_from_weight(const CudaWeight &weight, std::vector<int64_t> shape);
+
+    void *data_ = nullptr;
+    CudaWeightPool *pool_ = nullptr;
+    std::shared_ptr<CudaWeight> owned_weight_;
+    std::shared_ptr<void> weight_view_lease_;
 };
 
 #endif // LOCAL_LLM_GPUTENSOR_H

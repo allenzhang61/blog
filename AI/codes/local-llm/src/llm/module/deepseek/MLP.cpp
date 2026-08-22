@@ -5,16 +5,17 @@
 #include "MLP.h"
 
 #include "llm/model/deepseek/DeepseekWeights.h"
+#include "tensor/GPUTensor.h"
 
 MLP::MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : weights_(weights),
       dense_(weights, config),
       moe_(weights, config) {}
 
-void MLP::forward(DeepseekSession &session, const GPUTensor &hidden) {
+void MLP::forward(DeepseekSession &session, const GPUTensor &g_hidden) {
     if (weights_.is_moe) {
-        moe_.forward(session, hidden);
+        moe_.forward(session, g_hidden);
     } else {
-        dense_.forward(session, hidden);
+        dense_.forward(session, g_hidden);
     }
 }

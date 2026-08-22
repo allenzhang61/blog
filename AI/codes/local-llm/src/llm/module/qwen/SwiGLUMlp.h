@@ -7,7 +7,7 @@
 
 #include "llm/module/Module.h"
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/StorageTensor.h"
 
 struct MlpWeights;
 class QwenSession;
@@ -21,9 +21,9 @@ class SwiGLUMlp : public Module {
 public:
     SwiGLUMlp(const MlpWeights &weights);
 
-    // 对隐状态做 MLP（prefill 时行数=tokens，decode 时行数=1，由 in.shape 推出）。
-    // in / out：[rows, hidden_size]，允许原位。中间量从 session.scratch 取。
-    void forward(QwenSession &session, const GPUTensor &in, const GPUTensor &out);
+    // 对隐状态做 MLP（prefill 时行数=tokens，decode 时行数=1，由 g_in.shape 推出）。
+    // g_in / g_out：[rows, hidden_size]，允许原位。中间量从 session.scratch 取。
+    void forward(QwenSession &session, const GPUTensor &g_in, const GPUTensor &g_out);
 
 private:
     const MlpWeights &weights_;

@@ -7,18 +7,18 @@
 #include <cstddef>
 #include <vector>
 
-#include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/SessionBase.h"
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/GPUTensor.h"
+#include "tensor/StorageTensor.h"
 
 class QwenConfig;
 
 // full attention 层的 KV cache：跨 token，撑满整个请求。
 // key_cache / value_cache 形状均为 [max_seq_len, num_key_value_heads * head_dim]。
 struct FullAttnKVCache {
-    CudaWeight key_cache;
-    CudaWeight value_cache;
+    GPUTensor g_key_cache;
+    GPUTensor g_value_cache;
     // 已写入 KV cache 的 token 数（prefill + 已生成）。
     int seq_len = 0;
 };
@@ -27,9 +27,9 @@ struct FullAttnKVCache {
 struct LinearAttnRecurrentState {
     // depthwise conv 的滑动窗口状态，形状 [conv_dim, kernel]，
     // 其中 conv_dim = 2 * (key_heads * key_head_dim) + value_heads * value_head_dim。
-    CudaWeight conv_state;
+    GPUTensor g_conv_state;
     // 线性注意力的 recurrent 状态，形状 [value_heads, key_head_dim, value_head_dim]。
-    CudaWeight recurrent_state;
+    GPUTensor g_recurrent_state;
 };
 
 // 一次推理请求的资源作用域（per-request RAII scope）：
@@ -39,7 +39,7 @@ class QwenSession : public SessionBase {
 public:
     // 按 config 为每一层分配对应的 KV cache / recurrent state。
     // max_seq_len = inputs.numel() + max_output_tokens。
-    QwenSession(const QwenConfig &config, const CPUTensor &input, int max_output_tokens);
+    QwenSession(const QwenConfig &config, const CPUTensor &c_input, int max_output_tokens);
 
     // 每个 full_attention 层一份 KV cache；顺序与 config.layer_types 中 full 层出现顺序一致。
     std::vector<FullAttnKVCache> full_attn_kv_cache;

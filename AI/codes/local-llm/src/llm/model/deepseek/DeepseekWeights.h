@@ -23,31 +23,31 @@ struct DeepseekLayerWeights {
     int layer_index = 0;
 
     // 归一化
-    const DiskTensor *attn_norm = nullptr;  // blk.i.attn_norm.weight [hidden]
-    const DiskTensor *ffn_norm = nullptr;   // blk.i.ffn_norm.weight  [hidden]
+    const StorageTensor *s_attn_norm = nullptr;  // blk.i.d_attn_norm.weight [hidden]
+    const StorageTensor *s_ffn_norm = nullptr;   // blk.i.d_ffn_norm.weight  [hidden]
 
     // MLA
-    const DiskTensor *attn_q = nullptr;         // [n_heads*qk_head_dim, hidden]      (out=3072, in=hidden)
-    const DiskTensor *attn_kv_a_mqa = nullptr;  // [kv_lora+qk_rope, hidden]          (out=576,  in=hidden)
-    const DiskTensor *attn_kv_a_norm = nullptr; // [kv_lora]
-    const DiskTensor *attn_kv_b = nullptr;      // [n_heads*(qk_nope+v_head), kv_lora] (out=4096, in=512)
-    const DiskTensor *attn_output = nullptr;    // [hidden, n_heads*v_head]           (out=hidden, in=2048)
+    const StorageTensor *s_attn_q = nullptr;         // [n_heads*qk_head_dim, hidden]      (out=3072, in=hidden)
+    const StorageTensor *s_attn_kv_a_mqa = nullptr;  // [kv_lora+qk_rope, hidden]          (out=576,  in=hidden)
+    const StorageTensor *s_attn_kv_a_norm = nullptr; // [kv_lora]
+    const StorageTensor *s_attn_kv_b = nullptr;      // [n_heads*(qk_nope+v_head), kv_lora] (out=4096, in=512)
+    const StorageTensor *s_attn_output = nullptr;    // [hidden, n_heads*v_head]           (out=hidden, in=2048)
 
     bool is_moe = false;
 
     // dense 层（layer < first_k_dense）
-    const DiskTensor *ffn_gate = nullptr; // [dense_ffn, hidden]
-    const DiskTensor *ffn_up = nullptr;   // [dense_ffn, hidden]
-    const DiskTensor *ffn_down = nullptr; // [hidden, dense_ffn]
+    const StorageTensor *s_ffn_gate = nullptr; // [dense_ffn, hidden]
+    const StorageTensor *s_ffn_up = nullptr;   // [dense_ffn, hidden]
+    const StorageTensor *s_ffn_down = nullptr; // [hidden, dense_ffn]
 
     // MoE 层
-    const DiskTensor *ffn_gate_inp = nullptr;    // router [n_experts, hidden] F32
-    const DiskTensor *ffn_gate_exps = nullptr;   // [n_experts, expert_ffn, hidden]（逐 expert 切片得 [expert_ffn, hidden]）
-    const DiskTensor *ffn_up_exps = nullptr;     // [n_experts, expert_ffn, hidden]
-    const DiskTensor *ffn_down_exps = nullptr;   // [n_experts, hidden, expert_ffn]
-    const DiskTensor *ffn_gate_shexp = nullptr;  // shared [shared_ffn, hidden]
-    const DiskTensor *ffn_up_shexp = nullptr;    // [shared_ffn, hidden]
-    const DiskTensor *ffn_down_shexp = nullptr;  // [hidden, shared_ffn]
+    const StorageTensor *s_ffn_gate_inp = nullptr;    // router [n_experts, hidden] F32
+    const StorageTensor *s_ffn_gate_exps = nullptr;   // [n_experts, expert_ffn, hidden]（逐 expert 切片得 [expert_ffn, hidden]）
+    const StorageTensor *s_ffn_up_exps = nullptr;     // [n_experts, expert_ffn, hidden]
+    const StorageTensor *s_ffn_down_exps = nullptr;   // [n_experts, hidden, expert_ffn]
+    const StorageTensor *s_ffn_gate_shexp = nullptr;  // shared [shared_ffn, hidden]
+    const StorageTensor *s_ffn_up_shexp = nullptr;    // [shared_ffn, hidden]
+    const StorageTensor *s_ffn_down_shexp = nullptr;  // [hidden, shared_ffn]
 };
 
 class DeepseekWeights {
@@ -55,9 +55,9 @@ public:
     DeepseekWeights(const MF &mf, const DeepseekConfig &config);
 
     // 顶层
-    const DiskTensor *token_embd = nullptr;  // [vocab, hidden]
-    const DiskTensor *output_norm = nullptr; // [hidden]
-    const DiskTensor *output = nullptr;      // lm_head [vocab, hidden]（非 tie）
+    const StorageTensor *s_token_embd = nullptr;  // [vocab, hidden]
+    const StorageTensor *s_output_norm = nullptr; // [hidden]
+    const StorageTensor *s_output = nullptr;      // lm_head [vocab, hidden]（非 tie）
 
     std::vector<DeepseekLayerWeights> layers;
 

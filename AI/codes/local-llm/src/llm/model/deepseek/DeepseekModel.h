@@ -32,7 +32,7 @@ public:
     int eos_token_id() const override { return config_.eos_token_id; }
     std::vector<int> encode(const std::string &text) const override { return mf_->tokenizer_encode(text); }
     std::string decode_text(const std::vector<int> &ids) const override { return mf_->tokenizer_decode(ids); }
-    int prefill(const CPUTensor &input) override;
+    int prefill(const CPUTensor &c_input) override;
     int decode(int prev_token_id, int pos) override;
     void append_output(int token_id) override;
     const std::vector<int> &output() const override;
@@ -40,7 +40,7 @@ public:
     CudaWeightPool &weight_pool() override { return global_cuda_weight_pool(); }
 
 private:
-    int forward_session(DeepseekSession &session, const CPUTensor &input, int start_pos);
+    int forward_session(DeepseekSession &session, const CPUTensor &c_input, int start_pos);
 
     std::unique_ptr<MF> mf_;
     DeepseekConfig config_;

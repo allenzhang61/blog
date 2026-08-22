@@ -8,6 +8,7 @@
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
+#include "tensor/GPUTensor.h"
 #include "tensor/TensorTool.h"
 
 #include <cstddef>
@@ -16,23 +17,23 @@
 SharedExperts::SharedExperts(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config), lw_(weights) {}
 
-void SharedExperts::forward(DeepseekSession &session, const GPUTensor &normed, const GPUTensor &moe) {
-    const int input_size = static_cast<int>(normed.rows());
+void SharedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed, const GPUTensor &g_moe) {
+    const int input_size = static_cast<int>(g_normed.rows());
     auto &s = session.scratch;
     const int hidden_size = config_.hidden_size;
     const int shared_ffn = config_.shared_ffn();
 
     const std::vector<int64_t> shared_shape = {static_cast<int64_t>(input_size), static_cast<int64_t>(shared_ffn)};
-    GPUTensor gate = GPUTensor::gpu_scratch(s, scratch_key::kGate, shared_shape);
-    GPUTensor up = GPUTensor::gpu_scratch(s, scratch_key::kUp, shared_shape);
-    TensorTool::gemm(*lw_.ffn_gate_shexp, normed, gate, s, scratch_key::kFfnInLowp, "ds.gemm.sgate");
-    TensorTool::gemm(*lw_.ffn_up_shexp, normed, up, s, scratch_key::kFfnInLowp, "ds.gemm.sup");
+    GPUTensor g_gate = GPUTensor(s, scratch_key::kGate, shared_shape, DType::F32);
+    GPUTensor g_up = GPUTensor(s, scratch_key::kUp, shared_shape, DType::F32);
+    TensorTool::gemm(*lw_.s_ffn_gate_shexp, g_normed, g_gate, s, scratch_key::kFfnInLowp, "ds.gemm.sgate");
+    TensorTool::gemm(*lw_.s_ffn_up_shexp, g_normed, g_up, s, scratch_key::kFfnInLowp, "ds.gemm.sup");
 
-    GPUTensor act = GPUTensor::gpu_scratch(s, scratch_key::kAct, shared_shape);
-    TensorTool::silu_mul(gate, up, act);
+    GPUTensor g_act = GPUTensor(s, scratch_key::kAct, shared_shape, DType::F32);
+    TensorTool::silu_mul(g_gate, g_up, g_act);
 
-    GPUTensor ffn_out = GPUTensor::gpu_scratch(
-        s, scratch_key::kFfnOut, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)});
-    TensorTool::gemm(*lw_.ffn_down_shexp, act, ffn_out, s, scratch_key::kActLowp, "ds.gemm.sdown");
-    TensorTool::add(moe, ffn_out, moe);
+    GPUTensor g_ffn_out = GPUTensor(
+        s, scratch_key::kFfnOut, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)}, DType::F32);
+    TensorTool::gemm(*lw_.s_ffn_down_shexp, g_act, g_ffn_out, s, scratch_key::kActLowp, "ds.gemm.sdown");
+    TensorTool::add(g_moe, g_ffn_out, g_moe);
 }

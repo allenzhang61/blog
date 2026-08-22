@@ -93,6 +93,7 @@ inline constexpr const char *kTokenHiddenA = "token_hidden_a"; // decode 层间�
 inline constexpr const char *kTokenHiddenB = "token_hidden_b"; // decode 层间双缓冲 b
 
 // ---- deepseek MLA ----
+inline constexpr const char *kInvFreq = "inv_freq";          // [rope_dim/2] YARN inv_freq
 inline constexpr const char *kNormed = "normed";             // [tokens, hidden]
 inline constexpr const char *kNormedLowp = "normed_lowp";
 inline constexpr const char *kQ = "q";                       // [tokens, n_heads*qk_head]

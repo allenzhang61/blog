@@ -40,9 +40,9 @@ public:
     // 获取 device 权重缓存；首次访问时从 mmap host 权重上传到 GPU。
     // BF16/F16/F32 权重可直接用于 GEMM；量化权重以 CUDA_R_8I 标记原始字节，
     // 使用前需由 Quant 反量化。单个权重超过上限时返回 nullptr。
-    CudaWeight *cached_weight(const DiskTensor &weight);
+    CudaWeight *cached_weight(const StorageTensor &s_weight);
     // 只查询已经上传的 device 权重缓存；miss 时返回 nullptr，不触发上传。
-    CudaWeight *find_cached_weight(const DiskTensor &weight);
+    CudaWeight *find_cached_weight(const StorageTensor &s_weight);
 
     // 已缓存权重的总字节数。
     size_t cached_bytes() const { return bytes_; }
@@ -62,10 +62,10 @@ private:
     static size_t cache_limit_bytes();
 
     // 将 safetensors dtype 映射为 CUDA / cuBLAS dtype。
-    static cudaDataType_t cuda_type_for(const DiskTensor &weight);
+    static cudaDataType_t cuda_type_for(const StorageTensor &s_weight);
 
     // 返回当前支持 dtype 的单元素字节数。
-    static size_t dtype_size_for(const DiskTensor &weight);
+    static size_t dtype_size_for(const StorageTensor &s_weight);
 
     // 计时版显存分配：timed 为 true 时用 CUDA event 测 cudaMalloc 耗时（毫秒，写入 out_ms），
     // 否则退化为普通分配、耗时返回 0。

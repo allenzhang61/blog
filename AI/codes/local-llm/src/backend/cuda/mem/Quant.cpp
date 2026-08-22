@@ -34,9 +34,9 @@ bool is_quantized_dtype(DType dtype) {
     }
 }
 
-int64_t num_elements(const DiskTensor &tensor) {
+int64_t num_elements(const StorageTensor &s_tensor) {
     int64_t n = 1;
-    for (int64_t dim : tensor.shape) {
+    for (int64_t dim : s_tensor.shape) {
         n *= dim;
     }
     return n;

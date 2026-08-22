@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/StorageTensor.h"
 
 class CudaWeightPool;
 class MemoryUsageProvider;
@@ -43,7 +43,7 @@ public:
     virtual std::string decode_text(const std::vector<int> &ids) const = 0;
 
     // prefill：为一次新生成开启内部 Session，喂入整段 prompt token，返回首个生成 token id。
-    virtual int prefill(const CPUTensor &input) = 0;
+    virtual int prefill(const CPUTensor &c_input) = 0;
 
     // decode：喂入上一个 token（位置 pos），返回下一个 token id。复用 prefill 建立的 Session。
     virtual int decode(int prev_token_id, int pos) = 0;

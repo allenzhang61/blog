@@ -10,7 +10,7 @@
 #include "format/MF.h"
 
 // RMSNorm（无 bias）：对最后一维做 RMS 归一化后乘以可学习权重。
-//   y = x / sqrt(mean(x^2) + eps) * weight
+//   y = x / sqrt(mean(x^2) + eps) * s_weight
 // 权重形状 [hidden_size]，逐通道缩放。
 //
 // 无状态工具，直接调用静态 forward，权重、eps、one_plus 均在调用时传入：
@@ -18,12 +18,12 @@
 //   - DeepSeek 风格：one_plus 传 false（权重按原值缩放）。
 class RMSNorm {
 public:
-    // 对 input 做归一化写入 output。input / output 均为 device 激活视图（GPUTensor），
+    // 对 g_input 做归一化写入 g_output。g_input / g_output 均为 device 激活视图（GPUTensor），
     // 形状 [rows, hidden_size]（prefill 时 rows=tokens，decode 时 rows=1），rows/hidden_size
-    // 由 input.shape 推出。允许 input 与 output 指向同一 device 内存做原位归一化。
-    // weight：gamma 权重；eps：数值稳定项；
+    // 由 g_input.shape 推出。允许 g_input 与 g_output 指向同一 device 内存做原位归一化。
+    // s_weight：gamma 权重；eps：数值稳定项；
     // one_plus：权重是否按 (1 + gamma) 缩放。
-    static void forward(const DiskTensor &weight, const GPUTensor &input, const GPUTensor &output,
+    static void forward(const StorageTensor &s_weight, const GPUTensor &g_input, const GPUTensor &g_output,
                         float eps, bool one_plus);
 };
 

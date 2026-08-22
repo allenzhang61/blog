@@ -61,8 +61,8 @@ add_executable(local_llm main.cpp
         src/format/MF.cpp
         src/format/MF.h
         src/tensor/TensorCommon.h
-        src/tensor/DiskTensor.cpp
-        src/tensor/DiskTensor.h
+        src/tensor/StorageTensor.cpp
+        src/tensor/StorageTensor.h
         src/tensor/CPUTensor.cpp
         src/tensor/CPUTensor.h
         src/tensor/GPUTensor.cpp

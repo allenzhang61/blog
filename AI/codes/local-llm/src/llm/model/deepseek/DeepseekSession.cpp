@@ -4,6 +4,9 @@
 
 #include "DeepseekSession.h"
 
+#include "backend/cuda/mem/CudaScratch.h"
+#include "backend/cuda/mem/CudaWeight.h"
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -18,16 +21,18 @@ float yarn_corr_dim(float num_rot, int dim, float base, int orig_ctx) {
 
 } // namespace
 
-DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &input,
+DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &c_input,
                                  int max_output_tokens) {
-    max_seq_len = static_cast<int>(input.numel()) + max_output_tokens;
+    max_seq_len = static_cast<int>(c_input.numel()) + max_output_tokens;
 
     // latent KV cache：每层 [max_seq_len, kv_lora + qk_rope] float。
     const int kv_total = config.kv_lora_rank + config.qk_rope_head_dim;
     kv_caches.resize(config.num_layers);
     for (int i = 0; i < config.num_layers; ++i) {
         const size_t bytes = static_cast<size_t>(max_seq_len) * kv_total * sizeof(float);
-        kv_caches[i].cache = CudaWeight(bytes, CUDA_R_32F, false, "deepseek.kv_cache");
+        kv_caches[i].g_cache = GPUTensor(
+            CudaWeight(bytes, CUDA_R_32F, false, "deepseek.kv_cache"),
+            {static_cast<int64_t>(max_seq_len), static_cast<int64_t>(kv_total)});
         kv_caches[i].seq_len = 0;
     }
 
@@ -67,15 +72,14 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &
     // llama.cpp 中作用于 RoPE 的 cos/sin 幅值，对短上下文近似为恒等；直接把它塞进
     // softmax 会过度放大注意力打分导致退化（实测验证），故这里不做额外缩放。
     attn_softmax_scale = 1.0f / std::sqrt(static_cast<float>(config.qk_head_dim()));
-    inv_freq = CudaWeight(static_cast<size_t>(half) * sizeof(float), CUDA_R_32F, false,
-                          "deepseek.inv_freq");
-    CPUTensor::host_view(h_inv_freq.data(), {half}, DType::F32).to_gpu(inv_freq.ptr, "deepseek.inv_freq h2d");
+    g_inv_freq = CPUTensor(h_inv_freq.data(), {half}, DType::F32)
+                     .to_gpu(scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
 }
 
 size_t DeepseekSession::kv_state_bytes() const {
     size_t total = 0;
     for (const auto &kv : kv_caches) {
-        total += kv.cache.bytes;
+        total += kv.g_cache.nbytes;
     }
     return total;
 }

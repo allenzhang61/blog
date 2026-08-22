@@ -7,7 +7,7 @@
 
 #include "llm/module/Module.h"
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/StorageTensor.h"
 
 class DeepseekConfig;
 class DeepseekSession;
@@ -17,8 +17,8 @@ class SharedExperts : public Module {
 public:
     SharedExperts(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    // normed：归一化后的输入 [input_size, hidden_size]；moe：累加输出 [input_size, hidden_size]。
-    void forward(DeepseekSession &session, const GPUTensor &normed, const GPUTensor &moe);
+    // g_normed：归一化后的输入 [input_size, hidden_size]；g_moe：累加输出 [input_size, hidden_size]。
+    void forward(DeepseekSession &session, const GPUTensor &g_normed, const GPUTensor &g_moe);
 
 private:
     const DeepseekConfig &config_;

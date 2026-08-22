@@ -5,17 +5,17 @@
 #ifndef LOCAL_LLM_DEEPSEEK_SESSION_H
 #define LOCAL_LLM_DEEPSEEK_SESSION_H
 
-#include "backend/cuda/mem/CudaWeight.h"
 #include "backend/cuda/mem/SessionBase.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/StorageTensor.h"
+#include "tensor/GPUTensor.h"
 
 #include <vector>
 
 // 每层 latent KV cache：布局 [max_seq_len, kv_lora + qk_rope]，float。
 struct LatentKVCache {
-    CudaWeight cache;
+    GPUTensor g_cache;
     int seq_len = 0;
 };
 
@@ -23,11 +23,11 @@ struct LatentKVCache {
 // 前向 scratch 与已生成 token。prefill 时重建，decode 时复用。
 class DeepseekSession : public SessionBase {
 public:
-    DeepseekSession(const DeepseekConfig &config, const CPUTensor &input,
+    DeepseekSession(const DeepseekConfig &config, const CPUTensor &c_input,
                     int max_output_tokens);
 
     std::vector<LatentKVCache> kv_caches;
-    CudaWeight inv_freq;          // [rope_dim/2] float，YARN 校正后的频率（device）
+    GPUTensor g_inv_freq;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）
     float attn_softmax_scale = 0; // = mscale^2 / sqrt(qk_head)
 
     size_t kv_state_bytes() const override;

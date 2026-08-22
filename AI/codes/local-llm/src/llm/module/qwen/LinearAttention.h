@@ -7,7 +7,7 @@
 
 #include "llm/module/Module.h"
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/StorageTensor.h"
 
 struct LinearAttnWeights;
 struct TextConfig;
@@ -26,12 +26,12 @@ public:
     LinearAttention(const LinearAttnWeights &weights, const TextConfig &config);
 
     // prefill：一次处理 tokens 个位置，扫描更新 recurrent state 并算出输出。
-    // hidden：[tokens, hidden_size]；out：[tokens, hidden_size]。
-    void prefill(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out);
+    // g_hidden：[tokens, hidden_size]；g_out：[tokens, hidden_size]。
+    void prefill(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out);
 
     // decode：处理单个新 token，基于已有 recurrent state 递推一步。
-    // hidden：[1, hidden_size]；out：[1, hidden_size]。
-    void decode(QwenSession &session, const GPUTensor &hidden, const GPUTensor &out);
+    // g_hidden：[1, hidden_size]；g_out：[1, hidden_size]。
+    void decode(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out);
 
 private:
     const LinearAttnWeights &weights_;

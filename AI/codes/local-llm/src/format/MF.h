@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/StorageTensor.h"
 
 using Metadata = std::variant<int64_t, float, std::string, bool,
                               std::vector<int64_t>, std::vector<std::string>>;
@@ -30,7 +30,7 @@ public:
     // 是否存在某张量。
     virtual bool contain_tensor_view(const std::string &name) const = 0;
     // 按名返回张量视图；不存在时抛异常。
-    virtual const DiskTensor &get_tensor_view(const std::string &name) const = 0;
+    virtual const StorageTensor &get_tensor_view(const std::string &name) const = 0;
     // 全部张量名。
     virtual std::vector<std::string> tensor_view_names() const = 0;
 

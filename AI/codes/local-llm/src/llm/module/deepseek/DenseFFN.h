@@ -7,7 +7,7 @@
 
 #include "llm/module/Module.h"
 #include "tensor/CPUTensor.h"
-#include "tensor/DiskTensor.h"
+#include "tensor/StorageTensor.h"
 
 class DeepseekConfig;
 class DeepseekSession;
@@ -17,7 +17,7 @@ class DenseFFN : public Module {
 public:
     DenseFFN(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, const GPUTensor &hidden);
+    void forward(DeepseekSession &session, const GPUTensor &g_hidden);
 
 private:
     const DeepseekConfig &config_;
