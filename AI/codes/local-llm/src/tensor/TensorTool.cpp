@@ -13,57 +13,86 @@
 #include <stdexcept>
 
 namespace {
+    int norm_weight_type_of(DType dtype) {
+        if (dtype == DType::BF16) return 0;
+        if (dtype == DType::F16) return 1;
+        throw std::runtime_error(std::string("RMSNorm 不支持的 norm dtype：") + dtype_name(dtype));
+    }
 
-int norm_weight_type_of(DType dtype) {
-    if (dtype == DType::BF16) return 0;
-    if (dtype == DType::F16) return 1;
-    if (dtype == DType::F32) return 2;
-    throw std::runtime_error(std::string("RMSNorm 不支持的 norm dtype：") + dtype_name(dtype));
-}
+    int embedding_weight_type_of(DType dtype) {
+        if (dtype == DType::BF16) return 0;
+        if (dtype == DType::F16) return 1;
+        throw std::runtime_error(std::string("Embedding 不支持的 norm dtype：") + dtype_name(dtype));
+    }
 
-const uint16_t *lowp_data(const StorageTensor &s_weight) {
-    GPUTensor g_device_weight = s_weight.to_gpu(true);
-    return g_device_weight.data<uint16_t>();
-}
+    cudaDataType_t cuda_type_of(DType dtype) {
+        if (dtype == DType::BF16) return CUDA_R_16BF;
+        if (dtype == DType::F16) return CUDA_R_16F;
+        if (dtype == DType::F32) return CUDA_R_32F;
+        throw std::runtime_error(std::string("gemm 不支持 dtype: ") + dtype_name(dtype));
+    }
 
-const float *f32_data(const StorageTensor &s_weight) {
-    GPUTensor g_device_weight = s_weight.to_gpu(true);
-    return g_device_weight.data<float>();
-}
+    const uint16_t *lowp_data(const StorageTensor &s_weight) {
+        GPUTensor g_device_weight = s_weight.to_gpu(true);
+        return g_device_weight.data<uint16_t>();
+    }
 
+    const float *f32_data(const StorageTensor &s_weight) {
+        GPUTensor g_device_weight = s_weight.to_gpu(true);
+        return g_device_weight.data<float>();
+    }
 } // namespace
 
-void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input, const GPUTensor &g_output,
+//w*x=y
+void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                       CudaScratch &scratch, const std::string &lowp_key, const char *name) {
     GPUTensor g_weight = s_weight.to_gpu(true);
-    const int out_dim = static_cast<int>(s_weight.shape[0]);
-    const int in_dim = static_cast<int>(s_weight.shape[1]);
-    const size_t input_size = static_cast<size_t>(g_input.rows());
-    uint16_t *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(g_input.numel()));
-    GemmInput gemm_in = prepare_gemm_input(g_input.data<float>(), d_input_lowp,
-                                           static_cast<size_t>(g_input.numel()), g_weight.dtype, nullptr);
-    gemm_weight(global_cuda_weight_pool().handle, g_weight, gemm_in.ptr, g_output.data<float>(),
-                out_dim, in_dim, input_size, gemm_in.type, name);
+    uint16_t *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(g_input_f32.numel()));
+
+    const void *d_input = g_input_f32.data<float>();
+    cudaDataType_t d_input_type = CUDA_R_32F;
+    if (g_weight.dtype == DType::BF16 || g_weight.dtype == DType::F16) {
+        if (g_weight.dtype == DType::BF16) {
+            launch_f32_to_bf16_copy(g_input_f32.data<float>(), d_input_lowp,
+                                    g_input_f32.numel(), nullptr);
+        } else {
+            launch_f32_to_f16_copy(g_input_f32.data<float>(), d_input_lowp,
+                                   g_input_f32.numel(), nullptr);
+        }
+        d_input = d_input_lowp;
+        d_input_type = (g_weight.dtype == DType::BF16) ? CUDA_R_16BF : CUDA_R_16F;
+    } else if (g_weight.dtype != DType::F32) {
+        throw std::runtime_error(std::string("gemm 不支持 dtype: ") + dtype_name(g_weight.dtype));
+    }
+
+    gemm_main(global_cuda_weight_pool().handle, g_weight.data(), d_input, g_output_f32.data<float>(),
+                static_cast<int>(s_weight.shape[0]), static_cast<int>(s_weight.shape[1]),
+                static_cast<size_t>(g_input_f32.rows()),
+                cuda_type_of(g_weight.dtype), d_input_type, g_weight.nbytes,
+                name);
 }
 
-void TensorTool::embedding_lookup(const StorageTensor &s_table, CPUTensor c_input, const GPUTensor &g_hidden,
+void TensorTool::embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32,
+                                  const GPUTensor &g_hidden_f32,
                                   CudaScratch &scratch) {
-    GPUTensor g_device_input = c_input.to_gpu(scratch, scratch_key::kInput,
-                                          "cudaMemcpy embedding token ids 失败");
-    GPUTensor g_device_table = s_table.to_gpu(true);
-    const int lowp_type = (g_device_table.dtype == DType::F16) ? 1 : 0;
-    launch_embedding_lookup(g_device_input.data<int>(), g_hidden.data<float>(),
-                            g_device_table.data<uint16_t>(),
-                            static_cast<int>(c_input.numel()), static_cast<int>(s_table.shape[0]),
-                            static_cast<int>(s_table.shape[1]), lowp_type, nullptr);
+    GPUTensor g_input_i32 = c_input_i32.to_gpu(scratch, scratch_key::kInput,
+                                               "cudaMemcpy embedding token ids 失败");
+    GPUTensor g_table_u16 = s_table.to_gpu(true);
+    launch_embedding_lookup(g_input_i32.data<int>(), g_hidden_f32.data<float>(),
+                            g_table_u16.data<uint16_t>(),
+                            static_cast<int>(c_input_i32.numel()), static_cast<int>(s_table.shape[0]),
+                            static_cast<int>(s_table.shape[1]), embedding_weight_type_of(s_table.dtype),
+                            nullptr);
 }
 
-void TensorTool::rms_norm(const StorageTensor &s_weight, const GPUTensor &g_input, const GPUTensor &g_output,
+void TensorTool::rms_norm(const StorageTensor &s_weight_u16, const GPUTensor &g_input_f32,
+                          const GPUTensor &g_output_f32,
                           float eps, bool one_plus) {
-    GPUTensor g_weight = s_weight.to_gpu(true);
-    launch_rms_norm(g_input.data<float>(), g_output.data<float>(), g_weight.data(),
-                    norm_weight_type_of(g_weight.dtype), static_cast<int>(g_input.rows()),
-                    static_cast<int>(g_input.cols()), eps, one_plus, nullptr);
+    GPUTensor g_weight_u16 = s_weight_u16.to_gpu(true);
+    const int f16_or_bf16 = norm_weight_type_of(g_weight_u16.dtype);
+    launch_rms_norm(g_input_f32.data<float>(), g_output_f32.data<float>(), g_weight_u16.data<uint16_t>(),
+                    f16_or_bf16, static_cast<int>(g_input_f32.rows()),
+                    static_cast<int>(g_input_f32.cols()), eps, one_plus, nullptr);
 }
 
 void TensorTool::add(const GPUTensor &g_a, const GPUTensor &g_b, const GPUTensor &g_out, void *stream) {
@@ -71,14 +100,16 @@ void TensorTool::add(const GPUTensor &g_a, const GPUTensor &g_b, const GPUTensor
 }
 
 void TensorTool::silu_mul(const GPUTensor &g_gate, const GPUTensor &g_up, const GPUTensor &g_out, void *stream) {
-    launch_silu_mul(g_gate.data<float>(), g_up.data<float>(), g_out.data<float>(), static_cast<int>(g_out.numel()), stream);
+    launch_silu_mul(g_gate.data<float>(), g_up.data<float>(), g_out.data<float>(), static_cast<int>(g_out.numel()),
+                    stream);
 }
 
 void TensorTool::full_attention_q(const GPUTensor &g_q_and_gate, const StorageTensor &s_q_norm_weight,
                                   const GPUTensor &g_q, const GPUTensor &g_gate, int n_heads, int head_dim, int pos,
                                   float rope_theta, float partial_rotary_factor, float eps,
                                   void *stream) {
-    launch_full_attention_q(g_q_and_gate.data<float>(), lowp_data(s_q_norm_weight), g_q.data<float>(), g_gate.data<float>(), n_heads, head_dim, pos,
+    launch_full_attention_q(g_q_and_gate.data<float>(), lowp_data(s_q_norm_weight), g_q.data<float>(),
+                            g_gate.data<float>(), n_heads, head_dim, pos,
                             rope_theta, partial_rotary_factor, eps, stream);
 }
 
@@ -86,7 +117,8 @@ void TensorTool::full_attention_q_batch(const GPUTensor &g_q_and_gate, const Sto
                                         const GPUTensor &g_q, const GPUTensor &g_gate, int n_heads,
                                         int head_dim, int start_pos, float rope_theta,
                                         float partial_rotary_factor, float eps, void *stream) {
-    launch_full_attention_q_batch(g_q_and_gate.data<float>(), lowp_data(s_q_norm_weight), g_q.data<float>(), g_gate.data<float>(),
+    launch_full_attention_q_batch(g_q_and_gate.data<float>(), lowp_data(s_q_norm_weight), g_q.data<float>(),
+                                  g_gate.data<float>(),
                                   static_cast<int>(g_q_and_gate.rows()), n_heads,
                                   head_dim, start_pos, rope_theta, partial_rotary_factor, eps,
                                   stream);
@@ -172,7 +204,8 @@ void TensorTool::linear_attention_recurrent_batch(const GPUTensor &g_conv_out, c
                                                   int key_heads, int value_heads,
                                                   int k_dim, int v_dim, float eps,
                                                   void *stream) {
-    launch_linear_attention_recurrent_batch(g_conv_out.data<float>(), g_z.data<float>(), g_b.data<float>(), g_a.data<float>(),
+    launch_linear_attention_recurrent_batch(g_conv_out.data<float>(), g_z.data<float>(), g_b.data<float>(),
+                                            g_a.data<float>(),
                                             f32_data(s_a_log), lowp_data(s_dt_bias), f32_data(s_norm_weight),
                                             g_recurrent_state.data<float>(), g_gated.data<float>(),
                                             static_cast<int>(g_conv_out.rows()), key_heads,
@@ -195,16 +228,16 @@ void TensorTool::mla_kv_a_batch(const GPUTensor &g_kv_a, const StorageTensor &s_
                           max_seq_len, start_pos, g_inv_freq.data<float>(), eps, stream);
 }
 
-void TensorTool::mla_rope_q(const GPUTensor &g_q, int n_heads, int qk_nope, int qk_rope,
-                            int pos, const GPUTensor &g_inv_freq, void *stream) {
-    launch_mla_rope_q(g_q.data<float>(), n_heads, qk_nope, qk_rope, pos, g_inv_freq.data<float>(), stream);
+void TensorTool::mla_rope_q(const GPUTensor &g_q_f32, int n_heads, int qk_nope, int qk_rope,
+                            int pos, const GPUTensor &g_inv_freq_f32, void *stream) {
+    launch_mla_rope_q(g_q_f32.data<float>(), n_heads, qk_nope, qk_rope, pos, g_inv_freq_f32.data<float>(), stream);
 }
 
-void TensorTool::mla_rope_q_batch(const GPUTensor &g_q, int n_heads, int qk_nope,
-                                  int qk_rope, int start_pos, const GPUTensor &g_inv_freq,
+void TensorTool::mla_rope_q_batch(const GPUTensor &g_q_f32, int n_heads, int qk_nope,
+                                  int qk_rope, int start_pos, const GPUTensor &g_inv_freq_f32,
                                   void *stream) {
-    launch_mla_rope_q_batch(g_q.data<float>(), static_cast<int>(g_q.rows()), n_heads, qk_nope,
-                            qk_rope, start_pos, g_inv_freq.data<float>(), stream);
+    launch_mla_rope_q_batch(g_q_f32.data<float>(), static_cast<int>(g_q_f32.rows()), n_heads, qk_nope,
+                            qk_rope, start_pos, g_inv_freq_f32.data<float>(), stream);
 }
 
 void TensorTool::mla_attend(const GPUTensor &g_q, const GPUTensor &g_kv_b_out, const GPUTensor &g_kv_cache,

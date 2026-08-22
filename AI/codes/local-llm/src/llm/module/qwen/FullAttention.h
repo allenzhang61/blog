@@ -32,6 +32,11 @@ public:
     void decode(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out, int pos);
 
 private:
+    // Full attention 权重：
+    //   s_q_proj [num_attention_heads*head_dim*2, hidden_size]，交错输出 q/gate
+    //   s_k_proj/s_v_proj [num_key_value_heads*head_dim, hidden_size]
+    //   s_q_norm/s_k_norm [head_dim]
+    //   s_o_proj [hidden_size, num_attention_heads*head_dim]
     const FullAttnWeights &weights_;
     const TextConfig &config_;
     // 本层在 full attention 层序列中的下标，用于索引 QwenSession::full_attn_kv_cache。

@@ -21,6 +21,10 @@ public:
 
 private:
     const DeepseekConfig &config_;
+    // Dense FFN 权重：
+    //   s_ffn_norm [hidden]
+    //   s_ffn_gate/s_ffn_up [dense_ffn, hidden]
+    //   s_ffn_down [hidden, dense_ffn]
     const DeepseekLayerWeights &weights_;
 };
 

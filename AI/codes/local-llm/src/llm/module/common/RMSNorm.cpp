@@ -7,7 +7,7 @@
 #include "tensor/GPUTensor.h"
 #include "tensor/TensorTool.h"
 
-void RMSNorm::forward(const StorageTensor &s_weight, const GPUTensor &g_input, const GPUTensor &g_output,
-                      float eps, bool one_plus) {
-    TensorTool::rms_norm(s_weight, g_input, g_output, eps, one_plus);
+void RMSNorm::forward(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
+                      const GPUTensor &g_output_f32, float eps, bool one_plus) {
+    TensorTool::rms_norm(s_weight, g_input_f32, g_output_f32, eps, one_plus);
 }

@@ -5,13 +5,12 @@
 #ifndef LOCAL_LLM_COMMON_EMBEDDING_H
 #define LOCAL_LLM_COMMON_EMBEDDING_H
 
-#include <string>
-#include <vector>
-
-#include "format/MF.h"
 #include "llm/module/Module.h"
+#include "tensor/CPUTensor.h"
+#include "tensor/StorageTensor.h"
 
 class CudaScratch;
+class GPUTensor;
 
 namespace common {
 
@@ -19,15 +18,13 @@ namespace common {
 // 权重形状统一约定为 [vocab_size, hidden_size]。
 class Embedding : public Module {
 public:
-    Embedding(const StorageTensor &s_weight);
+    Embedding() = default;
 
     // 按 token id 逐行拷贝嵌入到 g_hidden（device 激活视图），形状 [tokens, hidden_size]。
     // c_input 为 host 侧 token id 视图（CPUTensor，dtype=I32）；scratch 提供
     // TensorTool 内部搬运 token id 到 device 所需的临时缓冲。
-    void forward(CPUTensor c_input, const GPUTensor &g_hidden, CudaScratch &scratch);
-
-private:
-    const StorageTensor &s_weight_;
+    void forward(const StorageTensor &s_weight, CPUTensor c_input_i32,
+                 const GPUTensor &g_hidden_f32, CudaScratch &scratch);
 };
 
 } // namespace common

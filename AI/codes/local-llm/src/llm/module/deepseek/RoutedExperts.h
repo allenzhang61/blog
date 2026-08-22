@@ -24,6 +24,9 @@ public:
 
 private:
     const DeepseekConfig &config_;
+    // Routed expert 权重：
+    //   s_ffn_gate_exps/s_ffn_up_exps [expert_count, expert_ffn, hidden]
+    //   s_ffn_down_exps [expert_count, hidden, expert_ffn]
     const DeepseekLayerWeights &lw_;
 };
 

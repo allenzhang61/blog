@@ -13,13 +13,13 @@ class CudaScratch;
 class TensorTool {
 public:
     // s_weight: [out_dim, in_dim]，g_input/g_output 均为 GPU float 激活视图。
-    static void gemm(const StorageTensor &s_weight, const GPUTensor &g_input, const GPUTensor &g_output,
+    static void gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                      CudaScratch &scratch, const std::string &lowp_key, const char *name = "");
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
-    static void embedding_lookup(const StorageTensor &s_table, CPUTensor c_input, const GPUTensor &g_hidden,
+    static void embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32, const GPUTensor &g_hidden_f32,
                                  CudaScratch &scratch);
     // s_weight: RMSNorm 权重，对 g_input 归一化后写入 g_output。
-    static void rms_norm(const StorageTensor &s_weight, const GPUTensor &g_input, const GPUTensor &g_output,
+    static void rms_norm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                          float eps, bool one_plus);
 
     static void add(const GPUTensor &g_a, const GPUTensor &g_b, const GPUTensor &g_out, void *stream = nullptr);
@@ -80,10 +80,10 @@ public:
                                int kv_lora, int qk_rope, int max_seq_len,
                                int start_pos, const GPUTensor &g_inv_freq, float eps,
                                void *stream = nullptr);
-    static void mla_rope_q(const GPUTensor &g_q, int n_heads, int qk_nope, int qk_rope, int pos,
-                           const GPUTensor &g_inv_freq, void *stream = nullptr);
-    static void mla_rope_q_batch(const GPUTensor &g_q, int n_heads, int qk_nope, int qk_rope,
-                                 int start_pos, const GPUTensor &g_inv_freq, void *stream = nullptr);
+    static void mla_rope_q(const GPUTensor &g_q_f32, int n_heads, int qk_nope, int qk_rope, int pos,
+                           const GPUTensor &g_inv_freq_f32, void *stream = nullptr);
+    static void mla_rope_q_batch(const GPUTensor &g_q_f32, int n_heads, int qk_nope, int qk_rope,
+                                 int start_pos, const GPUTensor &g_inv_freq_f32, void *stream = nullptr);
     static void mla_attend(const GPUTensor &g_q, const GPUTensor &g_kv_b_out, const GPUTensor &g_kv_cache,
                            const GPUTensor &g_attn, int n_heads, int qk_nope, int qk_rope, int v_head,
                            int kv_lora, int max_seq_len, int pos, float softmax_scale,

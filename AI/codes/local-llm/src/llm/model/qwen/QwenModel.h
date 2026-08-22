@@ -13,6 +13,7 @@
 #include "llm/module/common/Embedding.h"
 #include "llm/module/qwen/DecoderLayer.h"
 #include "llm/module/common/LMHead.h"
+#include "llm/module/common/RMSNorm.h"
 
 #include "format/MF.h"
 #include "llm/model/BaseModel.h"

@@ -23,6 +23,9 @@ public:
     void forward(DeepseekSession &session, const GPUTensor &g_hidden);
 
 private:
+    // 本层 FFN 权重集合：
+    //   dense 层使用 s_ffn_norm + s_ffn_gate/s_ffn_up/s_ffn_down
+    //   MoE 层使用 s_ffn_norm + router/expert/shared-expert 权重
     const DeepseekLayerWeights &weights_;
     DenseFFN dense_;
     MoE moe_;

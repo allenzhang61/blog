@@ -21,8 +21,8 @@ inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 __global__ void add_kernel(const float *a, const float *b, float *out, int n);
 __global__ void silu_mul_kernel(const float *gate, const float *up, float *out, int n);
 __global__ void embedding_lookup_kernel(const int *input, float *output, const uint16_t *table,
-                                        int vocab_size, int hidden_size, int lowp_type);
-__global__ void rms_norm_kernel(const float *input, float *output, const void *weight,
+                                        int vocab_size, int hidden_size, int weight_type);
+__global__ void rms_norm_kernel(const float *input, float *output, const uint16_t *weight,
                                 int weight_type, int hidden_size, float eps, bool one_plus);
 
 // ---- full attention ----
@@ -74,12 +74,12 @@ __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, c
                                                         int k_dim, int v_dim, float eps);
 
 // ---- dtype / dequant ----
-__global__ void float_to_lowp_kernel(const float *input, uint16_t *output, int n, int lowp_type);
 __global__ void dequantize_q4k_to_f16_kernel(const uint8_t *src, uint16_t *out, int64_t nblocks);
 __global__ void dequantize_q80_to_f16_kernel(const uint8_t *src, uint16_t *out, int64_t nblocks);
 __global__ void dequantize_q50_to_f16_kernel(const uint8_t *src, uint16_t *out, int64_t nblocks);
 __global__ void dequantize_q6k_to_f16_kernel(const uint8_t *src, uint16_t *out, int64_t nblocks);
 __global__ void f32_to_f16_copy_kernel(const float *src, uint16_t *out, int64_t n);
+__global__ void f32_to_bf16_copy_kernel(const float *src, uint16_t *out, int64_t n);
 
 // ---- MLA ----
 __global__ void mla_kv_a_kernel(const float *kv_a, const float *kv_a_norm_weight,

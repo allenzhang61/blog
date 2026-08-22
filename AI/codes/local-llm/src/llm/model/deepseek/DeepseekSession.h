@@ -27,7 +27,7 @@ public:
                     int max_output_tokens);
 
     std::vector<LatentKVCache> kv_caches;
-    GPUTensor g_inv_freq;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）
+    GPUTensor g_inv_freq_f32;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）
     float attn_softmax_scale = 0; // = mscale^2 / sqrt(qk_head)
 
     size_t kv_state_bytes() const override;

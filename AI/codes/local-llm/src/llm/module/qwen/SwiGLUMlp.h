@@ -19,14 +19,12 @@ class QwenSession;
 // 中间量（gate/up/prod 等）走 QwenSession::scratch。
 class SwiGLUMlp : public Module {
 public:
-    SwiGLUMlp(const MlpWeights &weights);
+    SwiGLUMlp() = default;
 
     // 对隐状态做 MLP（prefill 时行数=tokens，decode 时行数=1，由 g_in.shape 推出）。
     // g_in / g_out：[rows, hidden_size]，允许原位。中间量从 session.scratch 取。
-    void forward(QwenSession &session, const GPUTensor &g_in, const GPUTensor &g_out);
-
-private:
-    const MlpWeights &weights_;
+    void forward(const MlpWeights &weights, QwenSession &session,
+                 const GPUTensor &g_in, const GPUTensor &g_out);
 };
 
 

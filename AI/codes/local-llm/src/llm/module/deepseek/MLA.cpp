@@ -19,8 +19,8 @@ MLA::MLA(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config), lw_(weights) {
 }
 
-void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden, int start_pos) {
-    const int input_size = static_cast<int>(g_hidden.rows());
+void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int start_pos) {
+    const int input_size = static_cast<int>(g_hidden_f32.rows());
     auto &scratch = session.scratch;
     const int layer = lw_.layer_index;
     const int hidden_size = config_.hidden_size;
@@ -33,43 +33,42 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden, int start
     const int kv_total = kv_lora + qk_rope; // 576
     const int q_dim = n_heads * qk_head; // 3072
     const int kvb_out = n_heads * (qk_nope + v_head); // 4096
-    const GPUTensor &g_inv_freq = session.g_inv_freq;
+    const GPUTensor &g_inv_freq_f32 = session.g_inv_freq_f32;
 
-    GPUTensor g_normed = GPUTensor(scratch, scratch_key::kNormed, {
-                                       static_cast<int64_t>(input_size),
-                                       static_cast<int64_t>(hidden_size)
-                                   }, DType::F32);
-    RMSNorm::forward(*lw_.s_attn_norm, g_hidden, g_normed,
+    GPUTensor g_normed_f32 = GPUTensor(scratch, scratch_key::kNormed, {
+                                           static_cast<int64_t>(input_size),
+                                           static_cast<int64_t>(hidden_size)
+                                       }, DType::F32);
+    RMSNorm::forward(*lw_.s_attn_norm, g_hidden_f32, g_normed_f32,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    GPUTensor g_q = GPUTensor(scratch, scratch_key::kQ,
-                              {static_cast<int64_t>(input_size), static_cast<int64_t>(q_dim)}, DType::F32);
-    TensorTool::gemm(*lw_.s_attn_q, g_normed, g_q, scratch, scratch_key::kNormedLowp, "ds.gemm.d_attn_q");
+    GPUTensor g_q_f32 = GPUTensor(scratch, scratch_key::kQ,
+                                  {static_cast<int64_t>(input_size), static_cast<int64_t>(q_dim)}, DType::F32);
+    TensorTool::gemm(*lw_.s_attn_q, g_normed_f32, g_q_f32, scratch, scratch_key::kNormedLowp, "ds.gemm.d_attn_q");
     if (input_size == 1) {
-        TensorTool::mla_rope_q(g_q, n_heads, qk_nope, qk_rope, start_pos, g_inv_freq);
+        TensorTool::mla_rope_q(g_q_f32, n_heads, qk_nope, qk_rope, start_pos, g_inv_freq_f32);
     } else {
-        TensorTool::mla_rope_q_batch(g_q, n_heads, qk_nope, qk_rope, start_pos, g_inv_freq);
+        TensorTool::mla_rope_q_batch(g_q_f32, n_heads, qk_nope, qk_rope, start_pos, g_inv_freq_f32);
     }
 
     GPUTensor g_kv_a = GPUTensor(
         scratch, scratch_key::kKvA,
         {static_cast<int64_t>(input_size), static_cast<int64_t>(kv_total)}, DType::F32);
-    TensorTool::gemm(*lw_.s_attn_kv_a_mqa, g_normed, g_kv_a, scratch, scratch_key::kNormedLowp, "ds.gemm.kv_a");
+    TensorTool::gemm(*lw_.s_attn_kv_a_mqa, g_normed_f32, g_kv_a, scratch, scratch_key::kNormedLowp, "ds.gemm.kv_a");
 
     GPUTensor &g_kv_cache = session.kv_caches[layer].g_cache;
     if (input_size == 1) {
         TensorTool::mla_kv_a(g_kv_a, *lw_.s_attn_kv_a_norm, g_kv_cache, kv_lora, qk_rope, session.max_seq_len,
-                             start_pos, g_inv_freq, config_.rms_norm_eps);
+                             start_pos, g_inv_freq_f32, config_.rms_norm_eps);
     } else {
         TensorTool::mla_kv_a_batch(g_kv_a, *lw_.s_attn_kv_a_norm, g_kv_cache, kv_lora, qk_rope,
-                                   session.max_seq_len, start_pos, g_inv_freq, config_.rms_norm_eps);
+                                   session.max_seq_len, start_pos, g_inv_freq_f32, config_.rms_norm_eps);
     }
     session.kv_caches[layer].seq_len = start_pos + input_size;
 
     const int seq = start_pos + input_size;
-    GPUTensor g_kv_b_out = GPUTensor(
-        scratch, scratch_key::kKvBOut,
-        {static_cast<int64_t>(seq), static_cast<int64_t>(kvb_out)}, DType::F32);
+    GPUTensor g_kv_b_out = GPUTensor(scratch, scratch_key::kKvBOut,
+                                     {static_cast<int64_t>(seq), static_cast<int64_t>(kvb_out)}, DType::F32);
     {
         GPUTensor g_latent = GPUTensor(
             scratch, scratch_key::kAttn,
@@ -84,10 +83,10 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden, int start
         scratch, scratch_key::kAttn,
         {static_cast<int64_t>(input_size), static_cast<int64_t>(n_heads * v_head)}, DType::F32);
     if (input_size == 1) {
-        TensorTool::mla_attend(g_q, g_kv_b_out, g_kv_cache, g_attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
+        TensorTool::mla_attend(g_q_f32, g_kv_b_out, g_kv_cache, g_attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
                                session.max_seq_len, start_pos, session.attn_softmax_scale);
     } else {
-        TensorTool::mla_attend_batch(g_q, g_kv_b_out, g_kv_cache, g_attn, n_heads, qk_nope, qk_rope,
+        TensorTool::mla_attend_batch(g_q_f32, g_kv_b_out, g_kv_cache, g_attn, n_heads, qk_nope, qk_rope,
                                      v_head, kv_lora, session.max_seq_len, start_pos,
                                      session.attn_softmax_scale);
     }
@@ -97,5 +96,5 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden, int start
                                          static_cast<int64_t>(hidden_size)
                                      }, DType::F32);
     TensorTool::gemm(*lw_.s_attn_output, g_attn, g_attn_out, scratch, scratch_key::kAttnLowp, "ds.gemm.d_attn_output");
-    TensorTool::add(g_hidden, g_attn_out, g_hidden);
+    TensorTool::add(g_hidden_f32, g_attn_out, g_hidden_f32);
 }

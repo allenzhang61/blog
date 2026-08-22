@@ -40,7 +40,7 @@ public:
     CudaWeightPool &weight_pool() override { return global_cuda_weight_pool(); }
 
 private:
-    int forward_session(DeepseekSession &session, const CPUTensor &c_input, int start_pos);
+    int forward_session(DeepseekSession &session, const CPUTensor &c_input_i32, int start_pos);
 
     std::unique_ptr<MF> mf_;
     DeepseekConfig config_;

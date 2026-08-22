@@ -24,7 +24,7 @@ DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &config
       is_full_(weights.type == "full_attention"),
       s_input_norm_weight_(weights.s_input_layernorm),
       s_post_norm_weight_(weights.s_post_attention_layernorm),
-      mlp_(weights.mlp) {
+      mlp_weights_(weights.mlp) {
     if (is_full_) {
         attn_ = std::make_unique<FullAttention>(weights.full, config);
     } else {
@@ -59,7 +59,7 @@ void DecoderLayer::prefill(QwenSession &session, const GPUTensor &g_hidden) {
     GPUTensor g_mlp_out = GPUTensor(scratch, scratch_key::kMlpOut, act_shape, DType::F32);
     RMSNorm::forward(s_post_norm_weight_, g_hidden, g_token_hidden_b,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
-    mlp_.forward(session, g_token_hidden_b, g_mlp_out);
+    mlp_.forward(mlp_weights_, session, g_token_hidden_b, g_mlp_out);
     TensorTool::add(g_hidden, g_mlp_out, g_hidden);
 
     check_cuda(cudaDeviceSynchronize(), "DecoderLayer prefill 同步失败");
@@ -88,7 +88,7 @@ void DecoderLayer::decode(QwenSession &session, const GPUTensor &g_hidden, int p
     GPUTensor g_mlp_out = GPUTensor(scratch, scratch_key::kMlpOut, act_shape, DType::F32);
     RMSNorm::forward(s_post_norm_weight_, g_hidden, g_token_hidden_b,
                      text_config_.rms_norm_eps, /*one_plus=*/true);
-    mlp_.forward(session, g_token_hidden_b, g_mlp_out);
+    mlp_.forward(mlp_weights_, session, g_token_hidden_b, g_mlp_out);
     TensorTool::add(g_hidden, g_mlp_out, g_hidden);
 
     check_cuda(cudaDeviceSynchronize(), "DecoderLayer decode 同步失败");

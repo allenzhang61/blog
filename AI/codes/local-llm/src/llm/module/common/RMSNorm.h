@@ -5,15 +5,15 @@
 #ifndef LOCAL_LLM_COMMON_RMSNORM_H
 #define LOCAL_LLM_COMMON_RMSNORM_H
 
-#include <cstddef>
+#include "tensor/StorageTensor.h"
 
-#include "format/MF.h"
+class GPUTensor;
 
 // RMSNorm（无 bias）：对最后一维做 RMS 归一化后乘以可学习权重。
 //   y = x / sqrt(mean(x^2) + eps) * s_weight
 // 权重形状 [hidden_size]，逐通道缩放。
 //
-// 无状态工具，直接调用静态 forward，权重、eps、one_plus 均在调用时传入：
+// 无状态工具，调用时显式传入权重：
 //   - Qwen 风格：one_plus 传 true（权重按 (1 + gamma) 缩放）。
 //   - DeepSeek 风格：one_plus 传 false（权重按原值缩放）。
 class RMSNorm {
@@ -23,8 +23,8 @@ public:
     // 由 g_input.shape 推出。允许 g_input 与 g_output 指向同一 device 内存做原位归一化。
     // s_weight：gamma 权重；eps：数值稳定项；
     // one_plus：权重是否按 (1 + gamma) 缩放。
-    static void forward(const StorageTensor &s_weight, const GPUTensor &g_input, const GPUTensor &g_output,
-                        float eps, bool one_plus);
+    static void forward(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
+                        const GPUTensor &g_output_f32, float eps, bool one_plus);
 };
 
 #endif // LOCAL_LLM_COMMON_RMSNORM_H

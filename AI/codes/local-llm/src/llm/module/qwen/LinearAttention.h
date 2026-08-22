@@ -34,6 +34,14 @@ public:
     void decode(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out);
 
 private:
+    // Linear attention 权重：
+    //   s_in_proj_qkv [conv_dim, hidden_size]
+    //   s_in_proj_z [value_total, hidden_size]
+    //   s_in_proj_b/s_in_proj_a [linear_num_value_heads, hidden_size]
+    //   s_conv1d [conv_dim, linear_conv_kernel_dim]
+    //   s_a_log/s_dt_bias [linear_num_value_heads]
+    //   s_norm [linear_value_head_dim]
+    //   s_out_proj [hidden_size, value_total]
     const LinearAttnWeights &weights_;
     const TextConfig &config_;
     // 本层在 linear attention 层序列中的下标，用于索引 QwenSession::linear_attn_recurrent_states。

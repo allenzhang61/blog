@@ -5,11 +5,12 @@
 #ifndef LOCAL_LLM_COMMON_LMHEAD_H
 #define LOCAL_LLM_COMMON_LMHEAD_H
 
-#include "format/MF.h"
 #include "llm/module/Module.h"
+#include "tensor/StorageTensor.h"
 
 class SessionBase;
 class Sampler;
+class GPUTensor;
 
 namespace common {
 
@@ -22,15 +23,13 @@ namespace common {
 // logits 及输入低精度中间量走 session.scratch；重复惩罚所需历史 token 取自 session.outputs。
 class LMHead : public Module {
 public:
-    LMHead(const StorageTensor &s_weight);
+    LMHead() = default;
 
     // 对单行隐状态 [1, hidden_size] 计算 logits，拷回 host 后交由 sampler 采样，返回下一个 token id。
     // g_hidden 为已过 final/output norm 的隐状态激活视图（形状最后一维即 hidden_size）；
     // vocab_size 由权重 shape[0] 推出。仅在需要下一个 token 的位置调用（decode 每步、prefill 末位）。
-    int forward(SessionBase &session, const GPUTensor &g_hidden, Sampler &sampler);
-
-private:
-    const StorageTensor &s_weight_;
+    int forward(const StorageTensor &s_weight, SessionBase &session,
+                const GPUTensor &g_hidden, Sampler &sampler);
 };
 
 } // namespace common

@@ -22,6 +22,9 @@ public:
 
 private:
     const DeepseekConfig &config_;
+    // Shared expert 权重：
+    //   s_ffn_gate_shexp/s_ffn_up_shexp [shared_ffn, hidden]
+    //   s_ffn_down_shexp [hidden, shared_ffn]
     const DeepseekLayerWeights &lw_;
 };
 

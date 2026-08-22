@@ -46,7 +46,7 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &
     const int dim = config.rope_dim;   // 64
     const int half = dim / 2;          // 32
     const float base = config.rope_theta;
-    std::vector<float> h_inv_freq(half);
+    std::vector<float> h_inv_freq_f32(half);
     if (config.use_yarn) {
         const float scale = config.yarn_scaling_factor;      // 40
         const float freq_scale = 1.0f / scale;
@@ -61,18 +61,18 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &
             // rope_yarn_ramp: y=(i-low)/max(0.001,high-low); ramp_mix = 1 - clamp(y,0,1)
             const float y = (static_cast<float>(i) - low) / std::max(0.001f, high - low);
             const float ramp_mix = 1.0f - std::min(std::max(y, 0.0f), 1.0f);
-            h_inv_freq[i] = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
+            h_inv_freq_f32[i] = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
         }
     } else {
         for (int i = 0; i < half; ++i) {
-            h_inv_freq[i] = 1.0f / std::pow(base, static_cast<float>(2 * i) / dim);
+            h_inv_freq_f32[i] = 1.0f / std::pow(base, static_cast<float>(2 * i) / dim);
         }
     }
     // softmax 缩放固定为 1/sqrt(qk_head_dim)。YARN 的 mscale（yarn_log_multiplier）在
     // llama.cpp 中作用于 RoPE 的 cos/sin 幅值，对短上下文近似为恒等；直接把它塞进
     // softmax 会过度放大注意力打分导致退化（实测验证），故这里不做额外缩放。
     attn_softmax_scale = 1.0f / std::sqrt(static_cast<float>(config.qk_head_dim()));
-    g_inv_freq = CPUTensor(h_inv_freq.data(), {half}, DType::F32)
+    g_inv_freq_f32 = CPUTensor(h_inv_freq_f32.data(), {half}, DType::F32)
                      .to_gpu(scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
 }
 

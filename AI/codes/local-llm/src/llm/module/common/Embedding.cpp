@@ -10,11 +10,9 @@
 
 namespace common {
 
-Embedding::Embedding(const StorageTensor &s_weight)
-    : s_weight_(s_weight) {}
-
-void Embedding::forward(CPUTensor c_input, const GPUTensor &g_hidden, CudaScratch &scratch) {
-    TensorTool::embedding_lookup(s_weight_, c_input, g_hidden, scratch);
+void Embedding::forward(const StorageTensor &s_weight, CPUTensor c_input_i32,
+                        const GPUTensor &g_hidden_f32, CudaScratch &scratch) {
+    TensorTool::embedding_lookup(s_weight, c_input_i32, g_hidden_f32, scratch);
 }
 
 } // namespace common

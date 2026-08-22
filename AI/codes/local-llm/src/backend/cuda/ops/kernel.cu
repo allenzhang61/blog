@@ -16,8 +16,8 @@ constexpr int kBlockConst = 256; // 与 kBlock 一致，供静态 shared 数组�
 constexpr int kMaxHeadDim = 256; // Qwen head_dim = 256
 
 // 把一个低精度元素（bf16 或 f16）读成 float。lowp_type: 0=bf16, 1=f16。
-__device__ inline float lowp_to_float(uint16_t v, int lowp_type) {
-    if (lowp_type == 1) {
+__device__ inline float f16_or_bf16_to_float(uint16_t v, int f16_or_bf16) {
+    if (f16_or_bf16 == 1) {
         __half h = __ushort_as_half(v);
         return __half2float(h);
     }
@@ -45,21 +45,21 @@ __global__ void silu_mul_kernel(const float *gate, const float *up, float *out, 
 
 // 每个 block 负责一个 token 的一行拷贝。
 __global__ void embedding_lookup_kernel(const int *input, float *output, const uint16_t *table,
-                                        int vocab_size, int hidden_size, int lowp_type) {
+                                        int vocab_size, int hidden_size, int weight_type) {
     int i = blockIdx.x;
     int id = input[i];
     if (id < 0 || id >= vocab_size) id = 0;
     const uint16_t *row = table + static_cast<size_t>(id) * hidden_size;
     float *dst = output + static_cast<size_t>(i) * hidden_size;
     for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
-        dst[j] = lowp_to_float(row[j], lowp_type);
+        dst[j] = f16_or_bf16_to_float(row[j], weight_type);
     }
 }
 
 // ---- RMSNorm ----
 // 每个 block 处理一行；block 内先归约平方和，再逐元素缩放。
 // y = x / sqrt(mean(x^2 + eps)) * weight
-__global__ void rms_norm_kernel(const float *input, float *output, const void *weight,
+__global__ void rms_norm_kernel(const float *input, float *output, const uint16_t *weight,
                                 int weight_type, int hidden_size, float eps, bool one_plus) {
     int row = blockIdx.x; //每个block处理一行，block内多个线程协作处理这一行的hidden个元素
     const float *x = input + static_cast<size_t>(row) * hidden_size; // 指向当前行起始地址
@@ -89,12 +89,7 @@ __global__ void rms_norm_kernel(const float *input, float *output, const void *w
 
     float *dst = output + static_cast<size_t>(row) * hidden_size;
     for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
-        float w;
-        if (weight_type == 2) {
-            w = static_cast<const float *>(weight)[j];
-        } else {
-            w = lowp_to_float(static_cast<const uint16_t *>(weight)[j], weight_type);
-        }
+        float w = f16_or_bf16_to_float(weight[j], weight_type);
         if (one_plus) w += 1.0f;
         float y = x[j] * inv_rms * w;
         dst[j] = y;
@@ -124,7 +119,7 @@ __device__ inline void full_attn_q_head(const float *q_and_gate, const uint16_t 
     }
     const float scale = rsqrtf(partial[0] / static_cast<float>(head_dim) + eps);
     for (int d = tid; d < head_dim; d += blockDim.x) {
-        const float w = 1.0f + lowp_to_float(q_norm_weight[d], 0);
+        const float w = 1.0f + f16_or_bf16_to_float(q_norm_weight[d], 0);
         q[dst + d] *= scale * w;
     }
     __syncthreads();
@@ -190,7 +185,7 @@ __device__ inline void full_attn_kv_head(const float *k_in, const float *v_in,
     }
     const float scale = rsqrtf(partial[0] / static_cast<float>(head_dim) + eps);
     for (int d = tid; d < head_dim; d += blockDim.x) {
-        const float w = 1.0f + lowp_to_float(k_norm_weight[d], 0);
+        const float w = 1.0f + f16_or_bf16_to_float(k_norm_weight[d], 0);
         k_local[d] *= scale * w;
     }
     __syncthreads();
@@ -348,7 +343,7 @@ __global__ void linear_attention_conv_kernel(const float *mixed, const uint16_t 
     row[kernel - 1] = mixed[d];
     float sum = 0.0f;
     const uint16_t *w = conv_weight + static_cast<size_t>(d) * kernel;
-    for (int i = 0; i < kernel; ++i) sum += lowp_to_float(w[i], 0) * row[i];
+    for (int i = 0; i < kernel; ++i) sum += f16_or_bf16_to_float(w[i], 0) * row[i];
     conv_out[d] = sum / (1.0f + __expf(-sum));
 }
 
@@ -363,7 +358,7 @@ __global__ void linear_attention_conv_batch_kernel(const float *mixed, const uin
         for (int i = 0; i < kernel - 1; ++i) row[i] = row[i + 1];
         row[kernel - 1] = mixed[static_cast<size_t>(t) * conv_dim + d];
         float sum = 0.0f;
-        for (int i = 0; i < kernel; ++i) sum += lowp_to_float(w[i], 0) * row[i];
+        for (int i = 0; i < kernel; ++i) sum += f16_or_bf16_to_float(w[i], 0) * row[i];
         conv_out[static_cast<size_t>(t) * conv_dim + d] = sum / (1.0f + __expf(-sum));
     }
 }
@@ -409,7 +404,7 @@ __device__ inline void linear_attn_recurrent_step(const float *conv_out, const f
     __syncthreads();
 
     const float beta = 1.0f / (1.0f + __expf(-b[vh]));
-    const float dt = a[vh] + lowp_to_float(dt_bias[vh], 0);
+    const float dt = a[vh] + f16_or_bf16_to_float(dt_bias[vh], 0);
     const float softplus_dt = dt > 20.0f ? dt : (dt < -20.0f ? __expf(dt) : log1pf(__expf(dt)));
     const float g = -__expf(a_log[vh]) * softplus_dt;
     const float decay = __expf(g);
@@ -506,19 +501,6 @@ __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, c
         __syncthreads();
     }
 }
-
-__global__ void float_to_lowp_kernel(const float *input, uint16_t *output, int n, int lowp_type) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    if (lowp_type == 1) {
-        __half h = __float2half(input[i]);
-        output[i] = __half_as_ushort(h);
-    } else {
-        __nv_bfloat16 b = __float2bfloat16(input[i]);
-        output[i] = *reinterpret_cast<const uint16_t *>(&b);
-    }
-}
-
 
 // ---- Q4_K 反量化 ----
 // 从 12 字节 scales 解出第 j 个 sub-block 的 6-bit scale/min（与 llama.cpp get_scale_min_k4 一致）。
@@ -650,6 +632,13 @@ __global__ void f32_to_f16_copy_kernel(const float *src, uint16_t *out, int64_t 
     int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= n) return;
     out[i] = __half_as_ushort(__float2half(src[i]));
+}
+
+__global__ void f32_to_bf16_copy_kernel(const float *src, uint16_t *out, int64_t n) {
+    int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    __nv_bfloat16 b = __float2bfloat16(src[i]);
+    out[i] = *reinterpret_cast<const uint16_t *>(&b);
 }
 
 // ================= MLA（多头潜在注意力）=================

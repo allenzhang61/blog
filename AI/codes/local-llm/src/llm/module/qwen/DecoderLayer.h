@@ -38,8 +38,14 @@ private:
     const TextConfig &text_config_;
     bool is_full_ = false;
 
+    // Attention 前 RMSNorm 权重：[hidden_size]。
     const StorageTensor &s_input_norm_weight_;
+    // MLP 前 RMSNorm 权重：[hidden_size]。
     const StorageTensor &s_post_norm_weight_;
+    // SwiGLU MLP 权重：
+    //   s_gate_proj/s_up_proj [intermediate_size, hidden_size]
+    //   s_down_proj [hidden_size, intermediate_size]
+    const MlpWeights &mlp_weights_;
     SwiGLUMlp mlp_;
     // 按层类型二选一：is_full_ 为真时用 full attention 子层，否则用 linear attention 子层。
     // 用基类指针持有，具体类型见 FullAttention / LinearAttention。

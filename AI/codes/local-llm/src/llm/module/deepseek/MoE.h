@@ -24,6 +24,13 @@ public:
 
 private:
     const DeepseekConfig &config_;
+    // MoE FFN 权重：
+    //   s_ffn_norm [hidden]
+    //   s_ffn_gate_inp [expert_count, hidden]
+    //   s_ffn_gate_exps/s_ffn_up_exps [expert_count, expert_ffn, hidden]
+    //   s_ffn_down_exps [expert_count, hidden, expert_ffn]
+    //   s_ffn_gate_shexp/s_ffn_up_shexp [shared_ffn, hidden]
+    //   s_ffn_down_shexp [hidden, shared_ffn]
     const DeepseekLayerWeights &weights_;
     MoERouter router_;
     RoutedExperts routed_experts_;

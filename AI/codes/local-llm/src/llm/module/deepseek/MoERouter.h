@@ -28,6 +28,7 @@ public:
 
 private:
     const DeepseekConfig &config_;
+    // Router 权重：s_ffn_gate_inp [expert_count, hidden]，输出每 token 的 top-k expert。
     const DeepseekLayerWeights &lw_;
 };
 

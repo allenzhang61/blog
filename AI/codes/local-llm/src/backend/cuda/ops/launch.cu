@@ -25,13 +25,23 @@ void launch_silu_mul(const float *gate, const float *up, float *out, int n, void
 }
 
 void launch_embedding_lookup(const int *input, float *output, const uint16_t *table,
-                             int input_size, int vocab_size, int hidden_size, int lowp_type, void *stream) {
+                             int input_size, int vocab_size, int hidden_size, int weight_type, void *stream) {
     ScopedGpuTimer timer("embedding_lookup", as_stream(stream));
     embedding_lookup_kernel<<<input_size, kBlock, 0, as_stream(stream)>>>(
-        input, output, table, vocab_size, hidden_size, lowp_type);
+        input, output, table, vocab_size, hidden_size, weight_type);
 }
 
-void launch_rms_norm(const float *input, float *output, const void *weight, int weight_type,
+/*
+rows的值：
+- layer 内 prefill norm：rows = input_size
+- layer 内 decode norm：rows = 1
+- final output norm：一直是 rows = 1
+- Deepseek 的 decode 也是把单 token 包成 {1, hidden_size}，所以也是 1
+后面如果支持真正 batch，比如 shape 变成 {batch, seq, hidden}，那当前 rows() 会返回 batch * seq，就不只 input_size / 1 了。
+    但现在这套实现是单 batch，所以可以按 input_size 或 1 理解。
+ *
+ */
+void launch_rms_norm(const float *input, float *output, const uint16_t *weight, int weight_type,
                      int rows, int hidden_size, float eps, bool one_plus, void *stream) {
     ScopedGpuTimer timer("rms_norm", as_stream(stream));
     rms_norm_kernel<<<rows, kBlock, kBlock * sizeof(float), as_stream(stream)>>>(
@@ -141,11 +151,6 @@ void launch_linear_attention_recurrent_batch(const float *conv_out, const float 
         key_heads, value_heads, k_dim, v_dim, eps);
 }
 
-void launch_float_to_lowp(const float *input, uint16_t *output, int n, int lowp_type, void *stream) {
-    ScopedGpuTimer timer("float_to_lowp", as_stream(stream));
-    float_to_lowp_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(input, output, n, lowp_type);
-}
-
 void launch_dequantize_q4k_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream) {
     ScopedGpuTimer timer("dequantize_q4k_to_f16", as_stream(stream));
     const int64_t nblocks = num_elements / 256; // 调用方保证 num_elements % 256 == 0
@@ -177,6 +182,12 @@ void launch_dequantize_q6k_to_f16(const uint8_t *src, uint16_t *out, int64_t num
 void launch_f32_to_f16_copy(const float *src, uint16_t *out, int64_t num_elements, void *stream) {
     ScopedGpuTimer timer("f32_to_f16_copy", as_stream(stream));
     f32_to_f16_copy_kernel<<<grid_for(static_cast<int>(num_elements)), kBlock, 0, as_stream(stream)>>>(
+        src, out, num_elements);
+}
+
+void launch_f32_to_bf16_copy(const float *src, uint16_t *out, int64_t num_elements, void *stream) {
+    ScopedGpuTimer timer("f32_to_bf16_copy", as_stream(stream));
+    f32_to_bf16_copy_kernel<<<grid_for(static_cast<int>(num_elements)), kBlock, 0, as_stream(stream)>>>(
         src, out, num_elements);
 }
 

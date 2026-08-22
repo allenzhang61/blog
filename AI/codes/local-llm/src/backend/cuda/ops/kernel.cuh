@@ -25,15 +25,14 @@ void launch_silu_mul(const float *gate, const float *up, float *out, int n, void
 // ---- Embedding ----
 // 批量查表：按 token_ids 从低精度权重表 [vocab, hidden] 取行转 float 到 output[tokens, hidden]。
 void launch_embedding_lookup(const int *input, float *output, const uint16_t *table,
-                             int input_size, int vocab_size, int hidden_size, int lowp_type, void *stream);
+                             int input_size, int vocab_size, int hidden_size, int weight_type, void *stream);
 
 // ---- RMSNorm ----
-// weight_type 指明 norm 权重（gamma）的 dtype：0=bf16，1=f16，2=f32。
-// Qwen 的 norm 权重通常为 bf16，故 weight 以 void* 传入并按 weight_type 解读。
+// weight_type 指明 norm 权重（gamma）的 dtype：0=bf16，1=f16。
 //
 // RMSNorm 输出 float：对每行 [hidden] 归一化后乘以 weight，写回 output[rows, hidden]。
 // one_plus 为 true 时使用 (1 + weight) 作为缩放（部分 Qwen norm 的约定）。
-void launch_rms_norm(const float *input, float *output, const void *weight, int weight_type,
+void launch_rms_norm(const float *input, float *output, const uint16_t *weight, int weight_type,
                      int rows, int hidden_size, float eps, bool one_plus, void *stream);
 
 // ================= full attention =================
@@ -99,9 +98,6 @@ void launch_linear_attention_recurrent_batch(const float *conv_out, const float 
                                              int tokens, int key_heads, int value_heads, int k_dim, int v_dim,
                                              float eps, void *stream);
 
-// float -> 低精度（lowp_type 0=bf16, 1=f16），供 out_proj 输入。
-void launch_float_to_lowp(const float *input, uint16_t *output, int n, int lowp_type, void *stream);
-
 // ================= 量化反量化 =================
 // Q4_K 反量化：把 GGUF 的 Q4_K super-block（256 元素/144 字节）解到 f16 输出。
 //   src           : device 端 Q4_K 原始字节（连续 BlockQ4K）；
@@ -117,6 +113,7 @@ void launch_dequantize_q80_to_f16(const uint8_t *src, uint16_t *out, int64_t num
 void launch_dequantize_q50_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
 void launch_dequantize_q6k_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
 void launch_f32_to_f16_copy(const float *src, uint16_t *out, int64_t num_elements, void *stream);
+void launch_f32_to_bf16_copy(const float *src, uint16_t *out, int64_t num_elements, void *stream);
 
 // ================= MLA（多头潜在注意力，DeepSeek-V2-Lite）=================
 // 维度约定：n_heads=16，qk_nope=128，qk_rope=64（解耦 RoPE 只旋转这 64 维），

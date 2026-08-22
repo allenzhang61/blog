@@ -20,10 +20,7 @@ QwenModel::QwenModel(std::unique_ptr<MF> mf, int max_output_tokens, const Sampli
       config_(*mf_),
       weights_(*mf_, config_),
       max_output_tokens_(max_output_tokens),
-      sampler_(sampling),
-      embedding_(weights_.s_token_embd),
-      // tie_word_embeddings=true：LMHead 复用 token_embd 权重。
-      lm_head_(weights_.s_token_embd) {
+      sampler_(sampling) {
     const TextConfig &text_config = config_.data.text;
     layers_.reserve(weights_.layers.size());
     for (size_t i = 0; i < weights_.layers.size(); ++i) {
@@ -72,7 +69,7 @@ int QwenModel::prefill_session(QwenSession &session, const CPUTensor &c_input) {
     GPUTensor g_hidden = GPUTensor(
         scratch, scratch_key::kHidden, {static_cast<int64_t>(input_size), static_cast<int64_t>(hidden_size)},
         DType::F32);
-    embedding_.forward(c_input, g_hidden, scratch);
+    embedding_.forward(weights_.s_token_embd, c_input, g_hidden, scratch);
 
     for (DecoderLayer &layer : layers_) {
         layer.prefill(session, g_hidden);
@@ -87,7 +84,7 @@ int QwenModel::prefill_session(QwenSession &session, const CPUTensor &c_input) {
                      config_.data.text.rms_norm_eps, /*one_plus=*/true);
 
     // lm_head 复用 token_embd（tie），vocab 维度直接取自权重 shape [vocab, g_hidden]。
-    return lm_head_.forward(session, g_normed, sampler_);
+    return lm_head_.forward(weights_.s_token_embd, session, g_normed, sampler_);
 }
 
 int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) {
@@ -99,7 +96,7 @@ int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) 
         scratch, scratch_key::kHidden, {1, static_cast<int64_t>(hidden_size)}, DType::F32);
     const int token_id = prev_token_id;
     CPUTensor c_input_view = CPUTensor(&token_id, {1}, DType::I32);
-    embedding_.forward(c_input_view, g_hidden, scratch);
+    embedding_.forward(weights_.s_token_embd, c_input_view, g_hidden, scratch);
 
     for (DecoderLayer &layer : layers_) {
         layer.decode(session, g_hidden, pos);
@@ -110,5 +107,5 @@ int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) 
     RMSNorm::forward(weights_.s_output_norm, g_hidden, g_normed,
                      config_.data.text.rms_norm_eps, /*one_plus=*/true);
 
-    return lm_head_.forward(session, g_normed, sampler_);
+    return lm_head_.forward(weights_.s_token_embd, session, g_normed, sampler_);
 }
