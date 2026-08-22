@@ -29,7 +29,7 @@ public:
 
     // decode：处理位置 pos 的单个 token，追加写入 KV cache 并算出注意力输出。
     // g_hidden：[1, hidden_size]；g_out：[1, hidden_size]。
-    void decode(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out, int pos);
+    void decode(QwenSession &session, const GPUTensor &g_hidden_f32, const GPUTensor &g_out_f32, int pos);
 
 private:
     // Full attention 权重：

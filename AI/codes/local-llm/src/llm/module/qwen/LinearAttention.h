@@ -27,7 +27,7 @@ public:
 
     // prefill：一次处理 tokens 个位置，扫描更新 recurrent state 并算出输出。
     // g_hidden：[tokens, hidden_size]；g_out：[tokens, hidden_size]。
-    void prefill(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out);
+    void prefill(QwenSession &session, const GPUTensor &g_hidden_f32, const GPUTensor &g_out_f32);
 
     // decode：处理单个新 token，基于已有 recurrent state 递推一步。
     // g_hidden：[1, hidden_size]；g_out：[1, hidden_size]。

@@ -71,7 +71,7 @@ void FullAttention::prefill(QwenSession &session, const GPUTensor &g_hidden_f32,
     check_cuda(cudaDeviceSynchronize(), "FullAttention prefill 同步失败");
 }
 
-void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out, int pos) {
+void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32, const GPUTensor &g_out_f32, int pos) {
     FullAttnKVCache &kv = session.full_attn_kv_cache[type_index_];
     CudaScratch &scratch = session.scratch;
     const int n_heads = config_.num_attention_heads;
@@ -83,30 +83,30 @@ void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden, cons
     const float theta = config_.rope_parameters.rope_theta;
     const float partial = config_.rope_parameters.partial_rotary_factor;
 
-    GPUTensor g_full_projection = GPUTensor(
+    GPUTensor g_full_projection_f32 = GPUTensor(
         scratch, scratch_key::kFullProjection, {1, static_cast<int64_t>(q_total * 2)}, DType::F32);
-    GPUTensor g_full_k = GPUTensor(
+    GPUTensor g_full_k_f32 = GPUTensor(
         scratch, scratch_key::kFullK, {1, static_cast<int64_t>(kv_total)}, DType::F32);
-    GPUTensor g_full_v = GPUTensor(
+    GPUTensor g_full_v_f32 = GPUTensor(
         scratch, scratch_key::kFullV, {1, static_cast<int64_t>(kv_total)}, DType::F32);
-    GPUTensor g_full_q = GPUTensor(
+    GPUTensor g_full_q_f32 = GPUTensor(
         scratch, scratch_key::kFullQ, {1, static_cast<int64_t>(q_total)}, DType::F32);
-    GPUTensor g_full_gate = GPUTensor(
+    GPUTensor g_full_gate_f32 = GPUTensor(
         scratch, scratch_key::kFullGate, {1, static_cast<int64_t>(q_total)}, DType::F32);
-    GPUTensor g_full_attn = GPUTensor(
+    GPUTensor g_full_attn_f32 = GPUTensor(
         scratch, scratch_key::kFullAttn, {1, static_cast<int64_t>(q_total)}, DType::F32);
-    TensorTool::gemm(weights_.s_q_proj, g_hidden, g_full_projection, scratch, scratch_key::kInputLowp, "fullattn.d_q_proj");
-    TensorTool::gemm(weights_.s_k_proj, g_hidden, g_full_k, scratch, scratch_key::kInputLowp, "fullattn.d_k_proj");
-    TensorTool::gemm(weights_.s_v_proj, g_hidden, g_full_v, scratch, scratch_key::kInputLowp, "fullattn.d_v_proj");
+    TensorTool::gemm(weights_.s_q_proj, g_hidden_f32, g_full_projection_f32, scratch, scratch_key::kInputLowp, "fullattn.d_q_proj");
+    TensorTool::gemm(weights_.s_k_proj, g_hidden_f32, g_full_k_f32, scratch, scratch_key::kInputLowp, "fullattn.d_k_proj");
+    TensorTool::gemm(weights_.s_v_proj, g_hidden_f32, g_full_v_f32, scratch, scratch_key::kInputLowp, "fullattn.d_v_proj");
 
-    TensorTool::full_attention_q(g_full_projection, weights_.s_q_norm, g_full_q, g_full_gate,
+    TensorTool::full_attention_q(g_full_projection_f32, weights_.s_q_norm, g_full_q_f32, g_full_gate_f32,
                             n_heads, head_dim, pos, theta, partial, eps);
-    TensorTool::full_attention_kv(g_full_k, g_full_v, weights_.s_k_norm, kv.g_key_cache_f32, kv.g_value_cache_f32,
+    TensorTool::full_attention_kv(g_full_k_f32, g_full_v_f32, weights_.s_k_norm, kv.g_key_cache_f32, kv.g_value_cache_f32,
                              kv_heads, head_dim, /*max_seq_len=*/0, pos, theta, partial, eps);
-    TensorTool::full_attention_attend(g_full_q, g_full_gate, kv.g_key_cache_f32, kv.g_value_cache_f32, g_full_attn,
+    TensorTool::full_attention_attend(g_full_q_f32, g_full_gate_f32, kv.g_key_cache_f32, kv.g_value_cache_f32, g_full_attn_f32,
                                  n_heads, kv_heads, head_dim, /*max_seq_len=*/0, pos);
 
-    TensorTool::gemm(weights_.s_o_proj, g_full_attn, g_out, scratch, scratch_key::kFullAttnLowp, "fullattn.d_o_proj");
+    TensorTool::gemm(weights_.s_o_proj, g_full_attn_f32, g_out_f32, scratch, scratch_key::kFullAttnLowp, "fullattn.d_o_proj");
 
     kv.seq_len = pos + 1;
     check_cuda(cudaDeviceSynchronize(), "FullAttention decode 同步失败");
