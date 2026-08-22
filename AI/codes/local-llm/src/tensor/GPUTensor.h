@@ -26,6 +26,12 @@ public:
               std::vector<int64_t> shape);
 
     void *data() const { return data_; }
+    template <typename T>
+    std::remove_cv_t<T> *data() const {
+        validate_tensor_cpp_type<T>(dtype, name);
+        return static_cast<std::remove_cv_t<T> *>(data_);
+    }
+
     CPUTensor to_host(void *host_ptr, const std::string &what) const;
 
 private:

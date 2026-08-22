@@ -16,10 +16,16 @@ public:
     CPUTensor(const void *host_ptr, std::vector<int64_t> shape, DType dt);
 
     const void *data() const { return data_; }
+    template <typename T>
+    const std::remove_cv_t<T> *data() const {
+        validate_tensor_cpp_type<T>(dtype, name);
+        return static_cast<const std::remove_cv_t<T> *>(data_);
+    }
+
     GPUTensor to_gpu(CudaScratch &scratch, const std::string &key, const std::string &what) const;
 
 private:
-    void *data_ = nullptr;
+    const void *data_ = nullptr;
 };
 
 #endif // LOCAL_LLM_CPUTENSOR_H

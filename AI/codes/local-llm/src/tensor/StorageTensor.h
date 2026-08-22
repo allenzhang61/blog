@@ -16,6 +16,12 @@ public:
                DType dt, size_t bytes);
 
     const uint8_t *data() const { return data_; }
+    template <typename T>
+    const std::remove_cv_t<T> *data() const {
+        validate_tensor_cpp_type<T>(dtype, name);
+        return reinterpret_cast<const std::remove_cv_t<T> *>(data_);
+    }
+
     StorageTensor slice(size_t byte_offset, std::vector<int64_t> slice_shape,
                      size_t slice_bytes, std::string slice_name) const;
 

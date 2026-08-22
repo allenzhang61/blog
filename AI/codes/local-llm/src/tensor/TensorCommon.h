@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 enum class DType : int32_t {
@@ -78,6 +79,45 @@ inline size_t tensor_dtype_byte_size(DType dt) {
             return 2;
         default:
             throw std::runtime_error(std::string("dense tensor 不支持 dtype: ") + dtype_name(dt));
+    }
+}
+
+template <typename T>
+inline const char *tensor_cpp_type_name() {
+    using U = std::remove_cv_t<T>;
+    if constexpr (std::is_same_v<U, float>) {
+        return "float";
+    } else if constexpr (std::is_same_v<U, int> ||
+                         std::is_same_v<U, int32_t>) {
+        return "int32";
+    } else if constexpr (std::is_same_v<U, uint16_t>) {
+        return "uint16";
+    } else {
+        return "unsupported";
+    }
+}
+
+template <typename T>
+inline bool tensor_dtype_matches_cpp_type(DType dt) {
+    using U = std::remove_cv_t<T>;
+    if constexpr (std::is_same_v<U, float>) {
+        return dt == DType::F32;
+    } else if constexpr (std::is_same_v<U, int> ||
+                         std::is_same_v<U, int32_t>) {
+        return dt == DType::I32;
+    } else if constexpr (std::is_same_v<U, uint16_t>) {
+        return dt == DType::F16 || dt == DType::BF16;
+    } else {
+        return false;
+    }
+}
+
+template <typename T>
+inline void validate_tensor_cpp_type(DType dt, const std::string &name) {
+    if (!tensor_dtype_matches_cpp_type<T>(dt)) {
+        throw std::runtime_error("tensor data 类型不匹配: " + name +
+                                 " dtype=" + dtype_name(dt) +
+                                 " requested=" + tensor_cpp_type_name<T>());
     }
 }
 

@@ -15,7 +15,7 @@ CPUTensor::CPUTensor(const void *host_ptr, std::vector<int64_t> shape, DType dt)
     this->shape = std::move(shape);
     this->dtype = dt;
     this->nbytes = byte_size();
-    this->data_ = const_cast<void *>(host_ptr);
+    this->data_ = host_ptr;
 }
 
 GPUTensor CPUTensor::to_gpu(CudaScratch &scratch, const std::string &key,
