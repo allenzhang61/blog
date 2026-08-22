@@ -18,7 +18,7 @@ public:
     SharedExperts(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
     // g_normed：归一化后的输入 [input_size, hidden_size]；g_moe：累加输出 [input_size, hidden_size]。
-    void forward(DeepseekSession &session, const GPUTensor &g_normed, const GPUTensor &g_moe);
+    void forward(DeepseekSession &session, const GPUTensor &g_normed_f32, const GPUTensor &g_moe_f32);
 
 private:
     const DeepseekConfig &config_;

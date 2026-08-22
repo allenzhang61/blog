@@ -38,9 +38,9 @@ int main(int argc, char **argv) {
     CudaWeightPool &pool = global_cuda_weight_pool();
 
     std::vector<int> encoded_input = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
-    CPUTensor c_input = CPUTensor(encoded_input.data(),
+    CPUTensor c_input_i32 = CPUTensor(encoded_input.data(),
                                            {static_cast<int64_t>(encoded_input.size())}, DType::I32);
-    const int input_tokens = static_cast<int>(c_input.numel());
+    const int input_tokens = static_cast<int>(c_input_i32.numel());
     const int eos = model->eos_token_id();
 
     // 性能采集：仅 --profile 时开启，所有埋点否则零开销。
@@ -59,7 +59,7 @@ int main(int argc, char **argv) {
     // 初始化与 kernel 首次启动，避免首步冷启动污染稳态计时。
     // BaseModel::prefill 每次会重建内部 session，因此 warmup 与正式跑天然隔离。
     {
-        int wnext = model->prefill(c_input);
+        int wnext = model->prefill(c_input_i32);
         int wpos = input_tokens;
         for (int i = 0; i < 4 && wnext != eos; ++i) {
             model->append_output(wnext);
@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     int next;
     {
         ScopedCpuTimer t("prefill");
-        next = model->prefill(c_input);
+        next = model->prefill(c_input_i32);
     }
     if (args.profile) {
         mem_reporter.sample(pool, model->memory_usage(), "prefill");

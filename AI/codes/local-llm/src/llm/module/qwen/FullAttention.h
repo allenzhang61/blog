@@ -25,7 +25,7 @@ public:
 
     // prefill：一次处理 tokens 个位置，写满 KV cache 并算出注意力输出。
     // g_hidden：输入隐状态 [tokens, hidden_size]；g_out：注意力输出 [tokens, hidden_size]。
-    void prefill(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out);
+    void prefill(QwenSession &session, const GPUTensor &g_hidden_f32, const GPUTensor &g_out_f32);
 
     // decode：处理位置 pos 的单个 token，追加写入 KV cache 并算出注意力输出。
     // g_hidden：[1, hidden_size]；g_out：[1, hidden_size]。

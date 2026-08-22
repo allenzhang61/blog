@@ -37,12 +37,12 @@ void MoE::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32) {
 
     MoERoute route = router_.forward(session, g_normed_f32);
 
-    GPUTensor g_moe_out = GPUTensor(s, scratch_key::kMoeOut, act_shape, DType::F32);
-    float *d_moe_out = g_moe_out.data<float>();
+    GPUTensor g_moe_out_f32 = GPUTensor(s, scratch_key::kMoeOut, act_shape, DType::F32);
+    float *d_moe_out = g_moe_out_f32.data<float>();
     check_cuda(cudaMemset(d_moe_out, 0, static_cast<size_t>(input_size) * hidden_size * sizeof(float)), "ds.moe.zero");
 
-    routed_experts_.forward(session, g_normed_f32, route, g_moe_out);
-    shared_experts_.forward(session, g_normed_f32, g_moe_out);
+    routed_experts_.forward(session, g_normed_f32, route, g_moe_out_f32);
+    shared_experts_.forward(session, g_normed_f32, g_moe_out_f32);
 
-    TensorTool::add(g_hidden_f32, g_moe_out, g_hidden_f32);
+    TensorTool::add(g_hidden_f32, g_moe_out_f32, g_hidden_f32);
 }

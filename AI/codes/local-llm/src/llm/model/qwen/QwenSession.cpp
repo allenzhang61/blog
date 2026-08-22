@@ -37,19 +37,19 @@ QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
                 static_cast<int64_t>(max_seq_len),
                 static_cast<int64_t>(kv_total),
             };
-            cache.g_key_cache = GPUTensor(
+            cache.g_key_cache_f32 = GPUTensor(
                 CudaWeight(cache_bytes, CUDA_R_32F, false, "full key cache"), cache_shape);
-            cache.g_value_cache = GPUTensor(
+            cache.g_value_cache_f32 = GPUTensor(
                 CudaWeight(cache_bytes, CUDA_R_32F, false, "full value cache"), cache_shape);
             cache.seq_len = 0;
             full_attn_kv_cache.push_back(std::move(cache));
         } else {
             // linear_attention
             LinearAttnRecurrentState state;
-            state.g_conv_state = GPUTensor(
+            state.g_conv_state_f32 = GPUTensor(
                 CudaWeight(conv_dim * kernel * sizeof(float), CUDA_R_32F, true, "linear conv state"),
                 {static_cast<int64_t>(conv_dim), static_cast<int64_t>(kernel)});
-            state.g_recurrent_state = GPUTensor(
+            state.g_recurrent_state_f32 = GPUTensor(
                 CudaWeight(recurrent_elems * sizeof(float), CUDA_R_32F, true, "linear recurrent state"),
                 {static_cast<int64_t>(text_config.linear_num_value_heads),
                  static_cast<int64_t>(text_config.linear_key_head_dim),
@@ -62,10 +62,10 @@ QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
 size_t QwenSession::kv_state_bytes() const {
     size_t total = 0;
     for (const FullAttnKVCache &c : full_attn_kv_cache) {
-        total += c.g_key_cache.nbytes + c.g_value_cache.nbytes;
+        total += c.g_key_cache_f32.nbytes + c.g_value_cache_f32.nbytes;
     }
     for (const LinearAttnRecurrentState &s : linear_attn_recurrent_states) {
-        total += s.g_conv_state.nbytes + s.g_recurrent_state.nbytes;
+        total += s.g_conv_state_f32.nbytes + s.g_recurrent_state_f32.nbytes;
     }
     return total;
 }

@@ -17,8 +17,8 @@ class QwenConfig;
 // full attention 层的 KV cache：跨 token，撑满整个请求。
 // key_cache / value_cache 形状均为 [max_seq_len, num_key_value_heads * head_dim]。
 struct FullAttnKVCache {
-    GPUTensor g_key_cache;
-    GPUTensor g_value_cache;
+    GPUTensor g_key_cache_f32;
+    GPUTensor g_value_cache_f32;
     // 已写入 KV cache 的 token 数（prefill + 已生成）。
     int seq_len = 0;
 };
@@ -27,9 +27,9 @@ struct FullAttnKVCache {
 struct LinearAttnRecurrentState {
     // depthwise conv 的滑动窗口状态，形状 [conv_dim, kernel]，
     // 其中 conv_dim = 2 * (key_heads * key_head_dim) + value_heads * value_head_dim。
-    GPUTensor g_conv_state;
+    GPUTensor g_conv_state_f32;
     // 线性注意力的 recurrent 状态，形状 [value_heads, key_head_dim, value_head_dim]。
-    GPUTensor g_recurrent_state;
+    GPUTensor g_recurrent_state_f32;
 };
 
 // 一次推理请求的资源作用域（per-request RAII scope）：

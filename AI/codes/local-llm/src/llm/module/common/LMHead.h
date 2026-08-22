@@ -29,7 +29,7 @@ public:
     // g_hidden 为已过 final/output norm 的隐状态激活视图（形状最后一维即 hidden_size）；
     // vocab_size 由权重 shape[0] 推出。仅在需要下一个 token 的位置调用（decode 每步、prefill 末位）。
     int forward(const StorageTensor &s_weight, SessionBase &session,
-                const GPUTensor &g_hidden, Sampler &sampler);
+                const GPUTensor &g_hidden_f32, Sampler &sampler);
 };
 
 } // namespace common

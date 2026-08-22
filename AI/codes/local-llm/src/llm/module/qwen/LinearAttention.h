@@ -31,7 +31,7 @@ public:
 
     // decode：处理单个新 token，基于已有 recurrent state 递推一步。
     // g_hidden：[1, hidden_size]；g_out：[1, hidden_size]。
-    void decode(QwenSession &session, const GPUTensor &g_hidden, const GPUTensor &g_out);
+    void decode(QwenSession &session, const GPUTensor &g_hidden_f32, const GPUTensor &g_out_f32);
 
 private:
     // Linear attention 权重：

@@ -24,7 +24,7 @@ public:
     // 对隐状态做 MLP（prefill 时行数=tokens，decode 时行数=1，由 g_in.shape 推出）。
     // g_in / g_out：[rows, hidden_size]，允许原位。中间量从 session.scratch 取。
     void forward(const MlpWeights &weights, QwenSession &session,
-                 const GPUTensor &g_in, const GPUTensor &g_out);
+                 const GPUTensor &g_in_f32, const GPUTensor &g_out_f32);
 };
 
 

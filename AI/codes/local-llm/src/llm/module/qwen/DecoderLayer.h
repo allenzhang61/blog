@@ -26,10 +26,10 @@ public:
     DecoderLayer(const LayerWeights &weights, const TextConfig &config);
 
     // prefill：处理整段输入 [tokens, hidden_size]，原位更新隐状态。
-    void prefill(QwenSession &session, const GPUTensor &g_hidden);
+    void prefill(QwenSession &session, const GPUTensor &g_hidden_f32);
 
     // decode：处理位置 pos 的单个 token [1, hidden_size]，原位更新隐状态。
-    void decode(QwenSession &session, const GPUTensor &g_hidden, int pos);
+    void decode(QwenSession &session, const GPUTensor &g_hidden_f32, int pos);
 
     // 是否为 full_attention 层（否则为 linear_attention）。
     bool is_full_attention() const { return is_full_; }
