@@ -24,7 +24,7 @@ class MoERouter : public Module {
 public:
     MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    MoERoute forward(DeepseekSession &session, const GPUTensor &g_normed);
+    MoERoute forward(DeepseekSession &session, const GPUTensor &g_normed_f32);
 
 private:
     const DeepseekConfig &config_;

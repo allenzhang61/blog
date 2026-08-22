@@ -20,7 +20,7 @@ class MLP : public Module {
 public:
     MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, const GPUTensor &g_hidden);
+    void forward(DeepseekSession &session, const GPUTensor &g_hidden_f32);
 
 private:
     // 本层 FFN 权重集合：

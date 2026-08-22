@@ -20,7 +20,7 @@ class MoE : public Module {
 public:
     MoE(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
-    void forward(DeepseekSession &session, const GPUTensor &g_hidden);
+    void forward(DeepseekSession &session, const GPUTensor &g_hidden_f32);
 
 private:
     const DeepseekConfig &config_;

@@ -56,7 +56,7 @@ DeepseekConfig::DeepseekConfig(const MF &mf) {
     bos_token_id = static_cast<int>(mf.metadata<int64_t>("tokenizer.ggml.bos_token_id"));
 }
 
-void DeepseekConfig::DebugDump() const {
+void DeepseekConfig::debug_dump() const {
     std::printf(
         "[DeepseekConfig] hidden=%d layers=%d vocab=%d heads=%d | MLA kv_lora=%d qk_nope=%d qk_rope=%d "
         "v_head=%d | rope_theta=%.1f eps=%g yarn=%d factor=%.1f orig_ctx=%d log_mul=%g | MoE experts=%d "

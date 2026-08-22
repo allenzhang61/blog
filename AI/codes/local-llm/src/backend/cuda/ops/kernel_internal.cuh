@@ -83,18 +83,10 @@ __global__ void f32_to_bf16_copy_kernel(const float *src, uint16_t *out, int64_t
 
 // ---- MLA ----
 __global__ void mla_kv_a_kernel(const float *kv_a, const float *kv_a_norm_weight,
-                                float *kv_cache, int kv_lora, int qk_rope, int pos,
-                                const float *inv_freq, float eps);
-__global__ void mla_kv_a_batch_kernel(const float *kv_a, const float *kv_a_norm_weight,
-                                      float *kv_cache, int tokens, int kv_lora, int qk_rope,
-                                      int start_pos, const float *inv_freq, float eps);
-__global__ void mla_rope_q_kernel(float *q, int n_heads, int qk_nope, int qk_rope, int pos,
-                                  const float *inv_freq);
-__global__ void mla_rope_q_batch_kernel(float *q, int tokens, int n_heads, int qk_nope,
-                                        int qk_rope, int start_pos, const float *inv_freq);
-__global__ void mla_attend_kernel(const float *q, const float *kv_b_out, const float *kv_cache,
-                                  float *attn, int n_heads, int qk_nope, int qk_rope,
-                                  int v_head, int kv_lora, int pos, float softmax_scale);
+                                float *output_kv_cache, int input_size, int kv_lora, int qk_rope,
+                                int start_pos, const float *inv_freq, float eps);
+__global__ void mla_rope_q_kernel(float *q, int input_size, int n_heads, int qk_nope,
+                                  int qk_rope, int start_pos, const float *inv_freq);
 __global__ void mla_attend_batch_kernel(const float *q, const float *kv_b_out,
                                         const float *kv_cache, float *attn, int tokens,
                                         int n_heads, int qk_nope, int qk_rope, int v_head,

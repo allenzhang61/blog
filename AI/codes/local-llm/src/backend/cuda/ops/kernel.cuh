@@ -46,6 +46,7 @@ void launch_full_attention_q(const float *q_and_gate, const uint16_t *q_norm_wei
                              int n_heads, int head_dim, int pos,
                              float rope_theta, float partial_rotary_factor, float eps,
                              void *stream);
+
 // 批量：start_pos 为本段第一个 token 的绝对位置。
 void launch_full_attention_q_batch(const float *q_and_gate, const uint16_t *q_norm_weight,
                                    float *q, float *gate,
@@ -59,6 +60,7 @@ void launch_full_attention_kv(const float *k_in, const float *v_in, const uint16
                               int kv_heads, int head_dim, int max_seq_len, int pos,
                               float rope_theta, float partial_rotary_factor, float eps,
                               void *stream);
+
 void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
                                     float *key_cache, float *value_cache,
                                     int tokens, int kv_heads, int head_dim, int max_seq_len, int start_pos,
@@ -70,6 +72,7 @@ void launch_full_attention_attend(const float *q, const float *gate,
                                   const float *key_cache, const float *value_cache, float *attn,
                                   int n_heads, int kv_heads, int head_dim, int max_seq_len, int pos,
                                   void *stream);
+
 void launch_full_attention_attend_batch(const float *q, const float *gate,
                                         const float *key_cache, const float *value_cache, float *attn,
                                         int tokens, int n_heads, int kv_heads, int head_dim,
@@ -81,6 +84,7 @@ void launch_full_attention_attend_batch(const float *q, const float *gate,
 void launch_linear_attention_conv(const float *mixed, const uint16_t *conv_weight,
                                   float *conv_state, float *conv_out,
                                   int conv_dim, int kernel, void *stream);
+
 void launch_linear_attention_conv_batch(const float *mixed, const uint16_t *conv_weight,
                                         float *conv_state, float *conv_out,
                                         int tokens, int conv_dim, int kernel, void *stream);
@@ -92,6 +96,7 @@ void launch_linear_attention_recurrent(const float *conv_out, const float *z, co
                                        const float *norm_weight, float *recurrent_state, float *gated,
                                        int key_heads, int value_heads, int k_dim, int v_dim,
                                        float eps, void *stream);
+
 void launch_linear_attention_recurrent_batch(const float *conv_out, const float *z, const float *b,
                                              const float *a, const float *a_log, const uint16_t *dt_bias,
                                              const float *norm_weight, float *recurrent_state, float *gated,
@@ -110,9 +115,13 @@ void launch_dequantize_q4k_to_f16(const uint8_t *src, uint16_t *out, int64_t num
 // Q8_0：block=32（34B），y=d*qs。Q5_0：block=32（22B），y=d*((q&0x1F)-16)。
 // Q6_K：super-block=256（210B）。F32->f16 直转（norm/gate_inp 等 F32 权重上传用）。
 void launch_dequantize_q80_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
+
 void launch_dequantize_q50_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
+
 void launch_dequantize_q6k_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream);
+
 void launch_f32_to_f16_copy(const float *src, uint16_t *out, int64_t num_elements, void *stream);
+
 void launch_f32_to_bf16_copy(const float *src, uint16_t *out, int64_t num_elements, void *stream);
 
 // ================= MLA（多头潜在注意力，DeepSeek-V2-Lite）=================
@@ -125,28 +134,20 @@ void launch_f32_to_bf16_copy(const float *src, uint16_t *out, int64_t num_elemen
 // (1) 对 kv_a 的 latent 段做 RMSNorm、对 k_rope 段做 RoPE，然后把 [latent||k_rope]
 //     写入 latent KV cache（布局 [max_seq_len, kv_lora+qk_rope]）。
 void launch_mla_kv_a(const float *kv_a, const float *kv_a_norm_weight,
-                     float *kv_cache, int kv_lora, int qk_rope, int max_seq_len, int pos,
-                     const float *inv_freq, float eps, void *stream);
-void launch_mla_kv_a_batch(const float *kv_a, const float *kv_a_norm_weight,
-                           float *kv_cache, int tokens, int kv_lora, int qk_rope,
-                           int max_seq_len, int start_pos, const float *inv_freq, float eps, void *stream);
+                     float *output_kv_cache, int input_size, int kv_lora, int qk_rope,
+                     int start_pos, const float *inv_freq, float eps, void *stream);
 
-// (2) 对 q 的每个 head 的 rope 段做 RoPE（nope 段不动）。q 原位更新。
-void launch_mla_rope_q(float *q, int n_heads, int qk_nope, int qk_rope, int pos,
-                       const float *inv_freq, void *stream);
-void launch_mla_rope_q_batch(float *q, int tokens, int n_heads, int qk_nope, int qk_rope,
-                             int start_pos, const float *inv_freq, void *stream);
+// (2) 对 q 的每个 token、每个 head 的 rope 段做 RoPE（nope 段不动）。q 原位更新。
+void launch_mla_rope_q(float *q, int input_size, int n_heads, int qk_nope, int qk_rope,
+                       int start_pos, const float *inv_freq, void *stream);
 
 // (3) attend：kv_b_out 为已由 kv_b 投影解出的 per-(pos,head) k_nope||v，布局
 //     [seq, n_heads*(qk_nope+v_head)]；k_rope 从 kv_cache 的 k_rope 段取（所有 head 共享）。
 //     scores = (q_nope·k_nope + q_rope·k_rope)*softmax_scale，causal softmax，加权 v -> attn[tokens,n_heads*v_head]。
 //     softmax_scale 已含 YARN 的 mscale^2（host 侧算好）。
-void launch_mla_attend(const float *q, const float *kv_b_out, const float *kv_cache,
-                       float *attn, int n_heads, int qk_nope, int qk_rope, int v_head,
-                       int kv_lora, int max_seq_len, int pos, float softmax_scale, void *stream);
 void launch_mla_attend_batch(const float *q, const float *kv_b_out, const float *kv_cache,
-                             float *attn, int tokens, int n_heads, int qk_nope, int qk_rope,
-                             int v_head, int kv_lora, int max_seq_len, int start_pos,
+                             float *attn, int input_size, int n_heads, int qk_nope, int qk_rope,
+                             int v_head, int kv_lora, int start_pos,
                              float softmax_scale, void *stream);
 
 // ================= MoE（DeepSeekMoE 路由）=================

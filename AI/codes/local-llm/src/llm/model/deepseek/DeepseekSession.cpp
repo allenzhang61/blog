@@ -30,7 +30,7 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &
     kv_caches.resize(config.num_layers);
     for (int i = 0; i < config.num_layers; ++i) {
         const size_t bytes = static_cast<size_t>(max_seq_len) * kv_total * sizeof(float);
-        kv_caches[i].g_cache = GPUTensor(
+        kv_caches[i].g_cache_f32 = GPUTensor(
             CudaWeight(bytes, CUDA_R_32F, false, "deepseek.kv_cache"),
             {static_cast<int64_t>(max_seq_len), static_cast<int64_t>(kv_total)});
         kv_caches[i].seq_len = 0;
@@ -79,7 +79,7 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &
 size_t DeepseekSession::kv_state_bytes() const {
     size_t total = 0;
     for (const auto &kv : kv_caches) {
-        total += kv.g_cache.nbytes;
+        total += kv.g_cache_f32.nbytes;
     }
     return total;
 }

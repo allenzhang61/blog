@@ -89,7 +89,196 @@ hidden
 - `attn_kv_b`：把 latent KV 展开为每个 head 的 non-RoPE K 与 V；
 - `attn_output`：注意力输出投影回 hidden。
 
-### 3.3 Latent KV Cache
+按当前 GEMM 约定，权重矩阵按 `[out_dim, in_dim]` 存储，计算时等价于
+`Y = X · W^T`：
+
+| 权重 | 矩阵形状 | 典型形状 | 说明 |
+| --- | --- | --- | --- |
+| `attn_norm` | `[hidden]` | `[2048]` | 注意力输入 RMSNorm 的 gamma |
+| `attn_q` / `Wq` | `[H * (qk_nope + qk_rope), hidden]` | `[3072, 2048]` | 从 hidden 投影出所有 query head |
+| `attn_kv_a_mqa` / `Wkv_a` | `[kv_lora + qk_rope, hidden]` | `[576, 2048]` | 从 hidden 投影出 latent KV 与共享 RoPE K |
+| `attn_kv_a_norm` | `[kv_lora]` | `[512]` | latent KV 的 RMSNorm gamma |
+| `attn_kv_b` / `Wkv_b` | `[H * (qk_nope + v_head), kv_lora]` | `[4096, 512]` | 从 latent 展开各 head 的 `K_nope` 与 V |
+| `attn_output` / `Wo` | `[hidden, H * v_head]` | `[2048, 2048]` | 把多头 attention 输出投影回 hidden |
+
+### 3.3 MLA txt 流程图
+
+下面这个流程图按当前代码里的张量流向展开，左侧是当前输入 token，右侧是历史 cache：
+
+```text
+g_hidden_f32 [T, hidden]
+        |
+        v
+RMSNorm(attn_norm)
+formula: g_normed = RMSNorm(g_hidden, attn_norm)
+weight : attn_norm [hidden]
+        |
+        v
+g_normed_f32 [T, hidden]
+        |
+        +-------------------------------+
+        |                               |
+        v                               v
+attn_q gemm                      attn_kv_a_mqa gemm
+formula: Q = X · Wq^T            formula: KV_A = X · Wkv_a^T
+weight : Wq [H*(nope+rope),      weight : Wkv_a [kv_lora+rope,
+              hidden]                          hidden]
+        |                               |
+        v                               v
+g_q_f32 [T, H*(nope+rope)]       g_kv_a [T, kv_lora+rope]
+        |                               |
+        | split per head                | split
+        |                               |
+        v                               v
+[q_nope, q_rope]                 [latent C, k_rope]
+        |                               |
+        v                               v
+RoPE(q_rope)                     RMSNorm(latent C) + RoPE(k_rope)
+                                 formula: C_norm = RMSNorm(C, attn_kv_a_norm)
+                                 weight : attn_kv_a_norm [kv_lora]
+        |                               |
+        |                               v
+        |                         write current tokens
+        |                         formula: cache[pos:pos+T] = [C_norm, k_rope]
+        |                               |
+        |                               v
+        |                         latent KV cache [S, kv_lora+rope]
+        |                               |
+        |                               +----------------------+
+        |                                                      |
+        |                                              gather C_cache
+        |                                              formula: C_cache = cache[:S, :kv_lora]
+        |                                                      |
+        |                                                      v
+        |                                              attn_kv_b gemm
+        |                                              formula: KV_B = C_cache · Wkv_b^T
+        |                                              weight : Wkv_b [H*(nope+v), kv_lora]
+        |                                                      |
+        |                                                      v
+        |                                              g_kv_b_out [S, H*(nope+v)]
+        |                                                      |
+        |                                              split per head
+        |                                                      |
+        |                                                      v
+        |                                              [k_nope, value]
+        |                                                      |
+        +----------------------------+-------------------------+
+                                     |
+                                     v
+                      attention([q_nope, q_rope],
+                                [k_nope, cached k_rope],
+                                value)
+                      formula: score = Q · K^T * scale
+                               attn = softmax(score) · V
+                                     |
+                                     v
+                         g_attn [T, H*v_head]
+                                     |
+                                     v
+                         attn_output gemm
+                         formula: g_attn_out = g_attn · Wo^T
+                         weight : Wo [hidden, H*v_head]
+                                     |
+                                     v
+                         g_attn_out [T, hidden]
+                                     |
+                                     v
+                         residual add to g_hidden_f32
+                         formula: g_hidden += g_attn_out
+```
+
+这里的 `S = start_pos + T`。单 token decode 时 `T = 1`，prefill 时 `T` 是输入 token
+数量；两种路径的主要差异是 kernel 用单 token 版本还是 batch 版本，矩阵关系相同。
+
+### 3.4 用矩阵形状看 MLA
+
+记当前输入 token 数为 `T = input_size`，历史总长度为 `S = start_pos + T`，
+query head 数为 `H = num_heads`：
+
+```
+X = RMSNorm(hidden)                  [T, hidden]
+```
+
+Q 路径是一条普通线性投影：
+
+```
+Wq                                    [H * (qk_nope + qk_rope), hidden]
+Q_all = X · Wq^T                     [T, H * (qk_nope + qk_rope)]
+```
+
+其中每个 head 的 query 被拆成两段：
+
+```
+Q_i = [Q_i_nope, Q_i_rope]
+Q_i_nope                             [qk_nope]
+Q_i_rope                             [qk_rope]
+```
+
+`Q_i_rope` 会应用 RoPE，`Q_i_nope` 不带位置编码。
+
+KV 路径先不直接生成完整 K/V，而是生成一个低维 latent 以及共享的 RoPE K：
+
+```
+Wkv_a                                [kv_lora + qk_rope, hidden]
+KV_A = X · Wkv_a^T                   [T, kv_lora + qk_rope]
+KV_A = [C, K_rope]
+C                                    [T, kv_lora]
+K_rope                               [T, qk_rope]
+```
+
+其中 `C` 会经过 `attn_kv_a_norm` 归一化，`K_rope` 应用 RoPE。随后当前 token 的
+`[C_norm, K_rope]` 写入 latent KV cache。解码或 prefill 时，当前可见的 cache 为：
+
+```
+KV_cache[:S]                         [S, kv_lora + qk_rope]
+KV_cache[:S] = [C_cache, K_rope_cache]
+C_cache                              [S, kv_lora]
+K_rope_cache                         [S, qk_rope]
+```
+
+`K_rope_cache` 是所有 query head 共享的一段 RoPE K；各 head 自己的 non-RoPE K
+和 V 则由 latent 展开得到。
+
+注意力计算前，`attn_kv_b` 只对 cache 中的 latent 部分做展开：
+
+```
+Wkv_b                                [H * (qk_nope + v_head), kv_lora]
+KV_B = C_cache · Wkv_b^T             [S, H * (qk_nope + v_head)]
+```
+
+对每个 head，`KV_B` 再切成 non-RoPE K 与 V：
+
+```
+K_i_nope                             [S, qk_nope]
+V_i                                  [S, v_head]
+```
+
+最终第 `i` 个 head 参与打分的 Q/K 是拼接后的向量：
+
+```
+Q_i = [Q_i_nope, Q_i_rope]           [T, qk_nope + qk_rope]
+K_i = [K_i_nope, K_rope_cache]       [S, qk_nope + qk_rope]
+V_i                                  [S, v_head]
+
+score_i = Q_i · K_i^T * scale        [T, S]
+O_i = softmax(score_i) · V_i         [T, v_head]
+```
+
+所有 head 的输出拼接后得到：
+
+```
+O = concat(O_0 ... O_{H-1})          [T, H * v_head]
+Wo                                   [hidden, H * v_head]
+Y = O · Wo^T                         [T, hidden]
+hidden = hidden + Y
+```
+
+所以 MLA 的关键区别是：cache 中不保存完整的
+`K_i_nope [H * qk_nope]` 和 `V_i [H * v_head]`，而是保存共享的
+`C [kv_lora]` 与 `K_rope [qk_rope]`。需要做 attention 时，再用 `Wkv_b`
+把 `C_cache` 展开成每个 head 的 `K_nope/V`。
+
+### 3.5 Latent KV Cache
 
 `DeepseekSession` 为每层分配一份 latent KV cache（由类外的 `LatentKVCache` 结构描述）：
 

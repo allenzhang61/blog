@@ -445,7 +445,7 @@ __device__ inline void linear_attn_recurrent_step(const float *conv_out, const f
         const float gate = z[static_cast<size_t>(vh) * v_dim + vd];
         const float silu_gate = gate / (1.0f + __expf(-gate));
         gated_row[static_cast<size_t>(vh) * v_dim + vd] =
-            norm_weight[vd] * core[vd] * norm_scale * silu_gate;
+                norm_weight[vd] * core[vd] * norm_scale * silu_gate;
     }
 }
 
@@ -520,21 +520,21 @@ __global__ void dequantize_q4k_to_f16_kernel(const uint8_t *src, uint16_t *out, 
     const int64_t blk = blockIdx.x;
     if (blk >= nblocks) return;
 
-    const uint8_t *base = src + blk * 144;               // 144 = sizeof(BlockQ4K)
+    const uint8_t *base = src + blk * 144; // 144 = sizeof(BlockQ4K)
     const uint16_t d_h = *reinterpret_cast<const uint16_t *>(base);
     const uint16_t dmin_h = *reinterpret_cast<const uint16_t *>(base + 2);
     const float d = __half2float(__ushort_as_half(d_h));
     const float dmin = __half2float(__ushort_as_half(dmin_h));
     const uint8_t *scales = base + 4;
-    const uint8_t *qs = base + 16;                        // 4 + 12
+    const uint8_t *qs = base + 16; // 4 + 12
 
     // 128 线程覆盖 128 字节 qs；线程 t 处理 qs[t] 的低/高 4-bit（分属相邻 32 元素的两 sub-block 对）。
     const int t = threadIdx.x; // 0..127
     if (t >= 128) return;
 
     // qs 每 32 字节服务一对 sub-block（j, j+1）：低 4-bit -> sub-block j，高 4-bit -> sub-block j+1。
-    const int pair = t / 32;          // 0..3 -> sub-block 对 (2*pair, 2*pair+1)
-    const int inner = t % 32;         // sub-block 内元素下标 0..31
+    const int pair = t / 32; // 0..3 -> sub-block 对 (2*pair, 2*pair+1)
+    const int inner = t % 32; // sub-block 内元素下标 0..31
     const int j_lo = 2 * pair;
     const int j_hi = 2 * pair + 1;
 
@@ -609,18 +609,18 @@ __global__ void dequantize_q6k_to_f16_kernel(const uint8_t *src, uint16_t *out, 
     if (l >= 32) return;
     uint16_t *y = out + blk * 256;
     // 两个 128-元素 half（n = 0 与 128）
-    #pragma unroll
+#pragma unroll
     for (int half = 0; half < 2; ++half) {
         const int n = half * 128;
         const int is = l / 16;
         const uint8_t *qlp = ql + (n / 2);
         const uint8_t *qhp = qh + (n / 4);
         const int8_t *sc = scales + (n / 16);
-        const int8_t q1 = static_cast<int8_t>((qlp[l +  0] & 0xF) | (((qhp[l] >> 0) & 3) << 4)) - 32;
+        const int8_t q1 = static_cast<int8_t>((qlp[l + 0] & 0xF) | (((qhp[l] >> 0) & 3) << 4)) - 32;
         const int8_t q2 = static_cast<int8_t>((qlp[l + 32] & 0xF) | (((qhp[l] >> 2) & 3) << 4)) - 32;
-        const int8_t q3 = static_cast<int8_t>((qlp[l +  0] >> 4)  | (((qhp[l] >> 4) & 3) << 4)) - 32;
-        const int8_t q4 = static_cast<int8_t>((qlp[l + 32] >> 4)  | (((qhp[l] >> 6) & 3) << 4)) - 32;
-        y[n + l +  0] = __half_as_ushort(__float2half(d * sc[is + 0] * static_cast<float>(q1)));
+        const int8_t q3 = static_cast<int8_t>((qlp[l + 0] >> 4) | (((qhp[l] >> 4) & 3) << 4)) - 32;
+        const int8_t q4 = static_cast<int8_t>((qlp[l + 32] >> 4) | (((qhp[l] >> 6) & 3) << 4)) - 32;
+        y[n + l + 0] = __half_as_ushort(__float2half(d * sc[is + 0] * static_cast<float>(q1)));
         y[n + l + 32] = __half_as_ushort(__float2half(d * sc[is + 2] * static_cast<float>(q2)));
         y[n + l + 64] = __half_as_ushort(__float2half(d * sc[is + 4] * static_cast<float>(q3)));
         y[n + l + 96] = __half_as_ushort(__float2half(d * sc[is + 6] * static_cast<float>(q4)));
@@ -659,14 +659,23 @@ __device__ inline void mla_rope_inplace(float *vec, int rope_dim, int pos, const
 
 // kv_a 处理：latent 段 RMSNorm（无 weight one_plus，标准 RMSNorm），k_rope 段 RoPE，
 // 写入 kv_cache 布局 [max_seq_len, kv_lora + qk_rope]。每个 block 处理一个 (tok)。
-__device__ inline void mla_kv_a_row(const float *kv_a, const float *kv_a_norm_weight,
-                                    float *kv_cache, int kv_lora, int qk_rope, int pos,
-                                    const float *inv_freq, float eps, float *partial, float *cache_row) {
+__global__ void mla_kv_a_kernel(const float *kv_a, const float *kv_a_norm_weight, float *output_kv_cache,
+                                int input_size, int kv_lora, int qk_rope, int start_pos,
+                                const float *inv_freq, float eps) {
+    extern __shared__ float shared[];
+    float *partial = shared;
+    float *cache_row = partial + blockDim.x; //+kBlock
     const int tid = threadIdx.x;
+    const int input_index = blockIdx.x;
+    if (input_index >= input_size) return;
+    const int pos = start_pos + input_index;
+    const int total = kv_lora + qk_rope;
+    const float *kv_a_row = kv_a + static_cast<size_t>(input_index) * total;
+
     // latent RMSNorm
     float ss = 0.0f;
     for (int d = tid; d < kv_lora; d += blockDim.x) {
-        const float v = kv_a[d];
+        const float v = kv_a_row[d];
         ss += v * v;
     }
     partial[tid] = ss;
@@ -677,63 +686,35 @@ __device__ inline void mla_kv_a_row(const float *kv_a, const float *kv_a_norm_we
     }
     const float scale = rsqrtf(partial[0] / static_cast<float>(kv_lora) + eps);
     for (int d = tid; d < kv_lora; d += blockDim.x) {
-        cache_row[d] = kv_a[d] * scale * kv_a_norm_weight[d];
+        cache_row[d] = kv_a_row[d] * scale * kv_a_norm_weight[d];
     }
     // k_rope 段先拷贝
     for (int d = tid; d < qk_rope; d += blockDim.x) {
-        cache_row[kv_lora + d] = kv_a[kv_lora + d];
+        cache_row[kv_lora + d] = kv_a_row[kv_lora + d];
     }
     __syncthreads();
     // 对 k_rope 段做 RoPE
     mla_rope_inplace(cache_row + kv_lora, qk_rope, pos, inv_freq);
     __syncthreads();
-    const int total = kv_lora + qk_rope;
     for (int d = tid; d < total; d += blockDim.x) {
-        kv_cache[static_cast<size_t>(pos) * total + d] = cache_row[d];
+        output_kv_cache[static_cast<size_t>(pos) * total + d] = cache_row[d];
     }
 }
 
-__global__ void mla_kv_a_kernel(const float *kv_a, const float *kv_a_norm_weight, float *kv_cache,
-                                int kv_lora, int qk_rope, int pos, const float *inv_freq, float eps) {
-    extern __shared__ float shared[];
-    float *partial = shared;
-    float *cache_row = partial + blockDim.x;
-    mla_kv_a_row(kv_a, kv_a_norm_weight, kv_cache, kv_lora, qk_rope, pos, inv_freq, eps,
-                 partial, cache_row);
-}
-
-__global__ void mla_kv_a_batch_kernel(const float *kv_a, const float *kv_a_norm_weight, float *kv_cache,
-                                      int tokens, int kv_lora, int qk_rope, int start_pos,
-                                      const float *inv_freq, float eps) {
-    extern __shared__ float shared[];
-    float *partial = shared;
-    float *cache_row = partial + blockDim.x;
-    const int tok = blockIdx.x;
-    if (tok >= tokens) return;
-    const int total = kv_lora + qk_rope;
-    mla_kv_a_row(kv_a + static_cast<size_t>(tok) * total, kv_a_norm_weight, kv_cache,
-                 kv_lora, qk_rope, start_pos + tok, inv_freq, eps, partial, cache_row);
-}
-
-// q 的 rope 段旋转：q 布局 [n_heads, qk_nope + qk_rope]，只旋转后 qk_rope 维。每 block 处理一个 (tok,head)。
-__global__ void mla_rope_q_kernel(float *q, int n_heads, int qk_nope, int qk_rope, int pos,
-                                  const float *inv_freq) {
-    const int h = blockIdx.x;
-    if (h >= n_heads) return;
-    const int qk_head = qk_nope + qk_rope;
-    float *qh = q + static_cast<size_t>(h) * qk_head + qk_nope;
-    mla_rope_inplace(qh, qk_rope, pos, inv_freq);
-}
-
-__global__ void mla_rope_q_batch_kernel(float *q, int tokens, int n_heads, int qk_nope, int qk_rope,
-                                        int start_pos, const float *inv_freq) {
-    const int block = blockIdx.x;
-    const int tok = block / n_heads;
-    const int h = block - tok * n_heads;
-    if (tok >= tokens) return;
-    const int qk_head = qk_nope + qk_rope;
-    float *qh = q + (static_cast<size_t>(tok) * n_heads + h) * qk_head + qk_nope;
-    mla_rope_inplace(qh, qk_rope, start_pos + tok, inv_freq);
+// q 的 rope 段旋转：q 布局 [input_size, n_heads, qk_nope + qk_rope]，只旋转后 qk_rope 维。
+// 每 block 处理一个 (tok, head)；单 token decode 是 input_size=1 的特例。
+__global__ void mla_rope_q_kernel(float *q, int input_size, int n_heads, int qk_nope,
+                                  int qk_rope, int start_pos, const float *inv_freq) {
+    const int block_index = blockIdx.x; //block 数量：input_size*n_heads
+    //block_index = input_index * n_heads + head_index
+    const int input_index = block_index / n_heads;
+    const int head_index = block_index - input_index * n_heads;
+    if (input_index >= input_size) return;
+    float *qh = q
+                + static_cast<size_t>(input_index) * n_heads * (qk_nope + qk_rope)
+                + head_index * (qk_nope + qk_rope)
+                + qk_nope; //跳过前一半的 qk_nope，只看后一半的 qk_rope
+    mla_rope_inplace(qh, qk_rope, start_pos + input_index, inv_freq);
 }
 
 // MLA attend：每 block 处理一个 (tok, head)，pos 为该 token 绝对位置。
@@ -799,21 +780,6 @@ __device__ inline void mla_attend_head(const float *q, const float *kv_b_out, co
     }
 }
 
-__global__ void mla_attend_kernel(const float *q, const float *kv_b_out, const float *kv_cache,
-                                  float *attn, int n_heads, int qk_nope, int qk_rope, int v_head,
-                                  int kv_lora, int pos, float softmax_scale) {
-    extern __shared__ float shared[];
-    float *scores = shared;
-    float *partial = scores + pos + 1;
-    const int h = blockIdx.x;
-    if (h >= n_heads) return;
-    const int qk_head = qk_nope + qk_rope;
-    const size_t q_off = static_cast<size_t>(h) * qk_head;
-    const size_t out_off = static_cast<size_t>(h) * v_head;
-    mla_attend_head(q, kv_b_out, kv_cache, attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
-                    pos, softmax_scale, q_off, out_off, scores, partial);
-}
-
 __global__ void mla_attend_batch_kernel(const float *q, const float *kv_b_out, const float *kv_cache,
                                         float *attn, int tokens, int n_heads, int qk_nope, int qk_rope,
                                         int v_head, int kv_lora, int start_pos, float softmax_scale) {
@@ -859,7 +825,10 @@ __global__ void moe_router_topk_kernel(const float *router_logits, int *top_idx,
         int best_e = -1;
         for (int e = 0; e < n_experts; ++e) {
             if (used[e]) continue;
-            if (logits[e] > best) { best = logits[e]; best_e = e; }
+            if (logits[e] > best) {
+                best = logits[e];
+                best_e = e;
+            }
         }
         used[best_e] = true;
         const float prob = __expf(logits[best_e] - maxv) / denom;

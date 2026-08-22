@@ -128,6 +128,17 @@ public:
     DType dtype = DType::UNKNOWN;
     size_t nbytes = 0;
 
+    size_t ndim() const {
+        return shape.size();
+    }
+
+    int64_t dim(size_t axis) const {
+        if (axis >= shape.size()) {
+            throw std::runtime_error("tensor shape 维度越界: " + name);
+        }
+        return shape[axis];
+    }
+
     int64_t numel() const {
         if (shape.empty()) { return 0; }
         int64_t n = 1;

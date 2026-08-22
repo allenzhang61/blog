@@ -73,27 +73,16 @@ public:
                                                  int value_heads, int k_dim, int v_dim, float eps,
                                                  void *stream = nullptr);
 
-    static void mla_kv_a(const GPUTensor &g_kv_a, const StorageTensor &s_kv_a_norm_weight, const GPUTensor &g_kv_cache,
-                         int kv_lora, int qk_rope, int max_seq_len, int pos,
-                         const GPUTensor &g_inv_freq, float eps, void *stream = nullptr);
-    static void mla_kv_a_batch(const GPUTensor &g_kv_a, const StorageTensor &s_kv_a_norm_weight, const GPUTensor &g_kv_cache,
-                               int kv_lora, int qk_rope, int max_seq_len,
-                               int start_pos, const GPUTensor &g_inv_freq, float eps,
-                               void *stream = nullptr);
-    static void mla_rope_q(const GPUTensor &g_q_f32, int n_heads, int qk_nope, int qk_rope, int pos,
-                           const GPUTensor &g_inv_freq_f32, void *stream = nullptr);
-    static void mla_rope_q_batch(const GPUTensor &g_q_f32, int n_heads, int qk_nope, int qk_rope,
-                                 int start_pos, const GPUTensor &g_inv_freq_f32, void *stream = nullptr);
-    static void mla_attend(const GPUTensor &g_q, const GPUTensor &g_kv_b_out, const GPUTensor &g_kv_cache,
-                           const GPUTensor &g_attn, int n_heads, int qk_nope, int qk_rope, int v_head,
-                           int kv_lora, int max_seq_len, int pos, float softmax_scale,
-                           void *stream = nullptr);
-    static void mla_attend_batch(const GPUTensor &g_q, const GPUTensor &g_kv_b_out, const GPUTensor &g_kv_cache,
-                                 const GPUTensor &g_attn, int n_heads, int qk_nope, int qk_rope,
-                                 int v_head, int kv_lora, int max_seq_len, int start_pos,
-                                 float softmax_scale, void *stream = nullptr);
+    static void mla_kv_a(const GPUTensor &g_kv_a_f32, const StorageTensor &s_kv_a_norm_weight,
+                         const GPUTensor &g_kv_cache_f32, int input_size, int kv_lora, int qk_rope,
+                         int start_pos, const GPUTensor &g_inv_freq_f32, float eps, void *stream = nullptr);
+    static void mla_rope_q(const GPUTensor &g_q_f32, int input_size, int n_heads, int qk_nope, int qk_rope,
+                           int start_pos, const GPUTensor &g_inv_freq_f32, void *stream = nullptr);
+    static void mla_attend(const GPUTensor &g_q_f32, const GPUTensor &g_kv_b_out_f32, const GPUTensor &g_kv_cache_f32,
+                           const GPUTensor &g_attn_f32, int input_size, int n_heads, int qk_nope, int qk_rope,
+                           int v_head, int kv_lora, int start_pos, float softmax_scale, void *stream = nullptr);
 
-    static void moe_router_topk(const GPUTensor &g_router_logits, const GPUTensor &g_top_idx, const GPUTensor &g_top_w,
+    static void moe_router_topk(const GPUTensor &g_router_logits_f32, const GPUTensor &g_top_idx_i32, const GPUTensor &g_top_w_f32,
                                 int n_experts, int k, float routed_scaling,
                                 void *stream = nullptr);
     static void moe_accumulate(const GPUTensor &g_expert_out, float weight, const GPUTensor &g_out,

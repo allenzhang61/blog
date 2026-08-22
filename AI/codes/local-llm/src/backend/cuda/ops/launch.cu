@@ -193,59 +193,30 @@ void launch_f32_to_bf16_copy(const float *src, uint16_t *out, int64_t num_elemen
 
 // ---- MLA ----
 
-void launch_mla_kv_a(const float *kv_a, const float *kv_a_norm_weight, float *kv_cache,
-                     int kv_lora, int qk_rope, int max_seq_len, int pos,
+void launch_mla_kv_a(const float *kv_a, const float *kv_a_norm_weight, float *output_kv_cache,
+                     int input_size, int kv_lora, int qk_rope, int start_pos,
                      const float *inv_freq, float eps, void *stream) {
     ScopedGpuTimer timer("mla_kv_a", as_stream(stream));
-    (void) max_seq_len;
     size_t smem = (static_cast<size_t>(kBlock) + kv_lora + qk_rope) * sizeof(float);
-    mla_kv_a_kernel<<<1, kBlock, smem, as_stream(stream)>>>(
-        kv_a, kv_a_norm_weight, kv_cache, kv_lora, qk_rope, pos, inv_freq, eps);
+    mla_kv_a_kernel<<<input_size, kBlock, smem, as_stream(stream)>>>(
+        kv_a, kv_a_norm_weight, output_kv_cache, input_size, kv_lora, qk_rope, start_pos, inv_freq, eps);
 }
 
-void launch_mla_kv_a_batch(const float *kv_a, const float *kv_a_norm_weight, float *kv_cache,
-                           int tokens, int kv_lora, int qk_rope, int max_seq_len, int start_pos,
-                           const float *inv_freq, float eps, void *stream) {
-    ScopedGpuTimer timer("mla_kv_a_batch", as_stream(stream));
-    (void) max_seq_len;
-    size_t smem = (static_cast<size_t>(kBlock) + kv_lora + qk_rope) * sizeof(float);
-    mla_kv_a_batch_kernel<<<tokens, kBlock, smem, as_stream(stream)>>>(
-        kv_a, kv_a_norm_weight, kv_cache, tokens, kv_lora, qk_rope, start_pos, inv_freq, eps);
-}
-
-void launch_mla_rope_q(float *q, int n_heads, int qk_nope, int qk_rope, int pos,
-                       const float *inv_freq, void *stream) {
+void launch_mla_rope_q(float *q, int input_size, int n_heads, int qk_nope, int qk_rope,
+                       int start_pos, const float *inv_freq, void *stream) {
     ScopedGpuTimer timer("mla_rope_q", as_stream(stream));
-    mla_rope_q_kernel<<<n_heads, kBlock, 0, as_stream(stream)>>>(
-        q, n_heads, qk_nope, qk_rope, pos, inv_freq);
-}
-
-void launch_mla_rope_q_batch(float *q, int tokens, int n_heads, int qk_nope, int qk_rope,
-                             int start_pos, const float *inv_freq, void *stream) {
-    ScopedGpuTimer timer("mla_rope_q_batch", as_stream(stream));
-    mla_rope_q_batch_kernel<<<tokens * n_heads, kBlock, 0, as_stream(stream)>>>(
-        q, tokens, n_heads, qk_nope, qk_rope, start_pos, inv_freq);
-}
-
-void launch_mla_attend(const float *q, const float *kv_b_out, const float *kv_cache, float *attn,
-                       int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
-                       int max_seq_len, int pos, float softmax_scale, void *stream) {
-    ScopedGpuTimer timer("mla_attend", as_stream(stream));
-    (void) max_seq_len;
-    size_t smem = (static_cast<size_t>(pos + 1) + kBlock) * sizeof(float);
-    mla_attend_kernel<<<n_heads, kBlock, smem, as_stream(stream)>>>(
-        q, kv_b_out, kv_cache, attn, n_heads, qk_nope, qk_rope, v_head, kv_lora, pos, softmax_scale);
+    mla_rope_q_kernel<<<input_size * n_heads, kBlock, 0, as_stream(stream)>>>(
+        q, input_size, n_heads, qk_nope, qk_rope, start_pos, inv_freq);
 }
 
 void launch_mla_attend_batch(const float *q, const float *kv_b_out, const float *kv_cache, float *attn,
-                             int tokens, int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
-                             int max_seq_len, int start_pos, float softmax_scale, void *stream) {
+                             int input_size, int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
+                             int start_pos, float softmax_scale, void *stream) {
     ScopedGpuTimer timer("mla_attend_batch", as_stream(stream));
-    (void) max_seq_len;
-    size_t max_pos = static_cast<size_t>(start_pos + tokens - 1);
+    size_t max_pos = static_cast<size_t>(start_pos + input_size - 1);
     size_t smem = (max_pos + 1 + kBlock) * sizeof(float);
-    mla_attend_batch_kernel<<<tokens * n_heads, kBlock, smem, as_stream(stream)>>>(
-        q, kv_b_out, kv_cache, attn, tokens, n_heads, qk_nope, qk_rope, v_head, kv_lora,
+    mla_attend_batch_kernel<<<input_size * n_heads, kBlock, smem, as_stream(stream)>>>(
+        q, kv_b_out, kv_cache, attn, input_size, n_heads, qk_nope, qk_rope, v_head, kv_lora,
         start_pos, softmax_scale);
 }
 

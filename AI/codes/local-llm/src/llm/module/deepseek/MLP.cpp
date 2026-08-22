@@ -10,12 +10,13 @@
 MLP::MLP(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : weights_(weights),
       dense_(weights, config),
-      moe_(weights, config) {}
+      moe_(weights, config) {
+}
 
-void MLP::forward(DeepseekSession &session, const GPUTensor &g_hidden) {
+void MLP::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32) {
     if (weights_.is_moe) {
-        moe_.forward(session, g_hidden);
+        moe_.forward(session, g_hidden_f32);
     } else {
-        dense_.forward(session, g_hidden);
+        dense_.forward(session, g_hidden_f32);
     }
 }

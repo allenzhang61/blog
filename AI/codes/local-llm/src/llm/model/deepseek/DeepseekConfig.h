@@ -57,7 +57,7 @@ struct DeepseekConfig {
     // 从模型文件元数据构造。
     explicit DeepseekConfig(const MF &mf);
 
-    void DebugDump() const;
+    void debug_dump() const;
 };
 
 #endif // LOCAL_LLM_DEEPSEEKCONFIG_H

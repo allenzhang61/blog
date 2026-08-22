@@ -15,7 +15,7 @@
 
 // 每层 latent KV cache：布局 [max_seq_len, kv_lora + qk_rope]，float。
 struct LatentKVCache {
-    GPUTensor g_cache;
+    GPUTensor g_cache_f32;
     int seq_len = 0;
 };
 

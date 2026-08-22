@@ -16,7 +16,7 @@ DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, cons
       weights_(*mf_, config_),
       max_output_tokens_(max_output_tokens),
       sampler_(sampling) {
-    config_.DebugDump();
+    config_.debug_dump();
     mla_layers_.reserve(config_.num_layers);
     mlp_layers_.reserve(config_.num_layers);
     for (int i = 0; i < config_.num_layers; ++i) {
