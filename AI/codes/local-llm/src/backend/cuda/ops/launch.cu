@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include <cuda_runtime.h>
+#include <cuda_bf16.h>
 
 #include "utils/stats/ScopedTimer.h"
 
@@ -149,6 +150,49 @@ void launch_linear_attention_recurrent_batch(const float *conv_out, const float 
     linear_attention_recurrent_batch_kernel<<<value_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
         conv_out, z, b, a, a_log, dt_bias, norm_weight, recurrent_state, gated, tokens,
         key_heads, value_heads, k_dim, v_dim, eps);
+}
+
+// 融合 kernel launch（conv1d→recurrent→读出 单核）。grid=key_heads，按 state_bf16 分派模板实例。
+void launch_linear_attention_fused(const float *mixed, const uint16_t *conv_weight, float *conv_state,
+                                   const float *z, const float *b, const float *a, const float *a_log,
+                                   const uint16_t *dt_bias, const float *norm_weight,
+                                   void *recurrent_state, bool state_bf16, float *gated,
+                                   int key_heads, int value_heads, int k_dim, int v_dim,
+                                   int kernel, float eps, void *stream) {
+    ScopedGpuTimer timer("linear_attention_fused", as_stream(stream));
+    size_t smem = (static_cast<size_t>(4 * k_dim + 3 * v_dim) + 2 * kLinearRecurBlock) * sizeof(float);
+    if (state_bf16) {
+        linear_attention_fused_kernel<__nv_bfloat16><<<key_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
+            mixed, conv_weight, conv_state, z, b, a, a_log, dt_bias, norm_weight,
+            static_cast<__nv_bfloat16 *>(recurrent_state), gated,
+            key_heads, value_heads, k_dim, v_dim, kernel, eps);
+    } else {
+        linear_attention_fused_kernel<float><<<key_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
+            mixed, conv_weight, conv_state, z, b, a, a_log, dt_bias, norm_weight,
+            static_cast<float *>(recurrent_state), gated,
+            key_heads, value_heads, k_dim, v_dim, kernel, eps);
+    }
+}
+
+void launch_linear_attention_fused_batch(const float *mixed, const uint16_t *conv_weight, float *conv_state,
+                                         const float *z, const float *b, const float *a, const float *a_log,
+                                         const uint16_t *dt_bias, const float *norm_weight,
+                                         void *recurrent_state, bool state_bf16, float *gated, int tokens,
+                                         int key_heads, int value_heads, int k_dim, int v_dim,
+                                         int kernel, float eps, void *stream) {
+    ScopedGpuTimer timer("linear_attention_fused_batch", as_stream(stream));
+    size_t smem = (static_cast<size_t>(4 * k_dim + 3 * v_dim) + 2 * kLinearRecurBlock) * sizeof(float);
+    if (state_bf16) {
+        linear_attention_fused_batch_kernel<__nv_bfloat16><<<key_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
+            mixed, conv_weight, conv_state, z, b, a, a_log, dt_bias, norm_weight,
+            static_cast<__nv_bfloat16 *>(recurrent_state), gated, tokens,
+            key_heads, value_heads, k_dim, v_dim, kernel, eps);
+    } else {
+        linear_attention_fused_batch_kernel<float><<<key_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
+            mixed, conv_weight, conv_state, z, b, a, a_log, dt_bias, norm_weight,
+            static_cast<float *>(recurrent_state), gated, tokens,
+            key_heads, value_heads, k_dim, v_dim, kernel, eps);
+    }
 }
 
 void launch_dequantize_q4k_to_f16(const uint8_t *src, uint16_t *out, int64_t num_elements, void *stream) {

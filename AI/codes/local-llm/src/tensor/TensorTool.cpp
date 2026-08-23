@@ -269,6 +269,42 @@ void TensorTool::linear_attention_recurrent_batch(const GPUTensor &g_conv_out_f3
                                             value_heads, k_dim, v_dim, eps, stream);
 }
 
+void TensorTool::linear_attention_fused(const GPUTensor &g_mixed_f32, const StorageTensor &s_conv_weight,
+                                        const GPUTensor &g_conv_state_f32, const GPUTensor &g_z_f32,
+                                        const GPUTensor &g_b_f32, const GPUTensor &g_a_f32,
+                                        const StorageTensor &s_a_log, const StorageTensor &s_dt_bias,
+                                        const StorageTensor &s_norm_weight, const GPUTensor &g_recurrent_state,
+                                        const GPUTensor &g_gated_f32, int key_heads, int value_heads,
+                                        int k_dim, int v_dim, int kernel, float eps, void *stream) {
+    GPUTensor g_a_log_f32 = s_a_log.to_gpu(true);
+    GPUTensor g_norm_weight_f32 = s_norm_weight.to_gpu(true);
+    const bool state_bf16 = g_recurrent_state.dtype == DType::BF16;
+    launch_linear_attention_fused(g_mixed_f32.data<float>(), lowp_data(s_conv_weight), g_conv_state_f32.data<float>(),
+                                  g_z_f32.data<float>(), g_b_f32.data<float>(), g_a_f32.data<float>(),
+                                  g_a_log_f32.data<float>(), lowp_data(s_dt_bias), g_norm_weight_f32.data<float>(),
+                                  g_recurrent_state.data(), state_bf16, g_gated_f32.data<float>(),
+                                  key_heads, value_heads, k_dim, v_dim, kernel, eps, stream);
+}
+
+void TensorTool::linear_attention_fused_batch(const GPUTensor &g_mixed_f32, const StorageTensor &s_conv_weight,
+                                              const GPUTensor &g_conv_state_f32, const GPUTensor &g_z_f32,
+                                              const GPUTensor &g_b_f32, const GPUTensor &g_a_f32,
+                                              const StorageTensor &s_a_log, const StorageTensor &s_dt_bias,
+                                              const StorageTensor &s_norm_weight, const GPUTensor &g_recurrent_state,
+                                              const GPUTensor &g_gated_f32, int key_heads, int value_heads,
+                                              int k_dim, int v_dim, int kernel, float eps, void *stream) {
+    GPUTensor g_a_log_f32 = s_a_log.to_gpu(true);
+    GPUTensor g_norm_weight_f32 = s_norm_weight.to_gpu(true);
+    const bool state_bf16 = g_recurrent_state.dtype == DType::BF16;
+    launch_linear_attention_fused_batch(g_mixed_f32.data<float>(), lowp_data(s_conv_weight),
+                                        g_conv_state_f32.data<float>(), g_z_f32.data<float>(),
+                                        g_b_f32.data<float>(), g_a_f32.data<float>(),
+                                        g_a_log_f32.data<float>(), lowp_data(s_dt_bias),
+                                        g_norm_weight_f32.data<float>(), g_recurrent_state.data(), state_bf16,
+                                        g_gated_f32.data<float>(), static_cast<int>(g_mixed_f32.rows()),
+                                        key_heads, value_heads, k_dim, v_dim, kernel, eps, stream);
+}
+
 void TensorTool::mla_kv_a(const GPUTensor &g_kv_a_f32, const StorageTensor &s_kv_a_norm_weight,
                           const GPUTensor &g_kv_cache_f32, //这个是 output
                           int input_size, int kv_lora, int qk_rope,

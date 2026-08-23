@@ -75,6 +75,23 @@ __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, c
                                                         float *recurrent_state, float *gated,
                                                         int tokens, int key_heads, int value_heads,
                                                         int k_dim, int v_dim, float eps);
+// 融合 kernel（模板：StateT=float 或 __nv_bfloat16）。声明为模板，定义与显式实例化在 kernel.cu。
+template <typename StateT>
+__global__ void linear_attention_fused_kernel(const float *mixed, const uint16_t *conv_weight,
+                                              float *conv_state, const float *z, const float *b,
+                                              const float *a, const float *a_log,
+                                              const uint16_t *dt_bias, const float *norm_weight,
+                                              StateT *recurrent_state, float *gated,
+                                              int key_heads, int value_heads, int k_dim, int v_dim,
+                                              int kernel, float eps);
+template <typename StateT>
+__global__ void linear_attention_fused_batch_kernel(const float *mixed, const uint16_t *conv_weight,
+                                                    float *conv_state, const float *z, const float *b,
+                                                    const float *a, const float *a_log,
+                                                    const uint16_t *dt_bias, const float *norm_weight,
+                                                    StateT *recurrent_state, float *gated, int tokens,
+                                                    int key_heads, int value_heads, int k_dim, int v_dim,
+                                                    int kernel, float eps);
 
 // ---- dtype / dequant ----
 __global__ void dequantize_q4k_to_f16_kernel(const uint8_t *src, uint16_t *out, int64_t nblocks);

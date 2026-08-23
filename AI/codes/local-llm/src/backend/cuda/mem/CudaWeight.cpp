@@ -15,6 +15,10 @@
 
 CudaWeight::CudaWeight(size_t bytes, cudaDataType_t type, bool zero, const std::string &what)
     : bytes(bytes), type(type) {
+    // 由 cuBLAS 数据类型推导原始 DType，使基于本缓冲区的 GPUTensor 携带正确 dtype（如 recurrent state bf16）。
+    if (type == CUDA_R_16BF) dtype = DType::BF16;
+    else if (type == CUDA_R_16F) dtype = DType::F16;
+    else dtype = DType::F32;
     check_cuda(cudaMalloc(&ptr, bytes), "cudaMalloc " + what + " 失败");
     if (zero) {
         check_cuda(cudaMemset(ptr, 0, bytes), "cudaMemset " + what + " 失败");

@@ -49,8 +49,9 @@ QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
             state.g_conv_state_f32 = GPUTensor(
                 CudaWeight(conv_dim * kernel * sizeof(float), CUDA_R_32F, true, "linear conv state"),
                 {static_cast<int64_t>(conv_dim), static_cast<int64_t>(kernel)});
+            // 递归状态改 bf16：显存减半，融合 kernel 读写时按需转 float 计算。
             state.g_recurrent_state_f32 = GPUTensor(
-                CudaWeight(recurrent_elems * sizeof(float), CUDA_R_32F, true, "linear recurrent state"),
+                CudaWeight(recurrent_elems * sizeof(uint16_t), CUDA_R_16BF, true, "linear recurrent state"),
                 {static_cast<int64_t>(text_config.linear_num_value_heads),
                  static_cast<int64_t>(text_config.linear_key_head_dim),
                  static_cast<int64_t>(text_config.linear_value_head_dim)});

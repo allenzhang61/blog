@@ -84,6 +84,22 @@ public:
                                                  int value_heads, int k_dim, int v_dim, float eps,
                                                  void *stream = nullptr);
 
+    // 融合 conv1d→recurrent→读出（单核）。g_recurrent_state 支持 F32 或 BF16（按其 dtype 分派）。
+    static void linear_attention_fused(const GPUTensor &g_mixed_f32, const StorageTensor &s_conv_weight,
+                                       const GPUTensor &g_conv_state_f32, const GPUTensor &g_z_f32,
+                                       const GPUTensor &g_b_f32, const GPUTensor &g_a_f32,
+                                       const StorageTensor &s_a_log, const StorageTensor &s_dt_bias,
+                                       const StorageTensor &s_norm_weight, const GPUTensor &g_recurrent_state,
+                                       const GPUTensor &g_gated_f32, int key_heads, int value_heads,
+                                       int k_dim, int v_dim, int kernel, float eps, void *stream = nullptr);
+    static void linear_attention_fused_batch(const GPUTensor &g_mixed_f32, const StorageTensor &s_conv_weight,
+                                             const GPUTensor &g_conv_state_f32, const GPUTensor &g_z_f32,
+                                             const GPUTensor &g_b_f32, const GPUTensor &g_a_f32,
+                                             const StorageTensor &s_a_log, const StorageTensor &s_dt_bias,
+                                             const StorageTensor &s_norm_weight, const GPUTensor &g_recurrent_state,
+                                             const GPUTensor &g_gated_f32, int key_heads, int value_heads,
+                                             int k_dim, int v_dim, int kernel, float eps, void *stream = nullptr);
+
     static void mla_kv_a(const GPUTensor &g_kv_a_f32, const StorageTensor &s_kv_a_norm_weight,
                          const GPUTensor &g_kv_cache_f32, int input_size, int kv_lora, int qk_rope,
                          int start_pos, const GPUTensor &g_inv_freq_f32, float eps, void *stream = nullptr);

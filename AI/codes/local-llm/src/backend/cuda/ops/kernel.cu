@@ -502,6 +502,251 @@ __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, c
     }
 }
 
+// ---- linear attention 融合 kernel（conv1d + gated delta 递归 + 读出，单核） ----
+//
+// 分块方式：每个 CUDA block 处理 1 个 key_head 及其 repeat 个 value_head。
+// 这样 q/k 的 conv 通道（每个 key_head 独有）只被本 block 移位写回 conv_state，
+// value 的 conv 通道（每个 value_head 独有）也只在本 block 内处理，彻底避开 conv_state 竞态。
+// conv 结果直接留在 shared，不再落显存的 conv_out，省去一次 launch + 一次全量往返。
+//
+// recurrent_state 用模板参数 StateT 支持 fp32 或 bf16 存储；kernel 内一律用 float 计算，
+// 只在读写持久状态时做精度转换。
+//
+// shared 布局（每 block）：
+//   qk_conv[2*k_dim]   -- 本 key_head 的 q、k 卷积输出（各 k_dim）
+//   v_conv[v_dim]      -- 当前 value_head 的 value 卷积输出
+//   q[k_dim] k[k_dim] delta[v_dim] core[v_dim] partial[2*blockDim]
+template <typename StateT>
+__device__ inline float state_to_float(StateT v);
+template <> __device__ inline float state_to_float<float>(float v) { return v; }
+template <> __device__ inline float state_to_float<__nv_bfloat16>(__nv_bfloat16 v) { return __bfloat162float(v); }
+template <typename StateT> __device__ inline StateT float_to_state(float v);
+template <> __device__ inline float float_to_state<float>(float v) { return v; }
+template <> __device__ inline __nv_bfloat16 float_to_state<__nv_bfloat16>(float v) { return __float2bfloat16(v); }
+
+// 单个 value_head 的融合递归步；conv 已在 shared（qk_conv / v_conv）。
+template <typename StateT>
+__device__ inline void linear_attn_fused_step(const float *qk_conv, const float *v_conv,
+                                              const float *z, const float *b, const float *a,
+                                              const float *a_log, const uint16_t *dt_bias,
+                                              const float *norm_weight, StateT *rec, float *gated_row,
+                                              int vh, int k_dim, int v_dim, float eps,
+                                              float *q, float *k, float *delta, float *core,
+                                              float *partial) {
+    const int tid = threadIdx.x;
+    float ss_q = 0.0f, ss_k = 0.0f;
+    for (int i = tid; i < k_dim; i += blockDim.x) {
+        const float qv = qk_conv[i];
+        const float kv = qk_conv[k_dim + i];
+        q[i] = qv;
+        k[i] = kv;
+        ss_q += qv * qv;
+        ss_k += kv * kv;
+    }
+    partial[tid] = ss_q;
+    partial[blockDim.x + tid] = ss_k;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            partial[tid] += partial[tid + s];
+            partial[blockDim.x + tid] += partial[blockDim.x + tid + s];
+        }
+        __syncthreads();
+    }
+    const float q_scale = rsqrtf(partial[0] + 1e-6f) / sqrtf(static_cast<float>(k_dim));
+    const float k_scale = rsqrtf(partial[blockDim.x] + 1e-6f);
+    for (int i = tid; i < k_dim; i += blockDim.x) {
+        q[i] *= q_scale;
+        k[i] *= k_scale;
+    }
+    __syncthreads();
+
+    const float beta = 1.0f / (1.0f + __expf(-b[vh]));
+    const float dt = a[vh] + f16_or_bf16_to_float(dt_bias[vh], 0);
+    const float softplus_dt = dt > 20.0f ? dt : (dt < -20.0f ? __expf(dt) : log1pf(__expf(dt)));
+    const float g = -__expf(a_log[vh]) * softplus_dt;
+    const float decay = __expf(g);
+
+    const int state_size = k_dim * v_dim;
+    for (int i = tid; i < state_size; i += blockDim.x) rec[i] = float_to_state<StateT>(state_to_float<StateT>(rec[i]) * decay);
+    __syncthreads();
+
+    for (int vd = tid; vd < v_dim; vd += blockDim.x) {
+        float kv_mem = 0.0f;
+        for (int kd = 0; kd < k_dim; ++kd) kv_mem += state_to_float<StateT>(rec[static_cast<size_t>(kd) * v_dim + vd]) * k[kd];
+        const float value = v_conv[vd];
+        delta[vd] = (value - kv_mem) * beta;
+    }
+    __syncthreads();
+    for (int i = tid; i < state_size; i += blockDim.x) {
+        const int kd = i / v_dim;
+        const int vd = i - kd * v_dim;
+        rec[i] = float_to_state<StateT>(state_to_float<StateT>(rec[i]) + k[kd] * delta[vd]);
+    }
+    __syncthreads();
+    for (int vd = tid; vd < v_dim; vd += blockDim.x) {
+        float sum = 0.0f;
+        for (int kd = 0; kd < k_dim; ++kd) sum += state_to_float<StateT>(rec[static_cast<size_t>(kd) * v_dim + vd]) * q[kd];
+        core[vd] = sum;
+    }
+    __syncthreads();
+    float ss = 0.0f;
+    for (int vd = tid; vd < v_dim; vd += blockDim.x) ss += core[vd] * core[vd];
+    partial[tid] = ss;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) partial[tid] += partial[tid + s];
+        __syncthreads();
+    }
+    const float norm_scale = rsqrtf(partial[0] / static_cast<float>(v_dim) + eps);
+    for (int vd = tid; vd < v_dim; vd += blockDim.x) {
+        const float gate = z[static_cast<size_t>(vh) * v_dim + vd];
+        const float silu_gate = gate / (1.0f + __expf(-gate));
+        gated_row[static_cast<size_t>(vh) * v_dim + vd] =
+                norm_weight[vd] * core[vd] * norm_scale * silu_gate;
+    }
+}
+
+// 本 block（1 个 key_head）把 q/k 卷积输出算进 shared，并移位写回 conv_state（q/k 通道本 block 独占）。
+// 只处理 q、k（各 k_dim）；value 通道由 fused_conv_v 单独处理（每 value_head 独有）。
+__device__ inline void linear_attn_fused_conv_qk(const float *mixed_row, const uint16_t *conv_weight,
+                                                 float *conv_state, float *qk_conv,
+                                                 int kh, int k_dim, int key_total, int kernel) {
+    const int tid = threadIdx.x;
+    for (int idx = tid; idx < 2 * k_dim; idx += blockDim.x) {
+        int global_d;
+        int dst_i;
+        if (idx < k_dim) {                 // q
+            global_d = kh * k_dim + idx;
+            dst_i = idx;
+        } else {                           // k
+            const int j = idx - k_dim;
+            global_d = key_total + kh * k_dim + j;
+            dst_i = k_dim + j;
+        }
+        float *row = conv_state + static_cast<size_t>(global_d) * kernel;
+        for (int i = 0; i < kernel - 1; ++i) row[i] = row[i + 1];
+        row[kernel - 1] = mixed_row[global_d];
+        float sum = 0.0f;
+        const uint16_t *w = conv_weight + static_cast<size_t>(global_d) * kernel;
+        for (int i = 0; i < kernel; ++i) sum += f16_or_bf16_to_float(w[i], 0) * row[i];
+        qk_conv[dst_i] = sum / (1.0f + __expf(-sum));
+    }
+}
+
+// 处理当前 value_head 的 value 卷积通道（该 value_head 独有），移位写回 conv_state。
+__device__ inline void linear_attn_fused_conv_v(const float *mixed_row, const uint16_t *conv_weight,
+                                                float *conv_state, float *v_conv,
+                                                int vh, int v_dim, int key_total, int kernel) {
+    const int tid = threadIdx.x;
+    for (int j = tid; j < v_dim; j += blockDim.x) {
+        const int global_d = key_total * 2 + vh * v_dim + j;
+        float *row = conv_state + static_cast<size_t>(global_d) * kernel;
+        for (int i = 0; i < kernel - 1; ++i) row[i] = row[i + 1];
+        row[kernel - 1] = mixed_row[global_d];
+        float sum = 0.0f;
+        const uint16_t *w = conv_weight + static_cast<size_t>(global_d) * kernel;
+        for (int i = 0; i < kernel; ++i) sum += f16_or_bf16_to_float(w[i], 0) * row[i];
+        v_conv[j] = sum / (1.0f + __expf(-sum));
+    }
+}
+
+// decode 单 token 融合 kernel。grid=key_heads，每 block 处理该 key_head 的 repeat 个 value_head。
+// q/k conv 每 token 只移位/算一次；value conv 各 value_head 一次；recurrent 各 value_head 一次。
+template <typename StateT>
+__global__ void linear_attention_fused_kernel(const float *mixed, const uint16_t *conv_weight,
+                                              float *conv_state, const float *z, const float *b,
+                                              const float *a, const float *a_log,
+                                              const uint16_t *dt_bias, const float *norm_weight,
+                                              StateT *recurrent_state, float *gated,
+                                              int key_heads, int value_heads, int k_dim, int v_dim,
+                                              int kernel, float eps) {
+    extern __shared__ float shared[];
+    const int kh = blockIdx.x;
+    const int repeat = value_heads / key_heads;
+    const int key_total = key_heads * k_dim;
+    float *qk_conv = shared;               // 2*k_dim
+    float *v_conv = qk_conv + 2 * k_dim;   // v_dim
+    float *q = v_conv + v_dim;             // k_dim
+    float *k = q + k_dim;                  // k_dim
+    float *delta = k + k_dim;              // v_dim
+    float *core = delta + v_dim;           // v_dim
+    float *partial = core + v_dim;         // 2*blockDim
+    linear_attn_fused_conv_qk(mixed, conv_weight, conv_state, qk_conv, kh, k_dim, key_total, kernel);
+    __syncthreads();
+    for (int r = 0; r < repeat; ++r) {
+        const int vh = kh * repeat + r;
+        linear_attn_fused_conv_v(mixed, conv_weight, conv_state, v_conv, vh, v_dim, key_total, kernel);
+        __syncthreads();
+        StateT *rec = recurrent_state + static_cast<size_t>(vh) * k_dim * v_dim;
+        linear_attn_fused_step<StateT>(qk_conv, v_conv, z, b, a, a_log, dt_bias, norm_weight,
+                                       rec, gated, vh, k_dim, v_dim, eps,
+                                       q, k, delta, core, partial);
+        __syncthreads();
+    }
+}
+
+// prefill 批量融合 kernel。grid=key_heads，每 block 顺序处理所有 token（递归状态跨 token 累积）。
+template <typename StateT>
+__global__ void linear_attention_fused_batch_kernel(const float *mixed, const uint16_t *conv_weight,
+                                                    float *conv_state, const float *z, const float *b,
+                                                    const float *a, const float *a_log,
+                                                    const uint16_t *dt_bias, const float *norm_weight,
+                                                    StateT *recurrent_state, float *gated, int tokens,
+                                                    int key_heads, int value_heads, int k_dim, int v_dim,
+                                                    int kernel, float eps) {
+    extern __shared__ float shared[];
+    const int kh = blockIdx.x;
+    const int repeat = value_heads / key_heads;
+    const int key_total = key_heads * k_dim;
+    const int value_total = value_heads * v_dim;
+    const int conv_dim = key_total * 2 + value_total;
+    float *qk_conv = shared;
+    float *v_conv = qk_conv + 2 * k_dim;
+    float *q = v_conv + v_dim;
+    float *k = q + k_dim;
+    float *delta = k + k_dim;
+    float *core = delta + v_dim;
+    float *partial = core + v_dim;
+    for (int tok = 0; tok < tokens; ++tok) {
+        const float *mixed_row = mixed + static_cast<size_t>(tok) * conv_dim;
+        const float *z_row = z + static_cast<size_t>(tok) * value_total;
+        const float *b_row = b + static_cast<size_t>(tok) * value_heads;
+        const float *a_row = a + static_cast<size_t>(tok) * value_heads;
+        float *gated_row = gated + static_cast<size_t>(tok) * value_total;
+        linear_attn_fused_conv_qk(mixed_row, conv_weight, conv_state, qk_conv, kh, k_dim, key_total, kernel);
+        __syncthreads();
+        for (int r = 0; r < repeat; ++r) {
+            const int vh = kh * repeat + r;
+            linear_attn_fused_conv_v(mixed_row, conv_weight, conv_state, v_conv, vh, v_dim, key_total, kernel);
+            __syncthreads();
+            StateT *rec = recurrent_state + static_cast<size_t>(vh) * k_dim * v_dim;
+            linear_attn_fused_step<StateT>(qk_conv, v_conv, z_row, b_row, a_row, a_log, dt_bias, norm_weight,
+                                           rec, gated_row, vh, k_dim, v_dim, eps,
+                                           q, k, delta, core, partial);
+            __syncthreads();
+        }
+    }
+}
+
+// 显式实例化（fp32 与 bf16 状态）供 launch.cu 使用。
+template __global__ void linear_attention_fused_kernel<float>(
+    const float *, const uint16_t *, float *, const float *, const float *, const float *,
+    const float *, const uint16_t *, const float *, float *, float *,
+    int, int, int, int, int, float);
+template __global__ void linear_attention_fused_kernel<__nv_bfloat16>(
+    const float *, const uint16_t *, float *, const float *, const float *, const float *,
+    const float *, const uint16_t *, const float *, __nv_bfloat16 *, float *,
+    int, int, int, int, int, float);
+template __global__ void linear_attention_fused_batch_kernel<float>(
+    const float *, const uint16_t *, float *, const float *, const float *, const float *,
+    const float *, const uint16_t *, const float *, float *, float *, int,
+    int, int, int, int, int, float);
+template __global__ void linear_attention_fused_batch_kernel<__nv_bfloat16>(
+    const float *, const uint16_t *, float *, const float *, const float *, const float *,
+    const float *, const uint16_t *, const float *, __nv_bfloat16 *, float *, int,
+    int, int, int, int, int, float);
+
 // ---- Q4_K 反量化 ----
 // 从 12 字节 scales 解出第 j 个 sub-block 的 6-bit scale/min（与 llama.cpp get_scale_min_k4 一致）。
 __device__ inline void q4k_scale_min(int j, const uint8_t *scales, uint8_t &sc, uint8_t &m) {

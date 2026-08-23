@@ -103,6 +103,23 @@ void launch_linear_attention_recurrent_batch(const float *conv_out, const float 
                                              int tokens, int key_heads, int value_heads, int k_dim, int v_dim,
                                              float eps, void *stream);
 
+// 融合 kernel：conv1d + gated delta 递归 + 读出 合成单核（conv 不落显存）。
+// recurrent_state 由 state_bf16 决定精度：false=float*，true=__nv_bfloat16*（用 void* 传入）。
+// mixed 为 in_proj 投影输出 [tokens, conv_dim]，布局 [q|k|v]。
+void launch_linear_attention_fused(const float *mixed, const uint16_t *conv_weight, float *conv_state,
+                                   const float *z, const float *b, const float *a, const float *a_log,
+                                   const uint16_t *dt_bias, const float *norm_weight,
+                                   void *recurrent_state, bool state_bf16, float *gated,
+                                   int key_heads, int value_heads, int k_dim, int v_dim,
+                                   int kernel, float eps, void *stream);
+
+void launch_linear_attention_fused_batch(const float *mixed, const uint16_t *conv_weight, float *conv_state,
+                                         const float *z, const float *b, const float *a, const float *a_log,
+                                         const uint16_t *dt_bias, const float *norm_weight,
+                                         void *recurrent_state, bool state_bf16, float *gated, int tokens,
+                                         int key_heads, int value_heads, int k_dim, int v_dim,
+                                         int kernel, float eps, void *stream);
+
 // ================= 量化反量化 =================
 // Q4_K 反量化：把 GGUF 的 Q4_K super-block（256 元素/144 字节）解到 f16 输出。
 //   src           : device 端 Q4_K 原始字节（连续 BlockQ4K）；
