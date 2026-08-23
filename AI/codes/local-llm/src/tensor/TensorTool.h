@@ -15,6 +15,17 @@ public:
     // s_weight: [out_dim, in_dim]，g_input/g_output 均为 GPU float 激活视图。
     static void gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                      CudaScratch &scratch, const std::string &lowp_key, const char *name = "");
+
+    // 把 f32 输入按权重 dtype 转一次低精度并写入 scratch[lowp_key]，返回该 lowp buffer 指针与其 cuda 类型。
+    // 供多个共享同一输入的 GEMM 复用，避免对同一份激活重复做 f32->bf16/f16 转换。
+    // weight_dtype 必须与后续 gemm_lowp 使用的权重 dtype 一致（决定转换目标精度）。
+    static const void *prepare_lowp_input(const GPUTensor &g_input_f32, DType weight_dtype,
+                                          CudaScratch &scratch, const std::string &lowp_key);
+
+    // 复用已转换好的低精度输入执行 GEMM：w*x=y。d_input_lowp 由 prepare_lowp_input 得到。
+    // 权重 dtype 必须与 prepare_lowp_input 传入的 weight_dtype 一致，否则 GEMM 结果错误。
+    static void gemm_lowp(const StorageTensor &s_weight, const void *d_input_lowp, int input_rows,
+                          const GPUTensor &g_output_f32, const char *name = "");
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
     static void embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32, const GPUTensor &g_hidden_f32,
                                  CudaScratch &scratch);

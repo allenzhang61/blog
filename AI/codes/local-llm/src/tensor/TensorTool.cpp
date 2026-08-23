@@ -86,6 +86,43 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
               name);
 }
 
+const void *TensorTool::prepare_lowp_input(const GPUTensor &g_input_f32, DType weight_dtype,
+                                           CudaScratch &scratch, const std::string &lowp_key) {
+    // 权重是 f32 时无需转换，GEMM 直接吃 f32 输入。
+    if (weight_dtype == DType::F32) {
+        return g_input_f32.data<float>();
+    }
+    uint16_t *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(g_input_f32.numel()));
+    if (weight_dtype == DType::BF16) {
+        launch_f32_to_bf16_copy(g_input_f32.data<float>(), d_input_lowp, g_input_f32.numel(), nullptr);
+    } else if (weight_dtype == DType::F16) {
+        launch_f32_to_f16_copy(g_input_f32.data<float>(), d_input_lowp, g_input_f32.numel(), nullptr);
+    } else {
+        throw std::runtime_error(std::string("prepare_lowp_input 不支持 dtype: ") + dtype_name(weight_dtype));
+    }
+    return d_input_lowp;
+}
+
+void TensorTool::gemm_lowp(const StorageTensor &s_weight, const void *d_input_lowp, int input_rows,
+                           const GPUTensor &g_output_f32, const char *name) {
+    GPUTensor g_weight = s_weight.to_gpu(true);
+    cudaDataType_t d_input_type;
+    if (g_weight.dtype == DType::BF16) {
+        d_input_type = CUDA_R_16BF;
+    } else if (g_weight.dtype == DType::F16) {
+        d_input_type = CUDA_R_16F;
+    } else if (g_weight.dtype == DType::F32) {
+        d_input_type = CUDA_R_32F;
+    } else {
+        throw std::runtime_error(std::string("gemm_lowp 不支持 dtype: ") + dtype_name(g_weight.dtype));
+    }
+    gemm_main(global_cuda_weight_pool().handle, g_weight.data(), d_input_lowp, g_output_f32.data<float>(),
+              static_cast<int>(s_weight.shape[0]), static_cast<int>(s_weight.shape[1]),
+              static_cast<size_t>(input_rows),
+              cuda_type_of(g_weight.dtype), d_input_type, g_weight.nbytes,
+              name);
+}
+
 void TensorTool::embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32,
                                   const GPUTensor &g_hidden_f32,
                                   CudaScratch &scratch) {

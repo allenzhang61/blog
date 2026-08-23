@@ -10,6 +10,9 @@
 #include <cuda_runtime.h>
 
 constexpr int kBlock = 256;
+// linear attention 递归 kernel 每个 head 一个 block，state 有 k_dim*v_dim=16384 个元素，
+// 用更大的 block（512 线程）减少每线程串行迭代次数，提高 SM 内延迟隐藏。
+constexpr int kLinearRecurBlock = 512;
 
 inline cudaStream_t as_stream(void *stream) {
     return static_cast<cudaStream_t>(stream);

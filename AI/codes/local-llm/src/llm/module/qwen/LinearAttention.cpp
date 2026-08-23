@@ -52,10 +52,15 @@ void LinearAttention::prefill(QwenSession &session, const GPUTensor &g_hidden_f3
     GPUTensor g_linear_gated_f32 = GPUTensor(
         scratch, scratch_key::kLinearGated,
         {static_cast<int64_t>(input_size), static_cast<int64_t>(value_total)}, DType::F32);
-    TensorTool::gemm(weights_.s_in_proj_qkv, g_hidden_f32, g_linear_projection_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_qkv");
-    TensorTool::gemm(weights_.s_in_proj_z, g_hidden_f32, g_linear_z_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_z");
-    TensorTool::gemm(weights_.s_in_proj_b, g_hidden_f32, g_linear_b_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_b");
-    TensorTool::gemm(weights_.s_in_proj_a, g_hidden_f32, g_linear_a_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_a");
+    // 4 个 in_proj 共享同一份 hidden 输入且权重都是 bf16：只转一次 bf16 复用，
+    // 省掉原先每个 GEMM 各自一次 f32->bf16 拷贝（旧路径 decode 每层 4 次冗余转换）。
+    const void *d_hidden_lowp = TensorTool::prepare_lowp_input(
+        g_hidden_f32, weights_.s_in_proj_qkv.dtype, scratch, scratch_key::kInputLowp);
+    const int rows = static_cast<int>(g_hidden_f32.rows());
+    TensorTool::gemm_lowp(weights_.s_in_proj_qkv, d_hidden_lowp, rows, g_linear_projection_f32, "linattn.d_in_proj_qkv");
+    TensorTool::gemm_lowp(weights_.s_in_proj_z, d_hidden_lowp, rows, g_linear_z_f32, "linattn.d_in_proj_z");
+    TensorTool::gemm_lowp(weights_.s_in_proj_b, d_hidden_lowp, rows, g_linear_b_f32, "linattn.d_in_proj_b");
+    TensorTool::gemm_lowp(weights_.s_in_proj_a, d_hidden_lowp, rows, g_linear_a_f32, "linattn.d_in_proj_a");
 
     TensorTool::linear_attention_conv_batch(g_linear_projection_f32, weights_.s_conv1d, state.g_conv_state_f32,
                                             g_linear_conv_out_f32, kernel);
@@ -94,10 +99,14 @@ void LinearAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32
         scratch, scratch_key::kLinearConvOut, {1, static_cast<int64_t>(conv_dim)}, DType::F32);
     GPUTensor g_linear_gated_f32 = GPUTensor(
         scratch, scratch_key::kLinearGated, {1, static_cast<int64_t>(value_total)}, DType::F32);
-    TensorTool::gemm(weights_.s_in_proj_qkv, g_hidden_f32, g_linear_projection_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_qkv");
-    TensorTool::gemm(weights_.s_in_proj_z, g_hidden_f32, g_linear_z_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_z");
-    TensorTool::gemm(weights_.s_in_proj_b, g_hidden_f32, g_linear_b_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_b");
-    TensorTool::gemm(weights_.s_in_proj_a, g_hidden_f32, g_linear_a_f32, scratch, scratch_key::kInputLowp, "linattn.d_in_proj_a");
+    // 同 prefill：4 个 in_proj 共享 hidden、权重都是 bf16，只转一次 bf16 复用。
+    const void *d_hidden_lowp = TensorTool::prepare_lowp_input(
+        g_hidden_f32, weights_.s_in_proj_qkv.dtype, scratch, scratch_key::kInputLowp);
+    const int rows = static_cast<int>(g_hidden_f32.rows());
+    TensorTool::gemm_lowp(weights_.s_in_proj_qkv, d_hidden_lowp, rows, g_linear_projection_f32, "linattn.d_in_proj_qkv");
+    TensorTool::gemm_lowp(weights_.s_in_proj_z, d_hidden_lowp, rows, g_linear_z_f32, "linattn.d_in_proj_z");
+    TensorTool::gemm_lowp(weights_.s_in_proj_b, d_hidden_lowp, rows, g_linear_b_f32, "linattn.d_in_proj_b");
+    TensorTool::gemm_lowp(weights_.s_in_proj_a, d_hidden_lowp, rows, g_linear_a_f32, "linattn.d_in_proj_a");
 
     TensorTool::linear_attention_conv(g_linear_projection_f32, weights_.s_conv1d, state.g_conv_state_f32,
                                       g_linear_conv_out_f32, kernel);
