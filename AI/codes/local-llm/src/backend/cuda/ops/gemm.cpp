@@ -22,8 +22,8 @@ void gemm_main(cublasHandle_t handle, const void *d_weight,
         throw std::runtime_error("gemm_weight: g_weight.type 与 x_type 不一致");
     }
     // name 非空时埋点：以权重 bytes 作为访存字节，供 Profiler 算有效带宽。
-    // ScopedGpuTimer 在 Profiler 关闭或 name 为空时零开销。
-    ScopedGpuTimer timer(name && name[0] ? name : std::string(), nullptr, weight_bytes);
+    // ScopedGpuTimer 在 Profiler 关闭或 name 为空时零开销。name 为字面量指针，不拷贝。
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, nullptr, weight_bytes);
 
     // 纯 w*x=y，不累加
     const float alpha = 1.0f;

@@ -12,10 +12,11 @@ Profiler &Profiler::instance() {
     return inst;
 }
 
-void Profiler::record(const std::string &name, double ms, size_t bytes) {
-    if (!enabled_) {
+void Profiler::record(const char *name, double ms, size_t bytes) {
+    if (!enabled_ || name == nullptr) {
         return;
     }
+    // 此处（GPU 结算 / CPU timer 析构）才构造 std::string key，不在热路径。
     Stat &s = stats_[name];
     s.count += 1;
     s.total_ms += ms;
@@ -24,7 +25,48 @@ void Profiler::record(const std::string &name, double ms, size_t bytes) {
     events_.push_back(Event{name, ms, bytes, std::chrono::steady_clock::now()});
 }
 
+cudaEvent_t Profiler::acquire_event() {
+    if (!capturing()) {
+        return nullptr; // 未开启或非采样步：不借 event，timer 短路为零开销。
+    }
+    if (!event_pool_.empty()) {
+        cudaEvent_t e = event_pool_.back();
+        event_pool_.pop_back();
+        return e;
+    }
+    cudaEvent_t e = nullptr;
+    if (cudaEventCreate(&e) != cudaSuccess) {
+        return nullptr; // 创建失败则退化为不计时。
+    }
+    return e;
+}
+
+void Profiler::push_gpu_event(const char *name, size_t bytes,
+                              cudaEvent_t start, cudaEvent_t stop) {
+    if (!enabled_ || name == nullptr || start == nullptr || stop == nullptr) {
+        return;
+    }
+    pending_gpu_.push_back(PendingGpuEvent{name, bytes, start, stop});
+}
+
+void Profiler::flush_gpu_events() {
+    // 调用方须先保证这些 event 已完成（如 cudaDeviceSynchronize）。
+    for (PendingGpuEvent &p : pending_gpu_) {
+        float ms = 0.0f;
+        // event 已完成时 elapsed 立即可得；失败则记 0，不影响主流程。
+        if (cudaEventElapsedTime(&ms, p.start, p.stop) == cudaSuccess) {
+            record(p.name, static_cast<double>(ms), p.bytes);
+        }
+        // 归还两个 event 到池中复用，不销毁。
+        event_pool_.push_back(p.start);
+        event_pool_.push_back(p.stop);
+    }
+    pending_gpu_.clear();
+}
+
 void Profiler::reset() {
+    // 先结算并回收 warmup 阶段残留的待结算 event，避免混入稳态统计或泄漏句柄。
+    flush_gpu_events();
     stats_.clear();
     events_.clear();
 }

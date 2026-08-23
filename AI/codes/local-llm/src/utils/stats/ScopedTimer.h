@@ -13,8 +13,8 @@
 
 #include "utils/stats/Profiler.h"
 
-// RAII 的 GPU 段计时：用 CUDA event 夹住一段 kernel，析构时算出 elapsed 并回填
-// Profiler。GPU kernel 异步执行，CPU 侧 std::chrono 只能测到 launch 开销，故算子 /
+// RAII 的 GPU 段计时：用 CUDA event 夹住一段 kernel，回填 Profiler。
+// GPU kernel 异步执行，CPU 侧 std::chrono 只能测到 launch 开销，故算子 /
 // 层级 GPU 计时必须走 event。
 //
 // 用法：在某段 kernel 序列的作用域开头放一行
@@ -22,19 +22,24 @@
 // 作用域结束即完成计时。bytes 传该段从显存读取的权重字节数，用于算有效带宽；
 // 不关心带宽时传 0。
 //
-// 说明：析构时需要 cudaEventSynchronize(stop) 才能取到耗时，会引入一次同步。
-// 因当前每层 forward 内本就有 cudaDeviceSynchronize，profile 模式下这点额外同步
-// 可接受；仅在 Profiler::enabled() 时创建 event，关闭时为零开销。
+// 低扰动实现：构造时向 Profiler 借一对可复用 event 并 record(start)；析构时只
+// record(stop) 并把这对 event 连同 name/bytes 交给 Profiler 排队（push_gpu_event），
+// **不做 cudaEventSynchronize、不销毁 event**，因此不会打断 CUDA 流水线——避免
+// “发一个 kernel、等一个 kernel”的逐算子同步开销。真正取耗时延迟到
+// Profiler::flush_gpu_events()（调用方须先保证 event 已完成，如 cudaDeviceSynchronize）。
+// 仅在 Profiler::enabled() 时借用 event，关闭时为零开销。
 class ScopedGpuTimer {
 public:
-    ScopedGpuTimer(std::string name, cudaStream_t stream, size_t bytes = 0);
+    // name 必须是静态存储期字符串（字面量）：热路径只存指针，不拷贝，避免每算子
+    // 一次 std::string 分配。实测该分配是 profile 开销的主因（远大于 event 本身）。
+    ScopedGpuTimer(const char *name, cudaStream_t stream, size_t bytes = 0);
     ~ScopedGpuTimer();
 
     ScopedGpuTimer(const ScopedGpuTimer &) = delete;
     ScopedGpuTimer &operator=(const ScopedGpuTimer &) = delete;
 
 private:
-    std::string name_;
+    const char *name_ = nullptr;
     cudaStream_t stream_ = nullptr;
     size_t bytes_ = 0;
     bool active_ = false; // Profiler 未开启时不创建 event
@@ -46,14 +51,15 @@ private:
 // 与 GPU 版共用同一个 Profiler 聚合出口。
 class ScopedCpuTimer {
 public:
-    explicit ScopedCpuTimer(std::string name);
+    // 同样要求 name 为静态存储期字符串（字面量）。
+    explicit ScopedCpuTimer(const char *name);
     ~ScopedCpuTimer();
 
     ScopedCpuTimer(const ScopedCpuTimer &) = delete;
     ScopedCpuTimer &operator=(const ScopedCpuTimer &) = delete;
 
 private:
-    std::string name_;
+    const char *name_ = nullptr;
     bool active_ = false;
     std::chrono::steady_clock::time_point start_;
 };

@@ -4,17 +4,16 @@
 
 #include "utils/stats/ScopedTimer.h"
 
-#include <utility>
-
-ScopedGpuTimer::ScopedGpuTimer(std::string name, cudaStream_t stream, size_t bytes)
-    : name_(std::move(name)), stream_(stream), bytes_(bytes) {
-    if (!Profiler::instance().enabled()) {
-        return; // 关闭时不创建 event，零开销。
+ScopedGpuTimer::ScopedGpuTimer(const char *name, cudaStream_t stream, size_t bytes)
+    : name_(name), stream_(stream), bytes_(bytes) {
+    if (name_ == nullptr || !Profiler::instance().capturing()) {
+        return; // 关闭 / 非采样步 / 匿名段时不借 event，零开销。
     }
-    // 创建失败则退化为不计时，避免影响主流程。
-    if (cudaEventCreate(&start_) != cudaSuccess || cudaEventCreate(&stop_) != cudaSuccess) {
-        if (start_) { cudaEventDestroy(start_); start_ = nullptr; }
-        if (stop_) { cudaEventDestroy(stop_); stop_ = nullptr; }
+    // 向 Profiler 借一对可复用 event（池化，避免反复 create/destroy）。
+    start_ = Profiler::instance().acquire_event();
+    stop_ = Profiler::instance().acquire_event();
+    if (start_ == nullptr || stop_ == nullptr) {
+        // 借用失败则退化为不计时，避免影响主流程。
         return;
     }
     active_ = true;
@@ -25,17 +24,13 @@ ScopedGpuTimer::~ScopedGpuTimer() {
     if (!active_) {
         return;
     }
+    // 只 record stop，不同步、不销毁：把这对 event 交给 Profiler 延迟批量结算，
+    // 避免逐算子 cudaEventSynchronize 打断流水线。name_ 是字面量，仅传指针。
     cudaEventRecord(stop_, stream_);
-    // 取耗时需要 stop event 完成；profile 模式下这次同步可接受。
-    cudaEventSynchronize(stop_);
-    float ms = 0.0f;
-    cudaEventElapsedTime(&ms, start_, stop_);
-    Profiler::instance().record(name_, static_cast<double>(ms), bytes_);
-    cudaEventDestroy(start_);
-    cudaEventDestroy(stop_);
+    Profiler::instance().push_gpu_event(name_, bytes_, start_, stop_);
 }
 
-ScopedCpuTimer::ScopedCpuTimer(std::string name) : name_(std::move(name)) {
+ScopedCpuTimer::ScopedCpuTimer(const char *name) : name_(name) {
     if (!Profiler::instance().enabled()) {
         return;
     }

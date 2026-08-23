@@ -94,13 +94,23 @@ int main(int argc, char **argv) {
         for (int step = 0; step < args.max_output_tokens; ++step) {
             if (next == eos) break;
             model->append_output(next);
+            // 采样式 profile：仅每隔 profile_sample_every 步开启一次全量 GPU event
+            // 计时，其余步零 event 开销（timer 短路，不插 event 进流）。稳态吞吐因此
+            // 接近无 profile；--profile-sample-every 1 时等价每步全量最细。
+            // decode_token 是 CPU 计时，不受 capture 影响，逐步都记以保稳态吞吐口径。
+            const bool sample_this_step =
+                args.profile && (step % args.profile_sample_every == 0);
+            Profiler::instance().set_capture(sample_this_step);
             {
                 ScopedCpuTimer td("decode_token");
                 next = model->decode(next, pos);
             }
             ++pos;
             ++decode_tokens;
-            if (args.profile) {
+            if (sample_this_step) {
+                // 本采样步结束即结算其 GPU event（此时该步各层 kernel 已随层内
+                // cudaDeviceSynchronize 全部完成），把 event 归还池中复用。
+                Profiler::instance().flush_gpu_events();
                 mem_reporter.sample(pool, model->memory_usage(), "decode");
             }
         }
@@ -112,6 +122,9 @@ int main(int argc, char **argv) {
 
     if (args.profile) {
         device_monitor.stop();
+        // 低扰动 GPU 计时：上面的 cudaDeviceSynchronize 已保证所有埋点 event 完成，
+        // 此处统一结算排队中的 GPU event（cudaEventElapsedTime + record），落盘前必须做。
+        Profiler::instance().flush_gpu_events();
     }
 
     std::cout << "生成结果：" << model->decode_text(model->output()) << std::endl;

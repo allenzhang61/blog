@@ -38,6 +38,11 @@ Args::Args(const int argc, char **argv) {
             this->profile = true;
         } else if (key == "--profile-dir") {
             this->profile_dir = get_value(key);
+        } else if (key == "--profile-sample-every") {
+            this->profile_sample_every = std::stoi(get_value(key));
+            if (this->profile_sample_every < 1) {
+                this->profile_sample_every = 1;
+            }
         }
     }
 }
@@ -49,4 +54,5 @@ void Args::debug_dump() {
     Log::debug("sampling: " + this->sampling.DebugString());
     Log::debug("profile: " + std::string(this->profile ? "true" : "false"));
     Log::debug("profile_dir: " + this->profile_dir);
+    Log::debug("profile_sample_every: " + std::to_string(this->profile_sample_every));
 }

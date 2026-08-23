@@ -23,6 +23,9 @@ public:
     bool profile = false;
     // profile 报告输出目录（jsonl 原始日志 + json/markdown summary），默认当前目录。
     std::string profile_dir = ".";
+    // 采样式 profile：每隔多少个 decode step 采一次全量 GPU event 计时，其余步零
+    // event 开销。默认 16（低扰动，稳态吞吐接近无 profile）。设为 1 即每步全量最细。
+    int profile_sample_every = 16;
 
     Args(int argc, char **argv);
     void debug_dump();
