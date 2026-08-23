@@ -68,7 +68,8 @@ void FullAttention::prefill(QwenSession &session, const GPUTensor &g_hidden_f32,
     TensorTool::gemm(weights_.s_o_proj, g_full_attn_f32, g_out_f32, scratch, scratch_key::kFullAttnLowp, "fullattn.d_o_proj");
 
     kv.seq_len += input_size;
-    check_cuda(cudaDeviceSynchronize(), "FullAttention prefill 同步失败");
+    // 不做全设备同步：同流顺序保证依赖，barrier 交给前向末尾的 lm_head 同步 D2H。
+    check_cuda(cudaGetLastError(), "FullAttention prefill kernel launch 失败");
 }
 
 void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32, const GPUTensor &g_out_f32, int pos) {
@@ -109,5 +110,6 @@ void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32, 
     TensorTool::gemm(weights_.s_o_proj, g_full_attn_f32, g_out_f32, scratch, scratch_key::kFullAttnLowp, "fullattn.d_o_proj");
 
     kv.seq_len = pos + 1;
-    check_cuda(cudaDeviceSynchronize(), "FullAttention decode 同步失败");
+    // 同 prefill：不做全设备同步，依赖同流顺序 + lm_head 末尾同步 D2H。
+    check_cuda(cudaGetLastError(), "FullAttention decode kernel launch 失败");
 }

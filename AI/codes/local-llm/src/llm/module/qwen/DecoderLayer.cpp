@@ -62,7 +62,9 @@ void DecoderLayer::prefill(QwenSession &session, const GPUTensor &g_hidden_f32) 
     mlp_.forward(mlp_weights_, session, g_token_hidden_b_f32, g_mlp_out_f32);
     TensorTool::add(g_hidden_f32, g_mlp_out_f32, g_hidden_f32);
 
-    check_cuda(cudaDeviceSynchronize(), "DecoderLayer prefill 同步失败");
+    // 不做全设备同步：所有 kernel 在同一默认流上按序执行，层间依赖由流内顺序保证；
+    // CPU 只在前向末尾 lm_head 的同步 D2H 拷贝处等待一次。此处仅非阻塞检查 launch 错误。
+    check_cuda(cudaGetLastError(), "DecoderLayer prefill kernel launch 失败");
 }
 
 void DecoderLayer::decode(QwenSession &session, const GPUTensor &g_hidden_f32, int pos) {
@@ -91,5 +93,6 @@ void DecoderLayer::decode(QwenSession &session, const GPUTensor &g_hidden_f32, i
     mlp_.forward(mlp_weights_, session, g_token_hidden_b_f32, g_mlp_out_f32);
     TensorTool::add(g_hidden_f32, g_mlp_out_f32, g_hidden_f32);
 
-    check_cuda(cudaDeviceSynchronize(), "DecoderLayer decode 同步失败");
+    // 同 prefill：不做全设备同步，依赖同流顺序 + lm_head 末尾同步 D2H 作 barrier。
+    check_cuda(cudaGetLastError(), "DecoderLayer decode kernel launch 失败");
 }

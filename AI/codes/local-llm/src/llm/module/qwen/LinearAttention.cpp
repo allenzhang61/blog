@@ -71,7 +71,8 @@ void LinearAttention::prefill(QwenSession &session, const GPUTensor &g_hidden_f3
     // out_proj：[g_hidden, value_total] · gated[value_total, tokens] -> [g_hidden, tokens]。
     TensorTool::gemm(weights_.s_out_proj, g_linear_gated_f32, g_out_f32, scratch, scratch_key::kLinearGatedLowp, "linattn.d_out_proj");
 
-    check_cuda(cudaDeviceSynchronize(), "LinearAttention prefill 同步失败");
+    // 不做全设备同步：同流顺序保证依赖，barrier 交给前向末尾的 lm_head 同步 D2H。
+    check_cuda(cudaGetLastError(), "LinearAttention prefill kernel launch 失败");
 }
 
 void LinearAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32, const GPUTensor &g_out_f32) {
@@ -116,5 +117,6 @@ void LinearAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32
 
     TensorTool::gemm(weights_.s_out_proj, g_linear_gated_f32, g_out_f32, scratch, scratch_key::kLinearGatedLowp, "linattn.d_out_proj");
 
-    check_cuda(cudaDeviceSynchronize(), "LinearAttention decode 同步失败");
+    // 同 prefill：不做全设备同步，依赖同流顺序 + lm_head 末尾同步 D2H。
+    check_cuda(cudaGetLastError(), "LinearAttention decode kernel launch 失败");
 }

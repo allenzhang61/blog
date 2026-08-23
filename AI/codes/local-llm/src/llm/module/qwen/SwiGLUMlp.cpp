@@ -39,5 +39,6 @@ void SwiGLUMlp::forward(const MlpWeights &weights, QwenSession &session,
     // down：[hidden, intermediate] · g_prod[intermediate, rows] -> [hidden, rows]。
     TensorTool::gemm(weights.s_down_proj, g_prod_f32, g_out_f32, scratch, scratch_key::kProdLowp, "mlp.down");
 
-    check_cuda(cudaDeviceSynchronize(), "SwiGLUMlp 同步失败");
+    // 不做全设备同步：同流顺序保证依赖，barrier 交给前向末尾的 lm_head 同步 D2H。
+    check_cuda(cudaGetLastError(), "SwiGLUMlp kernel launch 失败");
 }
