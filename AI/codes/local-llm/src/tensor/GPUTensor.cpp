@@ -94,6 +94,7 @@ CPUTensor GPUTensor::to_host(void *host_ptr, const std::string &what) const {
     if (data_ == nullptr) {
         throw std::runtime_error("GPUTensor::to_host 需要 device data: " + name);
     }
-    check_cuda(cudaMemcpy(host_ptr, data_, byte_size(), cudaMemcpyDeviceToHost), what);
+    // 走当前流的 async+sync 拷贝：logits 在 compute_stream 上算出，必须在同流同步后再回读，避免读到未完成结果。
+    cuda_memcpy_d2h(host_ptr, data_, byte_size(), what);
     return CPUTensor(host_ptr, shape, dtype);
 }

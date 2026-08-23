@@ -34,4 +34,9 @@ void *cuda_malloc_device(size_t bytes, const std::string &what);
 // 释放 device 内存；用于析构 / reset 路径，不向外抛异常。
 void cuda_free_device(void *ptr);
 
+// 当前 CUDA 流：decode 阶段会切到一个非阻塞流，使 kernel 序列可被 stream capture（CUDA Graph）。
+// 默认 nullptr（0 号默认流）。传给 launch 的 nullptr 会解析到此流；async memcpy 也用它。
+void set_current_cuda_stream(cudaStream_t stream);
+cudaStream_t get_current_cuda_stream();
+
 #endif // LOCAL_LLM_CUDA_COMMON_H

@@ -6,6 +6,7 @@
 
 #include <cuda_runtime.h>
 
+#include "backend/cuda/common.h"
 #include "utils/cli/Args.h"
 #include "format/MF.h"
 #include "format/MFFactory.h"
@@ -29,6 +30,11 @@ int main(int argc, char **argv) {
     set_global_cuda_weight_dequant_pool(&dequant_pool);
     CudaWeightPool weight_pool;
     set_global_cuda_weight_pool(&weight_pool);
+
+    // 非阻塞流：让全部 kernel/cuBLAS/async memcpy 走同一条可捕获的流，为 CUDA Graph 铺路。
+    cudaStream_t compute_stream = nullptr;
+    check_cuda(cudaStreamCreateWithFlags(&compute_stream, cudaStreamNonBlocking), "创建 compute stream 失败");
+    set_current_cuda_stream(compute_stream);
 
     // main 负责打开具体模型文件格式；模型本身只接收 MF 抽象。
     std::unique_ptr<MF> mf = open_mf(args.model_dir);

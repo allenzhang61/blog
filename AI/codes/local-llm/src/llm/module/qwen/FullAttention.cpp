@@ -100,12 +100,19 @@ void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32, 
     TensorTool::gemm(weights_.s_k_proj, g_hidden_f32, g_full_k_f32, scratch, scratch_key::kInputLowp, "fullattn.d_k_proj");
     TensorTool::gemm(weights_.s_v_proj, g_hidden_f32, g_full_v_f32, scratch, scratch_key::kInputLowp, "fullattn.d_v_proj");
 
+    // decode kernel 从 device buffer 读 pos，使 kernel 参数在步与步之间不变（CUDA Graph 前置条件）。
+    // pos 的 device 值由 QwenModel 在每步 graph 外统一写入 session.d_pos()，此处只读地址、不做同步 H2D
+    //（若在此处做同步 H2D 会破坏 graph capture）。
+    int *d_pos = session.d_pos();
+    // attend 的 smem 现按 max_seq_len 上限固定，故传入真实 max_seq_len（不再是 0）。
+    const int max_seq_len = static_cast<int>(session.max_seq_len);
+
     TensorTool::full_attention_q(g_full_projection_f32, weights_.s_q_norm, g_full_q_f32, g_full_gate_f32,
-                            n_heads, head_dim, pos, theta, partial, eps);
+                            n_heads, head_dim, d_pos, theta, partial, eps);
     TensorTool::full_attention_kv(g_full_k_f32, g_full_v_f32, weights_.s_k_norm, kv.g_key_cache_f32, kv.g_value_cache_f32,
-                             kv_heads, head_dim, /*max_seq_len=*/0, pos, theta, partial, eps);
+                             kv_heads, head_dim, /*max_seq_len=*/0, d_pos, theta, partial, eps);
     TensorTool::full_attention_attend(g_full_q_f32, g_full_gate_f32, kv.g_key_cache_f32, kv.g_value_cache_f32, g_full_attn_f32,
-                                 n_heads, kv_heads, head_dim, /*max_seq_len=*/0, pos);
+                                 n_heads, kv_heads, head_dim, max_seq_len, d_pos);
 
     TensorTool::gemm(weights_.s_o_proj, g_full_attn_f32, g_out_f32, scratch, scratch_key::kFullAttnLowp, "fullattn.d_o_proj");
 

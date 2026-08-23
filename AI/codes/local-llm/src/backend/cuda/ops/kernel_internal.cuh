@@ -9,13 +9,17 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
+#include "../common.h"
+
 constexpr int kBlock = 256;
 // linear attention 递归 kernel 每个 head 一个 block，state 有 k_dim*v_dim=16384 个元素，
 // 用更大的 block（512 线程）减少每线程串行迭代次数，提高 SM 内延迟隐藏。
 constexpr int kLinearRecurBlock = 512;
 
+// 传入 nullptr 时解析到「当前流」（decode 阶段为非阻塞流，其余为 0 号流）；
+// 显式传入非 nullptr 时按原样使用。
 inline cudaStream_t as_stream(void *stream) {
-    return static_cast<cudaStream_t>(stream);
+    return stream ? static_cast<cudaStream_t>(stream) : get_current_cuda_stream();
 }
 
 inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
@@ -30,7 +34,8 @@ __global__ void rms_norm_kernel(const float *input, float *output, const uint16_
 
 // ---- full attention ----
 __global__ void full_attention_q_kernel(const float *q_and_gate, const uint16_t *q_norm_weight,
-                                        float *q, float *gate, int n_heads, int head_dim, int pos,
+                                        float *q, float *gate, int n_heads, int head_dim,
+                                        const int *pos_dev,
                                         float rope_theta, float partial_rotary_factor, float eps);
 __global__ void full_attention_q_batch_kernel(const float *q_and_gate, const uint16_t *q_norm_weight,
                                               float *q, float *gate, int tokens, int n_heads,
@@ -39,7 +44,7 @@ __global__ void full_attention_q_batch_kernel(const float *q_and_gate, const uin
 __global__ void full_attention_kv_kernel(const float *k_in, const float *v_in,
                                          const uint16_t *k_norm_weight, float *key_cache,
                                          float *value_cache, int kv_heads, int head_dim,
-                                         int max_seq_len, int pos, float rope_theta,
+                                         int max_seq_len, const int *pos_dev, float rope_theta,
                                          float partial_rotary_factor, float eps);
 __global__ void full_attention_kv_batch_kernel(const float *k_in, const float *v_in,
                                                const uint16_t *k_norm_weight, float *key_cache,
@@ -49,7 +54,7 @@ __global__ void full_attention_kv_batch_kernel(const float *k_in, const float *v
 __global__ void full_attention_attend_kernel(const float *q, const float *gate,
                                              const float *key_cache, const float *value_cache,
                                              float *attn, int n_heads, int kv_heads, int head_dim,
-                                             int max_seq_len, int pos);
+                                             int max_seq_len, const int *pos_dev);
 __global__ void full_attention_attend_batch_kernel(const float *q, const float *gate,
                                                    const float *key_cache, const float *value_cache,
                                                    float *attn, int tokens, int n_heads, int kv_heads,
@@ -116,5 +121,8 @@ __global__ void mla_attend_batch_kernel(const float *q, const float *kv_b_out,
 __global__ void moe_router_topk_kernel(const float *router_logits, int *top_idx, float *top_w,
                                        int tokens, int n_experts, int k, float routed_scaling);
 __global__ void moe_accumulate_kernel(const float *expert_out, float weight, float *out, int n);
+
+// ---- argmax ----
+__global__ void argmax_kernel(const float *logits, int n, int *out_idx);
 
 #endif // LOCAL_LLM_KERNEL_INTERNAL_CUH

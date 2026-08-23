@@ -29,6 +29,10 @@ public:
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
     static void embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32, const GPUTensor &g_hidden_f32,
                                  CudaScratch &scratch);
+    // decode 单 token 版：token id 从 device buffer d_token 读取（不做 H2D），
+    // 使 embedding 可纳入 CUDA Graph 一次 capture、后续 replay。
+    static void embedding_lookup_device(const StorageTensor &s_table, const int *d_token, const GPUTensor &g_hidden_f32,
+                                        void *stream = nullptr);
     // s_weight: RMSNorm 权重，对 g_input 归一化后写入 g_output。
     static void rms_norm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                          float eps, bool one_plus);
@@ -37,7 +41,8 @@ public:
     static void silu_mul(const GPUTensor &g_gate_f32, const GPUTensor &g_up_f32, const GPUTensor &g_out_f32, void *stream = nullptr);
 
     static void full_attention_q(const GPUTensor &g_q_and_gate_f32, const StorageTensor &s_q_norm_weight,
-                                 const GPUTensor &g_q_f32, const GPUTensor &g_gate_f32, int n_heads, int head_dim, int pos,
+                                 const GPUTensor &g_q_f32, const GPUTensor &g_gate_f32, int n_heads, int head_dim,
+                                 const int *pos_dev,
                                  float rope_theta, float partial_rotary_factor, float eps,
                                  void *stream = nullptr);
     static void full_attention_q_batch(const GPUTensor &g_q_and_gate_f32, const StorageTensor &s_q_norm_weight_f32,
@@ -46,7 +51,7 @@ public:
                                        float eps, void *stream = nullptr);
     static void full_attention_kv(const GPUTensor &g_k_in_f32, const GPUTensor &g_v_in_f32, const StorageTensor &s_k_norm_weight,
                                   const GPUTensor &g_key_cache_f32, const GPUTensor &g_value_cache_f32, int kv_heads, int head_dim,
-                                  int max_seq_len, int pos, float rope_theta,
+                                  int max_seq_len, const int *pos_dev, float rope_theta,
                                   float partial_rotary_factor, float eps, void *stream = nullptr);
     static void full_attention_kv_batch(const GPUTensor &g_k_in_f32, const GPUTensor &g_v_in_f32,
                                         const StorageTensor &s_k_norm_weight, const GPUTensor &g_key_cache_f32,
@@ -56,7 +61,7 @@ public:
                                         void *stream = nullptr);
     static void full_attention_attend(const GPUTensor &g_q_f32, const GPUTensor &g_gate_f32, const GPUTensor &g_key_cache_f32,
                                       const GPUTensor &g_value_cache_f32, const GPUTensor &g_attn_f32, int n_heads,
-                                      int kv_heads, int head_dim, int max_seq_len, int pos,
+                                      int kv_heads, int head_dim, int max_seq_len, const int *pos_dev,
                                       void *stream = nullptr);
     static void full_attention_attend_batch(const GPUTensor &g_q_f32, const GPUTensor &g_gate_f32,
                                             const GPUTensor &g_key_cache_f32, const GPUTensor &g_value_cache_f32,
@@ -114,6 +119,9 @@ public:
                                 void *stream = nullptr);
     static void moe_accumulate(const GPUTensor &g_expert_out_f32, float weight, const GPUTensor &g_out_f32,
                                void *stream = nullptr);
+
+    // 对 logits[vocab] 求 argmax，把 token id 写到 device 端 d_out_idx（greedy 用，结果留在 device）。
+    static void argmax(const GPUTensor &g_logits_f32, int *d_out_idx, int vocab, void *stream = nullptr);
 };
 
 #endif // LOCAL_LLM_TENSORTOOL_H

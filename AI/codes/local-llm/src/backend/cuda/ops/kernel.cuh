@@ -40,10 +40,10 @@ void launch_rms_norm(const float *input, float *output, const uint16_t *weight, 
 // q_and_gate 布局：每个 query head 连续 [head_dim(q), head_dim(gate)]，故长度 tokens * n_heads * head_dim * 2。
 // 输出 q / gate 拆分为 [tokens, n_heads * head_dim]。RoPE 仅作用前 head_dim*partial_rotary_factor 维。
 
-// 单 token：处理位置 pos。
+// 单 token：处理位置 pos（pos 为 device 端 int，供 CUDA Graph 复用时逐步更新）。
 void launch_full_attention_q(const float *q_and_gate, const uint16_t *q_norm_weight,
                              float *q, float *gate,
-                             int n_heads, int head_dim, int pos,
+                             int n_heads, int head_dim, const int *pos_dev,
                              float rope_theta, float partial_rotary_factor, float eps,
                              void *stream);
 
@@ -57,7 +57,7 @@ void launch_full_attention_q_batch(const float *q_and_gate, const uint16_t *q_no
 // k/v：归一化 + RoPE(k) 后写入 KV cache（cache 布局 [max_seq_len, kv_heads * head_dim]）。
 void launch_full_attention_kv(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
                               float *key_cache, float *value_cache,
-                              int kv_heads, int head_dim, int max_seq_len, int pos,
+                              int kv_heads, int head_dim, int max_seq_len, const int *pos_dev,
                               float rope_theta, float partial_rotary_factor, float eps,
                               void *stream);
 
@@ -70,7 +70,8 @@ void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const 
 // causal attention + 输出门控（out = softmax(qk/sqrt(d)) · v * sigmoid(gate)）。
 void launch_full_attention_attend(const float *q, const float *gate,
                                   const float *key_cache, const float *value_cache, float *attn,
-                                  int n_heads, int kv_heads, int head_dim, int max_seq_len, int pos,
+                                  int n_heads, int kv_heads, int head_dim, int max_seq_len,
+                                  const int *pos_dev,
                                   void *stream);
 
 void launch_full_attention_attend_batch(const float *q, const float *gate,
@@ -175,5 +176,10 @@ void launch_moe_router_topk(const float *router_logits, int *top_idx, float *top
 
 // 把专家输出按权重累加到 hidden：out[token] += weight * expert_out[token]，n=hidden。
 void launch_moe_accumulate(const float *expert_out, float weight, float *out, int n, void *stream);
+
+// ================= argmax =================
+// 对 logits[n] 求 argmax，把 token id 写到 device 端 out_idx[0]（greedy 用，结果留在 device）。
+// 并列时取最小 index（与 CPU 端 Sampler::argmax 一致）。
+void launch_argmax(const float *logits, int n, int *out_idx, void *stream);
 
 #endif // LOCAL_LLM_KERNEL_CUH

@@ -52,11 +52,11 @@ void launch_rms_norm(const float *input, float *output, const uint16_t *weight, 
 // ---- full attention ----
 
 void launch_full_attention_q(const float *q_and_gate, const uint16_t *q_norm_weight,
-                             float *q, float *gate, int n_heads, int head_dim, int pos,
+                             float *q, float *gate, int n_heads, int head_dim, const int *pos_dev,
                              float rope_theta, float partial_rotary_factor, float eps, void *stream) {
     ScopedGpuTimer timer("full_attention_q", as_stream(stream));
     full_attention_q_kernel<<<n_heads, kBlock, 0, as_stream(stream)>>>(
-        q_and_gate, q_norm_weight, q, gate, n_heads, head_dim, pos,
+        q_and_gate, q_norm_weight, q, gate, n_heads, head_dim, pos_dev,
         rope_theta, partial_rotary_factor, eps);
 }
 
@@ -72,11 +72,11 @@ void launch_full_attention_q_batch(const float *q_and_gate, const uint16_t *q_no
 
 void launch_full_attention_kv(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
                               float *key_cache, float *value_cache, int kv_heads, int head_dim,
-                              int max_seq_len, int pos, float rope_theta, float partial_rotary_factor,
-                              float eps, void *stream) {
+                              int max_seq_len, const int *pos_dev, float rope_theta,
+                              float partial_rotary_factor, float eps, void *stream) {
     ScopedGpuTimer timer("full_attention_kv", as_stream(stream));
     full_attention_kv_kernel<<<kv_heads, kBlock, 0, as_stream(stream)>>>(
-        k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim, max_seq_len, pos,
+        k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim, max_seq_len, pos_dev,
         rope_theta, partial_rotary_factor, eps);
 }
 
@@ -92,11 +92,13 @@ void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const 
 
 void launch_full_attention_attend(const float *q, const float *gate, const float *key_cache,
                                   const float *value_cache, float *attn, int n_heads, int kv_heads,
-                                  int head_dim, int max_seq_len, int pos, void *stream) {
+                                  int head_dim, int max_seq_len, const int *pos_dev, void *stream) {
     ScopedGpuTimer timer("full_attention_attend", as_stream(stream));
-    size_t smem = (static_cast<size_t>(pos + 1) + kBlock) * sizeof(float);
+    // pos 现在在 device，无法在 launch 端按运行时 pos 算 smem；按上限 max_seq_len 固定分配，
+    // 使 smem 在步与步之间不变，便于 CUDA Graph 一次 capture、后续 replay。
+    size_t smem = (static_cast<size_t>(max_seq_len) + kBlock) * sizeof(float);
     full_attention_attend_kernel<<<n_heads, kBlock, smem, as_stream(stream)>>>(
-        q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim, max_seq_len, pos);
+        q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim, max_seq_len, pos_dev);
 }
 
 void launch_full_attention_attend_batch(const float *q, const float *gate, const float *key_cache,
@@ -276,4 +278,11 @@ void launch_moe_router_topk(const float *router_logits, int *top_idx, float *top
 void launch_moe_accumulate(const float *expert_out, float weight, float *out, int n, void *stream) {
     ScopedGpuTimer timer("moe_accumulate", as_stream(stream));
     moe_accumulate_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(expert_out, weight, out, n);
+}
+
+// ---- argmax ----
+
+void launch_argmax(const float *logits, int n, int *out_idx, void *stream) {
+    ScopedGpuTimer timer("argmax", as_stream(stream));
+    argmax_kernel<<<1, kBlock, 0, as_stream(stream)>>>(logits, n, out_idx);
 }

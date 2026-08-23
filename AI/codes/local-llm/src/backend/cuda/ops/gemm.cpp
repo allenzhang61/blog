@@ -29,6 +29,9 @@ void gemm_main(cublasHandle_t handle, const void *d_weight,
     const float alpha = 1.0f;
     const float beta = 0.0f;
 
+    // 绑定当前流：decode 阶段为非阻塞流，使 cuBLAS 调用可纳入 stream capture（CUDA Graph）。
+    check_cublas(cublasSetStream(handle, get_current_cuda_stream()), "cublasSetStream 失败");
+
     // 列主序视角：W 存为 [in_dim, out_dim]（lda=in_dim），OP_T 得 [out_dim, in_dim]；
     // X 为 [in_dim, tokens]（ldb=in_dim）；Y 为 [out_dim, tokens]（ldc=out_dim）。
     check_cublas(

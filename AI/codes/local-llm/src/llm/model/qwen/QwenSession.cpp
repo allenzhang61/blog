@@ -5,6 +5,7 @@
 #include "QwenSession.h"
 
 #include "QwenConfig.h"
+#include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaWeight.h"
 
 QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
@@ -58,6 +59,16 @@ QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
             linear_attn_recurrent_states.push_back(std::move(state));
         }
     }
+
+    // decode 单步 pos 常驻 device：每步在 graph 外把 host pos 拷进来，kernel 从此读取。
+    d_pos_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "decode pos device buffer"));
+    // decode 单步 token id 常驻 device：embedding 从此读、argmax 往此写，构成 device 闭环。
+    d_token_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "decode token device buffer"));
+}
+
+QwenSession::~QwenSession() {
+    cuda_free_device(d_pos_);
+    cuda_free_device(d_token_);
 }
 
 size_t QwenSession::kv_state_bytes() const {

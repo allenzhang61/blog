@@ -30,6 +30,12 @@ public:
     // vocab_size 由权重 shape[0] 推出。仅在需要下一个 token 的位置调用（decode 每步、prefill 末位）。
     int forward(const StorageTensor &s_weight, SessionBase &session,
                 const GPUTensor &g_hidden_f32, Sampler &sampler);
+
+    // 贪心专用、可纳入 CUDA Graph 的版本：GEMM 出 logits 后直接 GPU argmax，
+    // 把下一个 token id 写到 device buffer d_out_token（不做 D2H、不经 host Sampler）。
+    // 仅贪心时可用；温度/top-k/top-p/重复惩罚仍需走 host forward。
+    void forward_argmax_device(const StorageTensor &s_weight, SessionBase &session,
+                               const GPUTensor &g_hidden_f32, int *d_out_token, void *stream = nullptr);
 };
 
 } // namespace common

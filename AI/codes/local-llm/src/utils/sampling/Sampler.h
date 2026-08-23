@@ -44,6 +44,9 @@ public:
     // 返回：下一个 token id。
     int sample(float *logits, int vocab, const std::vector<int> &prev_tokens);
 
+    // 是否为贪心（argmax）采样。贪心时 decode 可走 GPU argmax + CUDA Graph 闭环。
+    bool is_greedy() const { return config_.is_greedy(); }
+
 private:
     static int argmax(const float *logits, int vocab);
 

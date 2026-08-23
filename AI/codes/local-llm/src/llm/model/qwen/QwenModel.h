@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include <cuda_runtime.h>
+
 #include "llm/module/Module.h"
 #include "llm/module/common/Embedding.h"
 #include "llm/module/qwen/DecoderLayer.h"
@@ -65,6 +67,14 @@ private:
     // 内部前向：喂入上一个 token（位置 pos），跑完各层，返回下一个 token id。
     int decode_session(QwenSession &session, int prev_token_id, int pos);
 
+    // 把 embedding→32 层→final_norm→lm_head GEMM→GPU argmax 这一段纯 GPU 计算录进 graph_，
+    // token/pos 均从 session 的 device buffer 读写，构成可 replay 的闭环。
+    void record_decode_graph(QwenSession &session);
+
+    // 贪心 decode 单步的 eager 版（不 capture）：与 graph 内计算等价，token 从 d_token 读、
+    // GPU argmax 结果写回 d_token。用于首步预热 scratch，使随后 capture 不触发 cudaMalloc。
+    void eager_decode_greedy_device(QwenSession &session);
+
     std::unique_ptr<MF> mf_;
     QwenConfig config_;
     QwenWeights weights_;
@@ -87,6 +97,19 @@ private:
     //   QwenSession* session_;              // 原始指针，需要自己 delete
     //   std::unique_ptr<QwenSession> session_; // 自动管理生命周期，更安全
     std::unique_ptr<QwenSession> session_;
+
+    // === CUDA Graph（decode 单步）===
+    // decode 单步是 launch-bound（32 层几百个小 kernel，逐个 launch 开销主导），
+    // 把整段 GPU 计算 capture 成一张 graph、后续每步 replay，消除逐 kernel launch 开销。
+    // token/pos 走 session 的 device buffer，输出 token 留 device，故 graph 每步结构不变、可直接 replay。
+    cudaGraph_t decode_graph_ = nullptr;
+    cudaGraphExec_t decode_graph_exec_ = nullptr;
+    bool decode_graph_ready_ = false;
+    // graph 内所依赖的 session（重建 session 后需重新捕获）。
+    QwenSession *decode_graph_session_ = nullptr;
+    // 本 session 已跑过的贪心 decode 步数：首步走 eager 路径预热 scratch（把所有 grow-only
+    // 缓冲撑到 decode 稳态尺寸），避免 capture 期间触发非法的 cudaMalloc。
+    int decode_greedy_steps_ = 0;
 };
 
 

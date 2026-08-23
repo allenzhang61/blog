@@ -138,8 +138,10 @@ __device__ inline void full_attn_q_head(const float *q_and_gate, const uint16_t 
 }
 
 __global__ void full_attention_q_kernel(const float *q_and_gate, const uint16_t *q_norm_weight,
-                                        float *q, float *gate, int n_heads, int head_dim, int pos,
+                                        float *q, float *gate, int n_heads, int head_dim,
+                                        const int *pos_dev,
                                         float rope_theta, float partial_rotary_factor, float eps) {
+    const int pos = *pos_dev;
     __shared__ float partial[kBlockConst];
     const int h = blockIdx.x;
     if (h >= n_heads) return;
@@ -213,8 +215,9 @@ __device__ inline void full_attn_kv_head(const float *k_in, const float *v_in,
 __global__ void full_attention_kv_kernel(const float *k_in, const float *v_in,
                                          const uint16_t *k_norm_weight, float *key_cache,
                                          float *value_cache, int kv_heads, int head_dim,
-                                         int max_seq_len, int pos, float rope_theta,
+                                         int max_seq_len, const int *pos_dev, float rope_theta,
                                          float partial_rotary_factor, float eps) {
+    const int pos = *pos_dev;
     __shared__ float partial[kBlockConst];
     __shared__ float k_local[kMaxHeadDim];
     const int h = blockIdx.x;
@@ -301,7 +304,8 @@ __device__ inline void full_attn_attend_head(const float *q, const float *gate,
 __global__ void full_attention_attend_kernel(const float *q, const float *gate,
                                              const float *key_cache, const float *value_cache,
                                              float *attn, int n_heads, int kv_heads, int head_dim,
-                                             int max_seq_len, int pos) {
+                                             int max_seq_len, const int *pos_dev) {
+    const int pos = *pos_dev;
     extern __shared__ float shared[];
     float *scores = shared;
     float *partial = scores + pos + 1;
@@ -1087,4 +1091,38 @@ __global__ void moe_accumulate_kernel(const float *expert_out, float weight, flo
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     out[i] += weight * expert_out[i];
+}
+
+// ---- argmax ----
+
+// 单 block 对 logits[n] 求 argmax，结果写 out_idx[0]。
+// 与 CPU 端 Sampler::argmax 一致：并列时取最小 index（只在严格大于时更新）。
+__global__ void argmax_kernel(const float *logits, int n, int *out_idx) {
+    __shared__ float vals[kBlockConst];
+    __shared__ int idxs[kBlockConst];
+    const int tid = threadIdx.x;
+    float local_max = -INFINITY;
+    int local_idx = 0;
+    for (int i = tid; i < n; i += blockDim.x) {
+        const float v = logits[i];
+        if (v > local_max) {
+            local_max = v;
+            local_idx = i;
+        }
+    }
+    vals[tid] = local_max;
+    idxs[tid] = local_idx;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            // 严格大于才替换，等值时保留 index 较小者（与 CPU argmax 一致）。
+            if (vals[tid + s] > vals[tid] ||
+                (vals[tid + s] == vals[tid] && idxs[tid + s] < idxs[tid])) {
+                vals[tid] = vals[tid + s];
+                idxs[tid] = idxs[tid + s];
+            }
+        }
+        __syncthreads();
+    }
+    if (tid == 0) out_idx[0] = idxs[0];
 }
