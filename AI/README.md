@@ -206,20 +206,27 @@
   - [推理的流程和架构](chapter-14/14-001.md)
   - FP16、BF16、FP8、INT8、INT4
   - Quantization、Pruning、Distillation
-  - FlashAttention
+    - [Quantization、Pruning、Distillation 介绍](chapter-14/14-018.md)
+  - [FlashAttention](chapter-14/14-017.md)
   - KV Cache、PagedAttention
   - Continuous Batching
-  - Speculative Decoding
+  - Speculative Decoding 投机解码
+    - 推测解码巧妙地打破了这种串行限制，变“逐字生成”为“批量验证”
   - vLLM、SGLang、TensorRT-LLM
     - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-14/14-002.md)
-    - [vLLM 用法 Hello World](chapter-14/14-003.md)
-    - [压测并调优 vllm+qwen 3.5 9B](chapter-14/14-004.md)
-    - [vllm 性能调优](chapter-14/14-005.md)
-    - [vllm 内存管理机制](chapter-14/14-006.md)
-    - [vllm 调用链](chapter-14/14-007.md)
-    - [vllm parallel 介绍](chapter-14/14-008.md)
-    - [vllm 类图](chapter-14/14-009.md)
-    - [vllm lora](chapter-14/14-010.md)
+    - vLLM
+      - [vLLM 用法 Hello World](chapter-14/14-003.md)
+      - [压测并调优 vllm+qwen 3.5 9B](chapter-14/14-004.md)
+      - [vllm 性能调优](chapter-14/14-005.md)
+      - [vllm 内存管理机制](chapter-14/14-006.md)
+      - [vllm 调用链](chapter-14/14-007.md)
+      - [vllm parallel 介绍](chapter-14/14-008.md)
+      - [vllm 类图](chapter-14/14-009.md)
+      - [vllm lora](chapter-14/14-010.md)
+      - vLLM 特性
+        - Graph Mode https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/graph_mode.html
+        - CPU Binding https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/cpu_binding.html
+        - 
   - Tensor/Pipeline/Data/Expert Parallel
   - llama.cpp
 - [kv cache](chapter-03/03-026.md)
@@ -291,6 +298,10 @@
   - [MuZero](chapter-13/13-005.md)
 - competitions
   - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
+
+## 知识管理
+
+- [20-01 知识管理领域知名专家](20-01%20知识管理领域知名专家.md)
 
 ## 低优
 
