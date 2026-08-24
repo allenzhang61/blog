@@ -52,13 +52,13 @@ void DecoderLayer::prefill(QwenSession &session, const GPUTensor &g_hidden_f32) 
         static_cast<LinearAttention *>(attn_.get())->prefill(
             session, g_token_hidden_a_f32, g_mixer_f32);
     }
-    TensorTool::add(g_hidden_f32, g_mixer_f32, g_hidden_f32);
-
-    // y = h + mlp( post_norm(h) )
+    // h = x + attn(...)（写回 g_hidden），并融合 post_norm(h) -> g_token_hidden_b。
     GPUTensor g_token_hidden_b_f32 = GPUTensor(scratch, scratch_key::kTokenHiddenB, act_shape, DType::F32);
     GPUTensor g_mlp_out_f32 = GPUTensor(scratch, scratch_key::kMlpOut, act_shape, DType::F32);
-    RMSNorm::forward(s_post_norm_weight_, g_hidden_f32, g_token_hidden_b_f32,
-                     text_config_.rms_norm_eps, /*one_plus=*/true);
+    TensorTool::add_rms_norm(s_post_norm_weight_, g_hidden_f32, g_mixer_f32, g_hidden_f32,
+                             g_token_hidden_b_f32, text_config_.rms_norm_eps, /*one_plus=*/true);
+
+    // y = h + mlp( post_norm(h) )
     mlp_.forward(mlp_weights_, session, g_token_hidden_b_f32, g_mlp_out_f32);
     TensorTool::add(g_hidden_f32, g_mlp_out_f32, g_hidden_f32);
 
@@ -84,12 +84,11 @@ void DecoderLayer::decode(QwenSession &session, const GPUTensor &g_hidden_f32, i
         static_cast<LinearAttention *>(attn_.get())->decode(
             session, g_token_hidden_a_f32, g_mixer_f32);
     }
-    TensorTool::add(g_hidden_f32, g_mixer_f32, g_hidden_f32);
-
+    // h = x + attn(...)（写回 g_hidden），并融合 post_norm(h) -> g_token_hidden_b。
     GPUTensor g_token_hidden_b_f32 = GPUTensor(scratch, scratch_key::kTokenHiddenB, act_shape, DType::F32);
     GPUTensor g_mlp_out_f32 = GPUTensor(scratch, scratch_key::kMlpOut, act_shape, DType::F32);
-    RMSNorm::forward(s_post_norm_weight_, g_hidden_f32, g_token_hidden_b_f32,
-                     text_config_.rms_norm_eps, /*one_plus=*/true);
+    TensorTool::add_rms_norm(s_post_norm_weight_, g_hidden_f32, g_mixer_f32, g_hidden_f32,
+                             g_token_hidden_b_f32, text_config_.rms_norm_eps, /*one_plus=*/true);
     mlp_.forward(mlp_weights_, session, g_token_hidden_b_f32, g_mlp_out_f32);
     TensorTool::add(g_hidden_f32, g_mlp_out_f32, g_hidden_f32);
 

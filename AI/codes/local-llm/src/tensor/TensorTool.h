@@ -37,6 +37,13 @@ public:
     static void rms_norm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                          float eps, bool one_plus);
 
+    // 融合 add + RMSNorm：g_residual_io = g_x + g_residual（写回残差和），
+    // g_norm_out = rmsnorm(g_residual_io) * weight。省一次 kernel launch 与一次显存往返。
+    static void add_rms_norm(const StorageTensor &s_weight, const GPUTensor &g_x_f32,
+                             const GPUTensor &g_residual_f32, const GPUTensor &g_residual_io_f32,
+                             const GPUTensor &g_norm_out_f32, float eps, bool one_plus,
+                             void *stream = nullptr);
+
     static void add(const GPUTensor &g_a_f32, const GPUTensor &g_b_f32, const GPUTensor &g_out_f32, void *stream = nullptr);
     static void silu_mul(const GPUTensor &g_gate_f32, const GPUTensor &g_up_f32, const GPUTensor &g_out_f32, void *stream = nullptr);
 

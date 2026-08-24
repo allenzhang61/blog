@@ -49,6 +49,15 @@ void launch_rms_norm(const float *input, float *output, const uint16_t *weight, 
         input, output, weight, weight_type, hidden_size, eps, one_plus);
 }
 
+// 融合 add + RMSNorm：out_residual = x + residual；out_norm = rmsnorm(out_residual) * weight。
+void launch_add_rms_norm(const float *x, const float *residual, float *out_residual, float *out_norm,
+                         const uint16_t *weight, int weight_type, int rows, int hidden_size,
+                         float eps, bool one_plus, void *stream) {
+    ScopedGpuTimer timer("add_rms_norm", as_stream(stream));
+    add_rms_norm_kernel<<<rows, kBlock, kBlock * sizeof(float), as_stream(stream)>>>(
+        x, residual, out_residual, out_norm, weight, weight_type, hidden_size, eps, one_plus);
+}
+
 // ---- full attention ----
 
 void launch_full_attention_q(const float *q_and_gate, const uint16_t *q_norm_weight,
@@ -94,9 +103,9 @@ void launch_full_attention_attend(const float *q, const float *gate, const float
                                   const float *value_cache, float *attn, int n_heads, int kv_heads,
                                   int head_dim, int max_seq_len, const int *pos_dev, void *stream) {
     ScopedGpuTimer timer("full_attention_attend", as_stream(stream));
-    // pos 现在在 device，无法在 launch 端按运行时 pos 算 smem；按上限 max_seq_len 固定分配，
-    // 使 smem 在步与步之间不变，便于 CUDA Graph 一次 capture、后续 replay。
-    size_t smem = (static_cast<size_t>(max_seq_len) + kBlock) * sizeof(float);
+    // flash（online softmax）版：smem 只需 s_p[kBlock] + s_acc[head_dim] + s_red[kBlock]，
+    // 与序列长度无关，天然满足 CUDA Graph 一次 capture / 多次 replay 的 smem 恒定要求。
+    size_t smem = (static_cast<size_t>(2 * kBlock) + head_dim) * sizeof(float);
     full_attention_attend_kernel<<<n_heads, kBlock, smem, as_stream(stream)>>>(
         q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim, max_seq_len, pos_dev);
 }
@@ -106,9 +115,8 @@ void launch_full_attention_attend_batch(const float *q, const float *gate, const
                                         int kv_heads, int head_dim, int max_seq_len, int start_pos,
                                         void *stream) {
     ScopedGpuTimer timer("full_attention_attend_batch", as_stream(stream));
-    // shared 大小需覆盖本段最大位置的 scores。
-    size_t max_pos = static_cast<size_t>(start_pos + tokens - 1);
-    size_t smem = (max_pos + 1 + kBlock) * sizeof(float);
+    // flash（online softmax）版：smem 只需 s_p[kBlock] + s_acc[head_dim] + s_red[kBlock]，与序列长度无关。
+    size_t smem = (static_cast<size_t>(2 * kBlock) + head_dim) * sizeof(float);
     full_attention_attend_batch_kernel<<<tokens * n_heads, kBlock, smem, as_stream(stream)>>>(
         q, gate, key_cache, value_cache, attn, tokens, n_heads, kv_heads, head_dim, max_seq_len, start_pos);
 }
@@ -282,7 +290,33 @@ void launch_moe_accumulate(const float *expert_out, float weight, float *out, in
 
 // ---- argmax ----
 
+// 两阶段 argmax 的局部结果缓冲：阶段1 每个 block 输出一对 (val, idx)，
+// 阶段2 单 block 归约。按最大 block 数一次性懒分配、进程内复用（decode 每步都调用）。
+namespace {
+constexpr int kArgmaxMaxBlocks = 512; // 上限：15w 词表 / 256 ≈ 586，取 512 足够摊到多 SM
+float *g_argmax_partial_vals = nullptr;
+int *g_argmax_partial_idxs = nullptr;
+
+void ensure_argmax_partial_buffers() {
+    if (g_argmax_partial_vals == nullptr) {
+        g_argmax_partial_vals = static_cast<float *>(
+            cuda_malloc_device(sizeof(float) * kArgmaxMaxBlocks, "argmax partial vals"));
+        g_argmax_partial_idxs = static_cast<int *>(
+            cuda_malloc_device(sizeof(int) * kArgmaxMaxBlocks, "argmax partial idxs"));
+    }
+}
+} // namespace
+
 void launch_argmax(const float *logits, int n, int *out_idx, void *stream) {
     ScopedGpuTimer timer("argmax", as_stream(stream));
-    argmax_kernel<<<1, kBlock, 0, as_stream(stream)>>>(logits, n, out_idx);
+    cudaStream_t s = as_stream(stream);
+    int blocks = grid_for(n);
+    if (blocks > kArgmaxMaxBlocks) blocks = kArgmaxMaxBlocks;
+    ensure_argmax_partial_buffers();
+    // 阶段1：多 block 并行求局部 argmax，摊平 15w 词表的串行扫描。
+    argmax_partial_kernel<<<blocks, kBlock, 0, s>>>(logits, n, g_argmax_partial_vals,
+                                                    g_argmax_partial_idxs);
+    // 阶段2：单 block 归约 blocks 个局部结果得到全局 argmax。
+    argmax_final_kernel<<<1, kBlock, 0, s>>>(g_argmax_partial_vals, g_argmax_partial_idxs,
+                                             blocks, out_idx);
 }

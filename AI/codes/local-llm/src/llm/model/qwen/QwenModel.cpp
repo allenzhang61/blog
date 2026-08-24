@@ -16,6 +16,7 @@
 #include "backend/cuda/common.h"
 #include "tensor/GPUTensor.h"
 #include "tensor/TensorTool.h"
+#include "utils/stats/Profiler.h"
 
 QwenModel::QwenModel(std::unique_ptr<MF> mf, int max_output_tokens, const SamplingConfig &sampling)
     : mf_(std::move(mf)),
@@ -126,12 +127,20 @@ int QwenModel::decode_session(QwenSession &session, int prev_token_id, int pos) 
     check_cuda(cudaMemcpyAsync(session.d_token(), &prev_token_id, sizeof(int), cudaMemcpyHostToDevice, stream),
                "decode token H2D 失败");
 
-    if (decode_greedy_steps_ == 0 || decode_graph_session_ != &session) {
-        // 首步（或换 session）走 eager：把所有 grow-only scratch 撑到 decode 稳态尺寸，
-        // 避免随后 capture 期间触发非法的 cudaMalloc；同时 GPU argmax 把结果写回 d_token。
+    // profile 采样步走 eager：graph replay 内的 kernel 不经 ScopedGpuTimer 埋点，
+    // 无法拿到逐 kernel 细分；此步改走 eager 让 profiler 抓到每个 kernel 的耗时。
+    // 非采样步仍走 graph，保持稳态吞吐口径不变。
+    const bool profile_this_step = Profiler::instance().capturing();
+
+    if (decode_greedy_steps_ == 0 || decode_graph_session_ != &session || profile_this_step) {
+        // 首步（或换 session / profile 采样步）走 eager：把所有 grow-only scratch 撑到
+        // decode 稳态尺寸，避免随后 capture 期间触发非法的 cudaMalloc；同时 GPU argmax 把结果写回 d_token。
         eager_decode_greedy_device(session);
-        decode_graph_ready_ = false;      // scratch 刚可能增长，之前若有 graph 也失效
-        decode_graph_session_ = &session; // 记录当前 session（预热已针对它）
+        // profile 采样步不使已建好的 graph 失效（它没改 scratch 尺寸，下步可继续 replay）。
+        if (!profile_this_step) {
+            decode_graph_ready_ = false;      // scratch 刚可能增长，之前若有 graph 也失效
+            decode_graph_session_ = &session; // 记录当前 session（预热已针对它）
+        }
     } else {
         if (!decode_graph_ready_) {
             record_decode_graph(session);

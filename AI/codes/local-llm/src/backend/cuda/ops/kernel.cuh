@@ -34,6 +34,10 @@ void launch_embedding_lookup(const int *input, float *output, const uint16_t *ta
 // one_plus 为 true 时使用 (1 + weight) 作为缩放（部分 Qwen norm 的约定）。
 void launch_rms_norm(const float *input, float *output, const uint16_t *weight, int weight_type,
                      int rows, int hidden_size, float eps, bool one_plus, void *stream);
+// 融合 add + RMSNorm：out_residual = x + residual；out_norm = rmsnorm(out_residual) * weight。
+void launch_add_rms_norm(const float *x, const float *residual, float *out_residual, float *out_norm,
+                         const uint16_t *weight, int weight_type, int rows, int hidden_size,
+                         float eps, bool one_plus, void *stream);
 
 // ================= full attention =================
 // q_norm / k_norm 权重按 (1 + w) 缩放（Qwen 约定），以 bf16 传入（q_norm_weight[head_dim]）。

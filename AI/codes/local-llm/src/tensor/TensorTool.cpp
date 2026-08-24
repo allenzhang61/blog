@@ -157,6 +157,17 @@ void TensorTool::rms_norm(const StorageTensor &s_weight_u16, const GPUTensor &g_
                     static_cast<int>(g_input_f32.cols()), eps, one_plus, nullptr);
 }
 
+void TensorTool::add_rms_norm(const StorageTensor &s_weight, const GPUTensor &g_x_f32,
+                              const GPUTensor &g_residual_f32, const GPUTensor &g_residual_io_f32,
+                              const GPUTensor &g_norm_out_f32, float eps, bool one_plus, void *stream) {
+    GPUTensor g_weight_u16 = s_weight.to_gpu(true);
+    const int f16_or_bf16 = norm_weight_type_of(g_weight_u16.dtype);
+    launch_add_rms_norm(g_x_f32.data<float>(), g_residual_f32.data<float>(), g_residual_io_f32.data<float>(),
+                        g_norm_out_f32.data<float>(), g_weight_u16.data<uint16_t>(), f16_or_bf16,
+                        static_cast<int>(g_x_f32.rows()), static_cast<int>(g_x_f32.cols()),
+                        eps, one_plus, stream);
+}
+
 void TensorTool::add(const GPUTensor &g_a_f32, const GPUTensor &g_b_f32, const GPUTensor &g_out_f32, void *stream) {
     launch_add(g_a_f32.data<float>(), g_b_f32.data<float>(), g_out_f32.data<float>(),
                static_cast<int>(g_out_f32.numel()), stream);

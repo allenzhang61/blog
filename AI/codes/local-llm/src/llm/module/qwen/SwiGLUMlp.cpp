@@ -28,9 +28,13 @@ void SwiGLUMlp::forward(const MlpWeights &weights, QwenSession &session,
     GPUTensor g_up_f32 = GPUTensor(scratch, scratch_key::kUp, intermediate_shape, DType::F32);
     GPUTensor g_prod_f32 = GPUTensor(scratch, scratch_key::kProd, intermediate_shape, DType::F32);
 
-    // 输入激活转成权重 dtype（BF16/F16）后再投影；g_gate/g_up 同 dtype，只需转一次。
-    TensorTool::gemm(weights.s_gate_proj, g_in_f32, g_gate_f32, scratch, scratch_key::kInputLowp, "mlp.gate");
-    TensorTool::gemm(weights.s_up_proj, g_in_f32, g_up_f32, scratch, scratch_key::kInputLowp, "mlp.up");
+    // gate/up 共享同一份 hidden 输入且权重同 dtype：只转一次 bf16/f16 复用，
+    // 省掉原先每个 GEMM 各自一次 f32->bf16 拷贝（旧路径每层 2 次冗余转换）。
+    const void *d_in_lowp = TensorTool::prepare_lowp_input(
+        g_in_f32, weights.s_gate_proj.dtype, scratch, scratch_key::kInputLowp);
+    const int in_rows = static_cast<int>(g_in_f32.rows());
+    TensorTool::gemm_lowp(weights.s_gate_proj, d_in_lowp, in_rows, g_gate_f32, "mlp.gate");
+    TensorTool::gemm_lowp(weights.s_up_proj, d_in_lowp, in_rows, g_up_f32, "mlp.up");
 
     // g_prod = SiLU(g_gate) * g_up。
     TensorTool::silu_mul(g_gate_f32, g_up_f32, g_prod_f32);

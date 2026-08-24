@@ -96,8 +96,43 @@ __global__ void rms_norm_kernel(const float *input, float *output, const uint16_
     }
 }
 
-// ---- full attention ----
+// ---- 融合 add + RMSNorm ----
+// out_residual = x + residual（写回残差累加结果）；out_norm = rmsnorm(out_residual) * weight。
+// 把 DecoderLayer 里相邻的 add + rms_norm 融成一个 kernel，省一次 launch 与一次显存往返。
+// 每个 block 处理一行；block 内先加法+归约平方和，再逐元素缩放。
+__global__ void add_rms_norm_kernel(const float *x, const float *residual, float *out_residual,
+                                    float *out_norm, const uint16_t *weight, int weight_type,
+                                    int hidden_size, float eps, bool one_plus) {
+    int row = blockIdx.x;
+    const float *xr = x + static_cast<size_t>(row) * hidden_size;
+    const float *rr = residual + static_cast<size_t>(row) * hidden_size;
+    float *sr = out_residual + static_cast<size_t>(row) * hidden_size;
 
+    extern __shared__ float sdata[];
+    float local = 0.0f;
+    // 先做残差加法并写回，同时累加平方和（融合，避免二次读显存）。
+    for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
+        float v = xr[j] + rr[j];
+        sr[j] = v;
+        local += v * v;
+    }
+    sdata[threadIdx.x] = local;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (threadIdx.x < s) sdata[threadIdx.x] += sdata[threadIdx.x + s];
+        __syncthreads();
+    }
+    float inv_rms = rsqrtf(sdata[0] / hidden_size + eps);
+
+    float *dst = out_norm + static_cast<size_t>(row) * hidden_size;
+    for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
+        float w = f16_or_bf16_to_float(weight[j], weight_type);
+        if (one_plus) w += 1.0f;
+        dst[j] = sr[j] * inv_rms * w;
+    }
+}
+
+// ---- full attention ----
 // query/gate 归一化 + RoPE。每个 block 处理 (tok, head)。src 索引已按 tok 偏移。
 __device__ inline void full_attn_q_head(const float *q_and_gate, const uint16_t *q_norm_weight,
                                         float *q, float *gate, int head_dim, int pos,
@@ -247,57 +282,94 @@ __global__ void full_attention_kv_batch_kernel(const float *k_in, const float *v
 }
 
 // causal attention + 输出门控。每个 block 处理一个 (tok, head)，pos 为该 token 绝对位置。
+// FlashAttention 式实现：按 tile（每 tile = blockDim 个 key）遍历 KV，用 online softmax
+// 增量维护 running max(m) / running sum(l) / 输出累加(acc)，不再 materialize 整行 scores。
+// shared 需求为 O(blockDim + head_dim)，与序列长度无关（利于长上下文与 CUDA Graph 稳定 smem）。
+// 数学上与传统三趟 softmax 完全等价，数值上用 online rescale 保证稳定。
+//   shared 布局：s_p[blockDim]（tile 内 score/概率）| s_acc[head_dim]（输出累加）| s_red[blockDim]（归约）
 __device__ inline void full_attn_attend_head(const float *q, const float *gate,
                                              const float *key_cache, const float *value_cache,
                                              float *attn, int n_heads, int kv_heads, int head_dim,
                                              int pos, size_t q_off, size_t out_off,
-                                             float *scores, float *partial) {
+                                             float *s_p, float *s_acc, float *s_red) {
     const int tid = threadIdx.x;
+    const int nthreads = blockDim.x;
     const int kv_group = n_heads / kv_heads;
     const int h = static_cast<int>(q_off / head_dim) % n_heads;
     const int kh = h / kv_group;
     const float scale = rsqrtf(static_cast<float>(head_dim));
     const float *qh = q + q_off;
 
-    float local_max = -INFINITY;
-    for (int t = tid; t <= pos; t += blockDim.x) {
-        const float *key = key_cache + (static_cast<size_t>(t) * kv_heads + kh) * head_dim;
-        float dot = 0.0f;
-        for (int d = 0; d < head_dim; ++d) dot += qh[d] * key[d];
-        const float score = dot * scale;
-        scores[t] = score;
-        local_max = fmaxf(local_max, score);
+    // running 状态（每个 block 一份，放在 shared 的标量位）：m=running max, l=running sum。
+    __shared__ float s_m;
+    __shared__ float s_l;
+    if (tid == 0) {
+        s_m = -INFINITY;
+        s_l = 0.0f;
     }
-    partial[tid] = local_max;
+    for (int d = tid; d < head_dim; d += nthreads) s_acc[d] = 0.0f;
     __syncthreads();
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) partial[tid] = fmaxf(partial[tid], partial[tid + s]);
-        __syncthreads();
-    }
-    const float max_score = partial[0];
-    float local_denom = 0.0f;
-    for (int t = tid; t <= pos; t += blockDim.x) {
-        const float e = __expf(scores[t] - max_score);
-        scores[t] = e;
-        local_denom += e;
-    }
-    partial[tid] = local_denom;
-    __syncthreads();
-    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
-        if (tid < s) partial[tid] += partial[tid + s];
-        __syncthreads();
-    }
-    const float denom = partial[0];
-    float *out = attn + out_off;
-    for (int d = tid; d < head_dim; d += blockDim.x) {
-        float sum = 0.0f;
-        for (int t = 0; t <= pos; ++t) {
-            const float prob = scores[t] / denom;
-            const float *value = value_cache + (static_cast<size_t>(t) * kv_heads + kh) * head_dim;
-            sum += prob * value[d];
+
+    const int n_keys = pos + 1;
+    for (int tile = 0; tile < n_keys; tile += nthreads) {
+        const int j = tile + tid;  // 本线程负责的 key 位置
+        // 1) 每线程算一个 key 的 score = q·k * scale（越界置 -inf）。
+        float score = -INFINITY;
+        if (j < n_keys) {
+            const float *key = key_cache + (static_cast<size_t>(j) * kv_heads + kh) * head_dim;
+            float dot = 0.0f;
+            for (int d = 0; d < head_dim; ++d) dot += qh[d] * key[d];
+            score = dot * scale;
         }
+        s_p[tid] = score;
+        // 2) 归约求本 tile 的最大 score。
+        s_red[tid] = score;
+        __syncthreads();
+        for (int s = nthreads / 2; s > 0; s >>= 1) {
+            if (tid < s) s_red[tid] = fmaxf(s_red[tid], s_red[tid + s]);
+            __syncthreads();
+        }
+        const float tile_max = s_red[0];
+        __syncthreads();
+        // 3) online softmax：更新全局 running max，得到缩放系数。
+        const float m_old = s_m;
+        const float m_new = fmaxf(m_old, tile_max);
+        const float correction = __expf(m_old - m_new);  // m_old=-inf 时为 0，安全
+        // 4) 本线程把自己的 score 转成 exp(score - m_new)，存回 s_p。
+        const float p = (j < n_keys) ? __expf(s_p[tid] - m_new) : 0.0f;
+        s_p[tid] = p;
+        // 5) 归约求本 tile 的概率和。
+        s_red[tid] = p;
+        __syncthreads();
+        for (int s = nthreads / 2; s > 0; s >>= 1) {
+            if (tid < s) s_red[tid] += s_red[tid + s];
+            __syncthreads();
+        }
+        const float tile_sum = s_red[0];
+        // 6) 缩放旧的 acc/l 并并入本 tile 贡献（acc 按 d 维分工，每线程负责若干 d）。
+        const int tile_len = min(nthreads, n_keys - tile);
+        for (int d = tid; d < head_dim; d += nthreads) {
+            float a = s_acc[d] * correction;
+            for (int u = 0; u < tile_len; ++u) {
+                const int jj = tile + u;
+                const float *value = value_cache + (static_cast<size_t>(jj) * kv_heads + kh) * head_dim;
+                a += s_p[u] * value[d];
+            }
+            s_acc[d] = a;
+        }
+        if (tid == 0) {
+            s_l = s_l * correction + tile_sum;
+            s_m = m_new;
+        }
+        __syncthreads();
+    }
+
+    // 7) 归一化 + 输出门控。
+    const float denom = s_l;
+    float *out = attn + out_off;
+    for (int d = tid; d < head_dim; d += nthreads) {
         const float g = gate[q_off + d];
-        out[d] = sum * (1.0f / (1.0f + __expf(-g)));
+        out[d] = (s_acc[d] / denom) * (1.0f / (1.0f + __expf(-g)));
     }
 }
 
@@ -307,13 +379,15 @@ __global__ void full_attention_attend_kernel(const float *q, const float *gate,
                                              int max_seq_len, const int *pos_dev) {
     const int pos = *pos_dev;
     extern __shared__ float shared[];
-    float *scores = shared;
-    float *partial = scores + pos + 1;
+    // flash 布局（与 seqlen 无关）：s_p[blockDim] | s_acc[head_dim] | s_red[blockDim]
+    float *s_p = shared;
+    float *s_acc = s_p + blockDim.x;
+    float *s_red = s_acc + head_dim;
     const int h = blockIdx.x;
     if (h >= n_heads) return;
     const size_t off = static_cast<size_t>(h) * head_dim;
     full_attn_attend_head(q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim,
-                          pos, off, off, scores, partial);
+                          pos, off, off, s_p, s_acc, s_red);
     (void) max_seq_len;
 }
 
@@ -327,12 +401,14 @@ __global__ void full_attention_attend_batch_kernel(const float *q, const float *
     const int h = block - tok * n_heads;
     if (tok >= tokens) return;
     const int pos = start_pos + tok;
-    float *scores = shared;
-    float *partial = scores + pos + 1;
+    // flash 布局（与 seqlen 无关）：s_p[blockDim] | s_acc[head_dim] | s_red[blockDim]
+    float *s_p = shared;
+    float *s_acc = s_p + blockDim.x;
+    float *s_red = s_acc + head_dim;
     const int q_total = n_heads * head_dim;
     const size_t off = static_cast<size_t>(tok) * q_total + static_cast<size_t>(h) * head_dim;
     full_attn_attend_head(q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim,
-                          pos, off, off, scores, partial);
+                          pos, off, off, s_p, s_acc, s_red);
     (void) max_seq_len;
 }
 
@@ -1095,27 +1171,10 @@ __global__ void moe_accumulate_kernel(const float *expert_out, float weight, flo
 
 // ---- argmax ----
 
-// 单 block 对 logits[n] 求 argmax，结果写 out_idx[0]。
-// 与 CPU 端 Sampler::argmax 一致：并列时取最小 index（只在严格大于时更新）。
-__global__ void argmax_kernel(const float *logits, int n, int *out_idx) {
-    __shared__ float vals[kBlockConst];
-    __shared__ int idxs[kBlockConst];
-    const int tid = threadIdx.x;
-    float local_max = -INFINITY;
-    int local_idx = 0;
-    for (int i = tid; i < n; i += blockDim.x) {
-        const float v = logits[i];
-        if (v > local_max) {
-            local_max = v;
-            local_idx = i;
-        }
-    }
-    vals[tid] = local_max;
-    idxs[tid] = local_idx;
-    __syncthreads();
+// block 内共享内存归约：并列时保留 index 较小者（与 CPU Sampler::argmax 严格大于才更新一致）。
+__device__ inline void argmax_block_reduce(float *vals, int *idxs, int tid) {
     for (int s = blockDim.x / 2; s > 0; s >>= 1) {
         if (tid < s) {
-            // 严格大于才替换，等值时保留 index 较小者（与 CPU argmax 一致）。
             if (vals[tid + s] > vals[tid] ||
                 (vals[tid + s] == vals[tid] && idxs[tid + s] < idxs[tid])) {
                 vals[tid] = vals[tid + s];
@@ -1124,5 +1183,54 @@ __global__ void argmax_kernel(const float *logits, int n, int *out_idx) {
         }
         __syncthreads();
     }
+}
+
+// 阶段1：多 block 各求 logits 的局部 argmax，写到 partial_vals/partial_idxs[blockIdx.x]。
+// 每个 block 用 grid-stride 覆盖 logits 的一段，把 15w 词表的串行扫描摊到多个 SM 上并行。
+__global__ void argmax_partial_kernel(const float *logits, int n, float *partial_vals,
+                                      int *partial_idxs) {
+    __shared__ float vals[kBlockConst];
+    __shared__ int idxs[kBlockConst];
+    const int tid = threadIdx.x;
+    const int stride = blockDim.x * gridDim.x;
+    float local_max = -INFINITY;
+    int local_idx = 0;
+    for (int i = blockIdx.x * blockDim.x + tid; i < n; i += stride) {
+        const float v = logits[i];
+        if (v > local_max || (v == local_max && i < local_idx)) {
+            local_max = v;
+            local_idx = i;
+        }
+    }
+    vals[tid] = local_max;
+    idxs[tid] = local_idx;
+    __syncthreads();
+    argmax_block_reduce(vals, idxs, tid);
+    if (tid == 0) {
+        partial_vals[blockIdx.x] = vals[0];
+        partial_idxs[blockIdx.x] = idxs[0];
+    }
+}
+
+// 阶段2：单 block 归约 num_partials 个局部结果，得到全局 argmax，写 out_idx[0]。
+__global__ void argmax_final_kernel(const float *partial_vals, const int *partial_idxs,
+                                    int num_partials, int *out_idx) {
+    __shared__ float vals[kBlockConst];
+    __shared__ int idxs[kBlockConst];
+    const int tid = threadIdx.x;
+    float local_max = -INFINITY;
+    int local_idx = 0;
+    for (int i = tid; i < num_partials; i += blockDim.x) {
+        const float v = partial_vals[i];
+        const int gi = partial_idxs[i];
+        if (v > local_max || (v == local_max && gi < local_idx)) {
+            local_max = v;
+            local_idx = gi;
+        }
+    }
+    vals[tid] = local_max;
+    idxs[tid] = local_idx;
+    __syncthreads();
+    argmax_block_reduce(vals, idxs, tid);
     if (tid == 0) out_idx[0] = idxs[0];
 }

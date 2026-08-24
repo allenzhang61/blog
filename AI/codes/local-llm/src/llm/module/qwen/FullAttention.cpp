@@ -53,9 +53,14 @@ void FullAttention::prefill(QwenSession &session, const GPUTensor &g_hidden_f32,
     GPUTensor g_full_attn_f32 = GPUTensor(
         scratch, scratch_key::kFullAttn,
         {static_cast<int64_t>(input_size), static_cast<int64_t>(q_total)}, DType::F32);
-    TensorTool::gemm(weights_.s_q_proj, g_hidden_f32, g_full_projection_f32, scratch, scratch_key::kInputLowp, "fullattn.d_q_proj");
-    TensorTool::gemm(weights_.s_k_proj, g_hidden_f32, g_full_k_f32, scratch, scratch_key::kInputLowp, "fullattn.d_k_proj");
-    TensorTool::gemm(weights_.s_v_proj, g_hidden_f32, g_full_v_f32, scratch, scratch_key::kInputLowp, "fullattn.d_v_proj");
+    // q/k/v_proj 共享同一份 hidden 输入且权重同 dtype：只转一次 bf16/f16 复用，
+    // 省掉原先每个 GEMM 各自一次 f32->bf16 拷贝（旧路径每层 3 次冗余转换）。
+    const void *d_hidden_lowp = TensorTool::prepare_lowp_input(
+        g_hidden_f32, weights_.s_q_proj.dtype, scratch, scratch_key::kInputLowp);
+    const int rows = static_cast<int>(g_hidden_f32.rows());
+    TensorTool::gemm_lowp(weights_.s_q_proj, d_hidden_lowp, rows, g_full_projection_f32, "fullattn.d_q_proj");
+    TensorTool::gemm_lowp(weights_.s_k_proj, d_hidden_lowp, rows, g_full_k_f32, "fullattn.d_k_proj");
+    TensorTool::gemm_lowp(weights_.s_v_proj, d_hidden_lowp, rows, g_full_v_f32, "fullattn.d_v_proj");
 
     TensorTool::full_attention_q_batch(g_full_projection_f32, weights_.s_q_norm, g_full_q_f32, g_full_gate_f32,
                                   n_heads, head_dim, start_pos, theta, partial, eps);
@@ -96,9 +101,14 @@ void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32, 
         scratch, scratch_key::kFullGate, {1, static_cast<int64_t>(q_total)}, DType::F32);
     GPUTensor g_full_attn_f32 = GPUTensor(
         scratch, scratch_key::kFullAttn, {1, static_cast<int64_t>(q_total)}, DType::F32);
-    TensorTool::gemm(weights_.s_q_proj, g_hidden_f32, g_full_projection_f32, scratch, scratch_key::kInputLowp, "fullattn.d_q_proj");
-    TensorTool::gemm(weights_.s_k_proj, g_hidden_f32, g_full_k_f32, scratch, scratch_key::kInputLowp, "fullattn.d_k_proj");
-    TensorTool::gemm(weights_.s_v_proj, g_hidden_f32, g_full_v_f32, scratch, scratch_key::kInputLowp, "fullattn.d_v_proj");
+    // q/k/v_proj 共享同一份 hidden 输入且权重同 dtype：只转一次 bf16/f16 复用，
+    // 省掉原先每个 GEMM 各自一次 f32->bf16 拷贝（旧路径每层 3 次冗余转换）。
+    const void *d_hidden_lowp = TensorTool::prepare_lowp_input(
+        g_hidden_f32, weights_.s_q_proj.dtype, scratch, scratch_key::kInputLowp);
+    const int rows = static_cast<int>(g_hidden_f32.rows());
+    TensorTool::gemm_lowp(weights_.s_q_proj, d_hidden_lowp, rows, g_full_projection_f32, "fullattn.d_q_proj");
+    TensorTool::gemm_lowp(weights_.s_k_proj, d_hidden_lowp, rows, g_full_k_f32, "fullattn.d_k_proj");
+    TensorTool::gemm_lowp(weights_.s_v_proj, d_hidden_lowp, rows, g_full_v_f32, "fullattn.d_v_proj");
 
     // decode kernel 从 device buffer 读 pos，使 kernel 参数在步与步之间不变（CUDA Graph 前置条件）。
     // pos 的 device 值由 QwenModel 在每步 graph 外统一写入 session.d_pos()，此处只读地址、不做同步 H2D

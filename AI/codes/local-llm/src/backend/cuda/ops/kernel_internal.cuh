@@ -31,6 +31,9 @@ __global__ void embedding_lookup_kernel(const int *input, float *output, const u
                                         int vocab_size, int hidden_size, int weight_type);
 __global__ void rms_norm_kernel(const float *input, float *output, const uint16_t *weight,
                                 int weight_type, int hidden_size, float eps, bool one_plus);
+__global__ void add_rms_norm_kernel(const float *x, const float *residual, float *out_residual,
+                                    float *out_norm, const uint16_t *weight, int weight_type,
+                                    int hidden_size, float eps, bool one_plus);
 
 // ---- full attention ----
 __global__ void full_attention_q_kernel(const float *q_and_gate, const uint16_t *q_norm_weight,
@@ -123,6 +126,10 @@ __global__ void moe_router_topk_kernel(const float *router_logits, int *top_idx,
 __global__ void moe_accumulate_kernel(const float *expert_out, float weight, float *out, int n);
 
 // ---- argmax ----
-__global__ void argmax_kernel(const float *logits, int n, int *out_idx);
+// 两阶段归约：阶段1 多 block 各求局部 argmax，阶段2 单 block 归约局部结果。
+__global__ void argmax_partial_kernel(const float *logits, int n, float *partial_vals,
+                                      int *partial_idxs);
+__global__ void argmax_final_kernel(const float *partial_vals, const int *partial_idxs,
+                                    int num_partials, int *out_idx);
 
 #endif // LOCAL_LLM_KERNEL_INTERNAL_CUH
