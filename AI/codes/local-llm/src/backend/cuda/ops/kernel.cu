@@ -474,11 +474,21 @@ __global__ void linear_attention_conv_batch_kernel(const float *mixed, const uin
     }
 }
 
+// recurrent_state 存储精度转换：支持 fp32 或 bf16 存储，kernel 内一律 float 计算。
+template <typename StateT>
+__device__ inline float state_to_float(StateT v);
+template <> __device__ inline float state_to_float<float>(float v) { return v; }
+template <> __device__ inline float state_to_float<__nv_bfloat16>(__nv_bfloat16 v) { return __bfloat162float(v); }
+template <typename StateT> __device__ inline StateT float_to_state(float v);
+template <> __device__ inline float float_to_state<float>(float v) { return v; }
+template <> __device__ inline __nv_bfloat16 float_to_state<__nv_bfloat16>(float v) { return __float2bfloat16(v); }
+
 // gated delta 递归单步。shared: q[k_dim] k[k_dim] delta[v_dim] core[v_dim] partial[2*blockDim]。
+template <typename StateT>
 __device__ inline void linear_attn_recurrent_step(const float *conv_out, const float *z,
                                                   const float *b, const float *a, const float *a_log,
                                                   const uint16_t *dt_bias, const float *norm_weight,
-                                                  float *rec, float *gated_row, int vh, int kh,
+                                                  StateT *rec, float *gated_row, int vh, int kh,
                                                   int key_total, int k_dim, int v_dim, float eps,
                                                   float *q, float *k, float *delta, float *core,
                                                   float *partial) {
@@ -521,12 +531,12 @@ __device__ inline void linear_attn_recurrent_step(const float *conv_out, const f
     const float decay = __expf(g);
 
     const int state_size = k_dim * v_dim;
-    for (int i = tid; i < state_size; i += blockDim.x) rec[i] *= decay;
+    for (int i = tid; i < state_size; i += blockDim.x) rec[i] = float_to_state<StateT>(state_to_float<StateT>(rec[i]) * decay);
     __syncthreads();
 
     for (int vd = tid; vd < v_dim; vd += blockDim.x) {
         float kv_mem = 0.0f;
-        for (int kd = 0; kd < k_dim; ++kd) kv_mem += rec[static_cast<size_t>(kd) * v_dim + vd] * k[kd];
+        for (int kd = 0; kd < k_dim; ++kd) kv_mem += state_to_float<StateT>(rec[static_cast<size_t>(kd) * v_dim + vd]) * k[kd];
         const float value = value_base[static_cast<size_t>(vh) * v_dim + vd];
         delta[vd] = (value - kv_mem) * beta;
     }
@@ -534,12 +544,12 @@ __device__ inline void linear_attn_recurrent_step(const float *conv_out, const f
     for (int i = tid; i < state_size; i += blockDim.x) {
         const int kd = i / v_dim;
         const int vd = i - kd * v_dim;
-        rec[i] += k[kd] * delta[vd];
+        rec[i] = float_to_state<StateT>(state_to_float<StateT>(rec[i]) + k[kd] * delta[vd]);
     }
     __syncthreads();
     for (int vd = tid; vd < v_dim; vd += blockDim.x) {
         float sum = 0.0f;
-        for (int kd = 0; kd < k_dim; ++kd) sum += rec[static_cast<size_t>(kd) * v_dim + vd] * q[kd];
+        for (int kd = 0; kd < k_dim; ++kd) sum += state_to_float<StateT>(rec[static_cast<size_t>(kd) * v_dim + vd]) * q[kd];
         core[vd] = sum;
     }
     __syncthreads();
@@ -560,10 +570,11 @@ __device__ inline void linear_attn_recurrent_step(const float *conv_out, const f
     }
 }
 
+template <typename StateT>
 __global__ void linear_attention_recurrent_kernel(const float *conv_out, const float *z,
                                                   const float *b, const float *a, const float *a_log,
                                                   const uint16_t *dt_bias, const float *norm_weight,
-                                                  float *recurrent_state, float *gated,
+                                                  StateT *recurrent_state, float *gated,
                                                   int key_heads, int value_heads, int k_dim, int v_dim,
                                                   float eps) {
     extern __shared__ float shared[];
@@ -576,10 +587,17 @@ __global__ void linear_attention_recurrent_kernel(const float *conv_out, const f
     const int repeat = value_heads / key_heads;
     const int kh = vh / repeat;
     const int key_total = key_heads * k_dim;
-    float *rec = recurrent_state + static_cast<size_t>(vh) * k_dim * v_dim;
-    linear_attn_recurrent_step(conv_out, z, b, a, a_log, dt_bias, norm_weight, rec, gated, vh, kh,
+    StateT *rec = recurrent_state + static_cast<size_t>(vh) * k_dim * v_dim;
+    linear_attn_recurrent_step<StateT>(conv_out, z, b, a, a_log, dt_bias, norm_weight, rec, gated, vh, kh,
                                key_total, k_dim, v_dim, eps, q, k, delta, core, partial);
 }
+// 显式实例化：decode 用 bf16 state（与 fused kernel 一致），float 版备用。
+template __global__ void linear_attention_recurrent_kernel<float>(
+    const float *, const float *, const float *, const float *, const float *, const uint16_t *,
+    const float *, float *, float *, int, int, int, int, float);
+template __global__ void linear_attention_recurrent_kernel<__nv_bfloat16>(
+    const float *, const float *, const float *, const float *, const float *, const uint16_t *,
+    const float *, __nv_bfloat16 *, float *, int, int, int, int, float);
 
 __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, const float *z,
                                                         const float *b, const float *a, const float *a_log,
@@ -606,7 +624,7 @@ __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, c
         const float *b_base = b + static_cast<size_t>(tok) * value_heads;
         const float *a_base = a + static_cast<size_t>(tok) * value_heads;
         float *gated_row = gated + static_cast<size_t>(tok) * value_total;
-        linear_attn_recurrent_step(token_conv, z_base, b_base, a_base, a_log, dt_bias, norm_weight,
+        linear_attn_recurrent_step<float>(token_conv, z_base, b_base, a_base, a_log, dt_bias, norm_weight,
                                    rec, gated_row, vh, kh, key_total, k_dim, v_dim, eps,
                                    q, k, delta, core, partial);
         __syncthreads();
@@ -627,13 +645,7 @@ __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, c
 //   qk_conv[2*k_dim]   -- 本 key_head 的 q、k 卷积输出（各 k_dim）
 //   v_conv[v_dim]      -- 当前 value_head 的 value 卷积输出
 //   q[k_dim] k[k_dim] delta[v_dim] core[v_dim] partial[2*blockDim]
-template <typename StateT>
-__device__ inline float state_to_float(StateT v);
-template <> __device__ inline float state_to_float<float>(float v) { return v; }
-template <> __device__ inline float state_to_float<__nv_bfloat16>(__nv_bfloat16 v) { return __bfloat162float(v); }
-template <typename StateT> __device__ inline StateT float_to_state(float v);
-template <> __device__ inline float float_to_state<float>(float v) { return v; }
-template <> __device__ inline __nv_bfloat16 float_to_state<__nv_bfloat16>(float v) { return __float2bfloat16(v); }
+// 注：state_to_float / float_to_state 已在文件前部（recurrent step 前）定义。
 
 // 单个 value_head 的融合递归步；conv 已在 shared（qk_conv / v_conv）。
 template <typename StateT>

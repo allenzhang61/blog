@@ -72,10 +72,12 @@ __global__ void linear_attention_conv_kernel(const float *mixed, const uint16_t 
 __global__ void linear_attention_conv_batch_kernel(const float *mixed, const uint16_t *conv_weight,
                                                    float *conv_state, float *conv_out, int tokens,
                                                    int conv_dim, int kernel);
+// 递归 kernel（模板：StateT=float 或 __nv_bfloat16）。定义与显式实例化在 kernel.cu。
+template <typename StateT>
 __global__ void linear_attention_recurrent_kernel(const float *conv_out, const float *z,
                                                   const float *b, const float *a, const float *a_log,
                                                   const uint16_t *dt_bias, const float *norm_weight,
-                                                  float *recurrent_state, float *gated,
+                                                  StateT *recurrent_state, float *gated,
                                                   int key_heads, int value_heads, int k_dim,
                                                   int v_dim, float eps);
 __global__ void linear_attention_recurrent_batch_kernel(const float *conv_out, const float *z,

@@ -105,8 +105,8 @@ void launch_linear_attention_conv_batch(const float *mixed, const uint16_t *conv
 // a_log 为 float [value_heads]，dt_bias 为 bf16 [value_heads]，norm_weight 为 float [v_dim]。
 void launch_linear_attention_recurrent(const float *conv_out, const float *z, const float *b,
                                        const float *a, const float *a_log, const uint16_t *dt_bias,
-                                       const float *norm_weight, float *recurrent_state, float *gated,
-                                       int key_heads, int value_heads, int k_dim, int v_dim,
+                                       const float *norm_weight, void *recurrent_state, bool state_bf16,
+                                       float *gated, int key_heads, int value_heads, int k_dim, int v_dim,
                                        float eps, void *stream);
 
 void launch_linear_attention_recurrent_batch(const float *conv_out, const float *z, const float *b,

@@ -104,11 +104,16 @@ void LinearAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32
     TensorTool::gemm_lowp(weights_.s_in_proj_b, d_hidden_lowp, rows, g_linear_b_f32, "linattn.d_in_proj_b");
     TensorTool::gemm_lowp(weights_.s_in_proj_a, d_hidden_lowp, rows, g_linear_a_f32, "linattn.d_in_proj_a");
 
-    // 融合 conv1d→recurrent→读出：单核完成，去掉中间 conv_out tensor 与一次 kernel launch。
-    TensorTool::linear_attention_fused(g_linear_projection_f32, weights_.s_conv1d, state.g_conv_state_f32,
-        g_linear_z_f32, g_linear_b_f32, g_linear_a_f32,
+    // decode 拆分 conv + recurrent 两 kernel：
+    // recurrent kernel grid=value_heads(32)（融合版 grid=key_heads(16)，SM 占用不足），
+    // block 数翻倍以提高 GPU 占用率（数值与融合版逐行一致）。
+    GPUTensor g_linear_conv_out_f32 = GPUTensor(
+        scratch, scratch_key::kLinearConvOut, {1, static_cast<int64_t>(conv_dim)}, DType::F32);
+    TensorTool::linear_attention_conv(g_linear_projection_f32, weights_.s_conv1d, state.g_conv_state_f32,
+        g_linear_conv_out_f32, kernel);
+    TensorTool::linear_attention_recurrent(g_linear_conv_out_f32, g_linear_z_f32, g_linear_b_f32, g_linear_a_f32,
         weights_.s_a_log, weights_.s_dt_bias, weights_.s_norm, state.g_recurrent_state_f32, g_linear_gated_f32,
-        key_heads, value_heads, k_dim, v_dim, kernel, eps);
+        key_heads, value_heads, k_dim, v_dim, eps);
 
     TensorTool::gemm(weights_.s_out_proj, g_linear_gated_f32, g_out_f32, scratch, scratch_key::kLinearGatedLowp, "linattn.d_out_proj");
 

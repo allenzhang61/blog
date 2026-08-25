@@ -149,14 +149,22 @@ void launch_linear_attention_conv_batch(const float *mixed, const uint16_t *conv
 
 void launch_linear_attention_recurrent(const float *conv_out, const float *z, const float *b,
                                        const float *a, const float *a_log, const uint16_t *dt_bias,
-                                       const float *norm_weight, float *recurrent_state, float *gated,
-                                       int key_heads, int value_heads, int k_dim, int v_dim,
-                                       float eps, void *stream) {
+                                       const float *norm_weight, void *recurrent_state, bool state_bf16,
+                                       float *gated, int key_heads, int value_heads, int k_dim,
+                                       int v_dim, float eps, void *stream) {
     ScopedGpuTimer timer("linear_attention_recurrent", as_stream(stream));
     size_t smem = (static_cast<size_t>(2 * k_dim + 2 * v_dim) + 2 * kLinearRecurBlock) * sizeof(float);
-    linear_attention_recurrent_kernel<<<value_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
-        conv_out, z, b, a, a_log, dt_bias, norm_weight, recurrent_state, gated,
-        key_heads, value_heads, k_dim, v_dim, eps);
+    if (state_bf16) {
+        linear_attention_recurrent_kernel<__nv_bfloat16><<<value_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
+            conv_out, z, b, a, a_log, dt_bias, norm_weight,
+            static_cast<__nv_bfloat16 *>(recurrent_state), gated,
+            key_heads, value_heads, k_dim, v_dim, eps);
+    } else {
+        linear_attention_recurrent_kernel<float><<<value_heads, kLinearRecurBlock, smem, as_stream(stream)>>>(
+            conv_out, z, b, a, a_log, dt_bias, norm_weight,
+            static_cast<float *>(recurrent_state), gated,
+            key_heads, value_heads, k_dim, v_dim, eps);
+    }
 }
 
 void launch_linear_attention_recurrent_batch(const float *conv_out, const float *z, const float *b,
