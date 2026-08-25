@@ -19,6 +19,13 @@
 // 残差加：out = a + b，n 个元素（out 可与 a 或 b 相同做原位）。
 void launch_add(const float *a, const float *b, float *out, int n, void *stream);
 
+// 手写 bf16 GEMV：Y[out_dim] = W[out_dim, in_dim] · X[in_dim]（decode 单 token 投影专用）。
+// W 行主序 bf16、X bf16、Y f32。in_dim 需为偶数（Qwen 全部满足）。
+// 针对 M=1（GEMV，访存瓶颈）替代 cuBLAS：cuBLAS 在 M=1 会选 tensor-core GEMM tile，
+// 64×64 tile 仅 1 行有效，算力大量浪费；手写 GEMV 直接按访存带宽跑满。
+void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
+                      int out_dim, int in_dim, void *stream);
+
 // SwiGLU 门控：out = SiLU(gate) * up，n 个元素。
 void launch_silu_mul(const float *gate, const float *up, float *out, int n, void *stream);
 

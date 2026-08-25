@@ -25,6 +25,8 @@ inline cudaStream_t as_stream(void *stream) {
 inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 
 // ---- 逐元素 / Embedding / Norm ----
+__global__ void bf16_gemv_kernel(const uint16_t *weight, const uint16_t *x, float *y,
+                                 int out_dim, int in_dim);
 __global__ void add_kernel(const float *a, const float *b, float *out, int n);
 __global__ void silu_mul_kernel(const float *gate, const float *up, float *out, int n);
 __global__ void embedding_lookup_kernel(const int *input, float *output, const uint16_t *table,

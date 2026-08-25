@@ -20,6 +20,15 @@ void launch_add(const float *a, const float *b, float *out, int n, void *stream)
     add_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(a, b, out, n);
 }
 
+void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
+                      int out_dim, int in_dim, void *stream) {
+    ScopedGpuTimer timer("bf16_gemv", as_stream(stream));
+    // 每个 warp 算一个输出行 => 需要 out_dim 个 warp。
+    constexpr int warps_per_block = kBlock / 32;
+    const int blocks = (out_dim + warps_per_block - 1) / warps_per_block;
+    bf16_gemv_kernel<<<blocks, kBlock, 0, as_stream(stream)>>>(weight, x, y, out_dim, in_dim);
+}
+
 void launch_silu_mul(const float *gate, const float *up, float *out, int n, void *stream) {
     ScopedGpuTimer timer("silu_mul", as_stream(stream));
     silu_mul_kernel<<<grid_for(n), kBlock, 0, as_stream(stream)>>>(gate, up, out, n);

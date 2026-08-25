@@ -195,6 +195,8 @@
 
 #### 推理
 
+##### 公共 & 本地设备端推理
+
 - LLM的数据模型
   - [qwen](chapter-14/14-015.md)
   - [Qwen3.5-4B-Base safetensors header](chapter-14/14-016.md)
@@ -208,11 +210,23 @@
   - Quantization、Pruning、Distillation
     - [Quantization、Pruning、Distillation 介绍](chapter-14/14-018.md)
   - [FlashAttention](chapter-14/14-017.md)
-  - KV Cache、PagedAttention
-  - Continuous Batching
+  - KV Cache
   - Speculative Decoding 投机解码
     - 推测解码巧妙地打破了这种串行限制，变“逐字生成”为“批量验证”
-  - vLLM、SGLang、TensorRT-LLM
+  - Tensor/Pipeline/Data/Expert Parallel
+  - llama.cpp
+- [kv cache](chapter-03/03-026.md)
+
+##### 服务端推理
+
+- PagedAttention
+	- 个人设备场景不适用，内存碎片化和高并发吞吐问题不突出
+  - Continuous Batching
+	- 连续批处理 / 迭代式批处理
+	- 它彻底改变了高并发场景下大模型服务吞吐量低、 GPU 利用率差的顽疾
+	- 传统批处理是按请求批处理，而Continuous Batching改为以“单个 Token 的生成迭代（Iteration）”为调度单位
+	- 系统会自动把不同阶段、不同长度的请求在内存和算力上进行动态编排，让 GPU 的 Tensor Core 始终处于高密度满载状态
+- vLLM、SGLang、TensorRT-LLM
     - [vLLM、SGLang、TensorRT-LLM性能对比](chapter-14/14-002.md)
     - vLLM
       - [vLLM 用法 Hello World](chapter-14/14-003.md)
@@ -226,10 +240,6 @@
       - vLLM 特性
         - Graph Mode https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/graph_mode.html
         - CPU Binding https://docs.vllm.ai/projects/ascend/en/latest/user_guide/feature_guide/cpu_binding.html
-        - 
-  - Tensor/Pipeline/Data/Expert Parallel
-  - llama.cpp
-- [kv cache](chapter-03/03-026.md)
 
 #### 评测
 

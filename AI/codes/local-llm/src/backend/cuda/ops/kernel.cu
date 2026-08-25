@@ -27,6 +27,37 @@ __device__ inline float f16_or_bf16_to_float(uint16_t v, int f16_or_bf16) {
 
 // ---- 逐元素 ----
 
+// 手写 bf16 GEMV：Y[out_dim] = W[out_dim, in_dim] · X[in_dim]（decode 单 token 的投影专用）。
+// W 行主序 bf16（每行 in_dim 个连续元素），X bf16（in_dim），Y f32。
+// 每个 warp 负责一个输出行：warp 内 32 lane 沿 in_dim 分工累加点积，再 warp 归约。
+// 用 __nv_bfloat162 一次读 2 个元素提高带宽利用（in_dim 为偶数，Qwen 全部满足）。
+// 注：曾尝试把 x 协作缓存进 shared 复用，但在本模型 in_dim（2560/9216）下 x 本就常驻 L2，
+//     额外的 __syncthreads + shared 写入反而更慢（实测 81→77 tok/s），故保持直读全局。
+// 针对 M=1（GEMV、访存瓶颈）场景，避免 cuBLAS 走 tensor-core GEMM tile 在 M=1 时的算力浪费。
+__global__ void bf16_gemv_kernel(const uint16_t *weight, const uint16_t *x, float *y,
+                                 int out_dim, int in_dim) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    if (warp_id >= out_dim) return;
+
+    const __nv_bfloat162 *w2 = reinterpret_cast<const __nv_bfloat162 *>(
+        weight + static_cast<size_t>(warp_id) * in_dim);
+    const __nv_bfloat162 *x2 = reinterpret_cast<const __nv_bfloat162 *>(x);
+    const int n2 = in_dim >> 1;  // in_dim/2 个 bf162
+
+    float acc = 0.0f;
+    for (int k = lane; k < n2; k += 32) {
+        float2 wv = __bfloat1622float2(w2[k]);
+        float2 xv = __bfloat1622float2(x2[k]);
+        acc += wv.x * xv.x + wv.y * xv.y;
+    }
+    // warp 内归约
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xffffffff, acc, offset);
+    }
+    if (lane == 0) y[warp_id] = acc;
+}
+
 __global__ void add_kernel(const float *a, const float *b, float *out, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
@@ -733,6 +764,8 @@ __device__ inline void linear_attn_fused_conv_v(const float *mixed_row, const ui
 
 // decode 单 token 融合 kernel。grid=key_heads，每 block 处理该 key_head 的 repeat 个 value_head。
 // q/k conv 每 token 只移位/算一次；value conv 各 value_head 一次；recurrent 各 value_head 一次。
+// 注：q/k conv 会移位写回 conv_state（副作用），必须每 key_head 每 token 恰好执行一次，
+// 因此这里保持 grid=key_heads、由本 block 内串行处理其 repeat 个 value_head。
 template <typename StateT>
 __global__ void linear_attention_fused_kernel(const float *mixed, const uint16_t *conv_weight,
                                               float *conv_state, const float *z, const float *b,
