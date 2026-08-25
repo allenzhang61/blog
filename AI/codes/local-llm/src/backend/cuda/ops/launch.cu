@@ -89,45 +89,75 @@ void launch_full_attention_q_batch(const float *q_and_gate, const uint16_t *q_no
 }
 
 void launch_full_attention_kv(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
-                              float *key_cache, float *value_cache, int kv_heads, int head_dim,
+                              void *key_cache, void *value_cache, bool kv_bf16, int kv_heads, int head_dim,
                               int max_seq_len, const int *pos_dev, float rope_theta,
                               float partial_rotary_factor, float eps, void *stream) {
     ScopedGpuTimer timer("full_attention_kv", as_stream(stream));
-    full_attention_kv_kernel<<<kv_heads, kBlock, 0, as_stream(stream)>>>(
-        k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim, max_seq_len, pos_dev,
-        rope_theta, partial_rotary_factor, eps);
+    if (kv_bf16) {
+        full_attention_kv_kernel<__nv_bfloat16><<<kv_heads, kBlock, 0, as_stream(stream)>>>(
+            k_in, v_in, k_norm_weight, static_cast<__nv_bfloat16 *>(key_cache),
+            static_cast<__nv_bfloat16 *>(value_cache), kv_heads, head_dim, max_seq_len, pos_dev,
+            rope_theta, partial_rotary_factor, eps);
+    } else {
+        full_attention_kv_kernel<float><<<kv_heads, kBlock, 0, as_stream(stream)>>>(
+            k_in, v_in, k_norm_weight, static_cast<float *>(key_cache),
+            static_cast<float *>(value_cache), kv_heads, head_dim, max_seq_len, pos_dev,
+            rope_theta, partial_rotary_factor, eps);
+    }
 }
 
 void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
-                                    float *key_cache, float *value_cache, int tokens, int kv_heads,
+                                    void *key_cache, void *value_cache, bool kv_bf16, int tokens, int kv_heads,
                                     int head_dim, int max_seq_len, int start_pos, float rope_theta,
                                     float partial_rotary_factor, float eps, void *stream) {
     ScopedGpuTimer timer("full_attention_kv_batch", as_stream(stream));
-    full_attention_kv_batch_kernel<<<tokens * kv_heads, kBlock, 0, as_stream(stream)>>>(
-        k_in, v_in, k_norm_weight, key_cache, value_cache, tokens, kv_heads, head_dim, max_seq_len,
-        start_pos, rope_theta, partial_rotary_factor, eps);
+    if (kv_bf16) {
+        full_attention_kv_batch_kernel<__nv_bfloat16><<<tokens * kv_heads, kBlock, 0, as_stream(stream)>>>(
+            k_in, v_in, k_norm_weight, static_cast<__nv_bfloat16 *>(key_cache),
+            static_cast<__nv_bfloat16 *>(value_cache), tokens, kv_heads, head_dim, max_seq_len,
+            start_pos, rope_theta, partial_rotary_factor, eps);
+    } else {
+        full_attention_kv_batch_kernel<float><<<tokens * kv_heads, kBlock, 0, as_stream(stream)>>>(
+            k_in, v_in, k_norm_weight, static_cast<float *>(key_cache),
+            static_cast<float *>(value_cache), tokens, kv_heads, head_dim, max_seq_len,
+            start_pos, rope_theta, partial_rotary_factor, eps);
+    }
 }
 
-void launch_full_attention_attend(const float *q, const float *gate, const float *key_cache,
-                                  const float *value_cache, float *attn, int n_heads, int kv_heads,
+void launch_full_attention_attend(const float *q, const float *gate, const void *key_cache,
+                                  const void *value_cache, bool kv_bf16, float *attn, int n_heads, int kv_heads,
                                   int head_dim, int max_seq_len, const int *pos_dev, void *stream) {
     ScopedGpuTimer timer("full_attention_attend", as_stream(stream));
     // flash（online softmax）版：smem 只需 s_p[kBlock] + s_acc[head_dim] + s_red[kBlock]，
     // 与序列长度无关，天然满足 CUDA Graph 一次 capture / 多次 replay 的 smem 恒定要求。
     size_t smem = (static_cast<size_t>(2 * kBlock) + head_dim) * sizeof(float);
-    full_attention_attend_kernel<<<n_heads, kBlock, smem, as_stream(stream)>>>(
-        q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim, max_seq_len, pos_dev);
+    if (kv_bf16) {
+        full_attention_attend_kernel<__nv_bfloat16><<<n_heads, kBlock, smem, as_stream(stream)>>>(
+            q, gate, static_cast<const __nv_bfloat16 *>(key_cache),
+            static_cast<const __nv_bfloat16 *>(value_cache), attn, n_heads, kv_heads, head_dim, max_seq_len, pos_dev);
+    } else {
+        full_attention_attend_kernel<float><<<n_heads, kBlock, smem, as_stream(stream)>>>(
+            q, gate, static_cast<const float *>(key_cache),
+            static_cast<const float *>(value_cache), attn, n_heads, kv_heads, head_dim, max_seq_len, pos_dev);
+    }
 }
 
-void launch_full_attention_attend_batch(const float *q, const float *gate, const float *key_cache,
-                                        const float *value_cache, float *attn, int tokens, int n_heads,
+void launch_full_attention_attend_batch(const float *q, const float *gate, const void *key_cache,
+                                        const void *value_cache, bool kv_bf16, float *attn, int tokens, int n_heads,
                                         int kv_heads, int head_dim, int max_seq_len, int start_pos,
                                         void *stream) {
     ScopedGpuTimer timer("full_attention_attend_batch", as_stream(stream));
     // flash（online softmax）版：smem 只需 s_p[kBlock] + s_acc[head_dim] + s_red[kBlock]，与序列长度无关。
     size_t smem = (static_cast<size_t>(2 * kBlock) + head_dim) * sizeof(float);
-    full_attention_attend_batch_kernel<<<tokens * n_heads, kBlock, smem, as_stream(stream)>>>(
-        q, gate, key_cache, value_cache, attn, tokens, n_heads, kv_heads, head_dim, max_seq_len, start_pos);
+    if (kv_bf16) {
+        full_attention_attend_batch_kernel<__nv_bfloat16><<<tokens * n_heads, kBlock, smem, as_stream(stream)>>>(
+            q, gate, static_cast<const __nv_bfloat16 *>(key_cache),
+            static_cast<const __nv_bfloat16 *>(value_cache), attn, tokens, n_heads, kv_heads, head_dim, max_seq_len, start_pos);
+    } else {
+        full_attention_attend_batch_kernel<float><<<tokens * n_heads, kBlock, smem, as_stream(stream)>>>(
+            q, gate, static_cast<const float *>(key_cache),
+            static_cast<const float *>(value_cache), attn, tokens, n_heads, kv_heads, head_dim, max_seq_len, start_pos);
+    }
 }
 
 // ---- linear attention ----

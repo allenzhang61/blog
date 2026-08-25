@@ -204,8 +204,9 @@ void TensorTool::full_attention_kv(const GPUTensor &g_k_in_f32, const GPUTensor 
                                    const GPUTensor &g_value_cache_f32, int kv_heads, int head_dim,
                                    int max_seq_len, const int *pos_dev, float rope_theta,
                                    float partial_rotary_factor, float eps, void *stream) {
+    const bool kv_bf16 = g_key_cache_f32.dtype == DType::BF16;
     launch_full_attention_kv(g_k_in_f32.data<float>(), g_v_in_f32.data<float>(), lowp_data(s_k_norm_weight),
-                             g_key_cache_f32.data<float>(), g_value_cache_f32.data<float>(), kv_heads,
+                             g_key_cache_f32.data(), g_value_cache_f32.data(), kv_bf16, kv_heads,
                              head_dim, max_seq_len, pos_dev, rope_theta, partial_rotary_factor,
                              eps, stream);
 }
@@ -216,8 +217,9 @@ void TensorTool::full_attention_kv_batch(const GPUTensor &g_k_in_f32, const GPUT
                                          int head_dim, int max_seq_len, int start_pos,
                                          float rope_theta, float partial_rotary_factor,
                                          float eps, void *stream) {
+    const bool kv_bf16 = g_key_cache_f32.dtype == DType::BF16;
     launch_full_attention_kv_batch(g_k_in_f32.data<float>(), g_v_in_f32.data<float>(), lowp_data(s_k_norm_weight),
-                                   g_key_cache_f32.data<float>(), g_value_cache_f32.data<float>(),
+                                   g_key_cache_f32.data(), g_value_cache_f32.data(), kv_bf16,
                                    static_cast<int>(g_k_in_f32.rows()), kv_heads, head_dim, max_seq_len, start_pos,
                                    rope_theta, partial_rotary_factor, eps, stream);
 }
@@ -226,8 +228,9 @@ void TensorTool::full_attention_attend(const GPUTensor &g_q_f32, const GPUTensor
                                        const GPUTensor &g_key_cache_f32, const GPUTensor &g_value_cache_f32,
                                        const GPUTensor &g_attn_f32, int n_heads, int kv_heads, int head_dim,
                                        int max_seq_len, const int *pos_dev, void *stream) {
-    launch_full_attention_attend(g_q_f32.data<float>(), g_gate_f32.data<float>(), g_key_cache_f32.data<float>(),
-                                 g_value_cache_f32.data<float>(), g_attn_f32.data<float>(), n_heads, kv_heads,
+    const bool kv_bf16 = g_key_cache_f32.dtype == DType::BF16;
+    launch_full_attention_attend(g_q_f32.data<float>(), g_gate_f32.data<float>(), g_key_cache_f32.data(),
+                                 g_value_cache_f32.data(), kv_bf16, g_attn_f32.data<float>(), n_heads, kv_heads,
                                  head_dim, max_seq_len, pos_dev, stream);
 }
 
@@ -236,8 +239,9 @@ void TensorTool::full_attention_attend_batch(const GPUTensor &g_q_f32, const GPU
                                              const GPUTensor &g_attn_f32, int n_heads, int kv_heads,
                                              int head_dim, int max_seq_len, int start_pos,
                                              void *stream) {
-    launch_full_attention_attend_batch(g_q_f32.data<float>(), g_gate_f32.data<float>(), g_key_cache_f32.data<float>(),
-                                       g_value_cache_f32.data<float>(), g_attn_f32.data<float>(), static_cast<int>(g_q_f32.rows()),
+    const bool kv_bf16 = g_key_cache_f32.dtype == DType::BF16;
+    launch_full_attention_attend_batch(g_q_f32.data<float>(), g_gate_f32.data<float>(), g_key_cache_f32.data(),
+                                       g_value_cache_f32.data(), kv_bf16, g_attn_f32.data<float>(), static_cast<int>(g_q_f32.rows()),
                                        n_heads, kv_heads, head_dim, max_seq_len, start_pos,
                                        stream);
 }

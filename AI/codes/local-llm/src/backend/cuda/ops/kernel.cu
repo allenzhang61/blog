@@ -25,6 +25,15 @@ __device__ inline float f16_or_bf16_to_float(uint16_t v, int f16_or_bf16) {
     return __bfloat162float(b);
 }
 
+// 持久状态（recurrent state / KV cache）可选 fp32 或 bf16 存储：kernel 内一律 float 计算，
+// 只在读写显存时做精度转换。定义放在文件前部，供 full attention / linear attention 共用。
+template <typename StateT> __device__ inline float state_to_float(StateT v);
+template <> __device__ inline float state_to_float<float>(float v) { return v; }
+template <> __device__ inline float state_to_float<__nv_bfloat16>(__nv_bfloat16 v) { return __bfloat162float(v); }
+template <typename StateT> __device__ inline StateT float_to_state(float v);
+template <> __device__ inline float float_to_state<float>(float v) { return v; }
+template <> __device__ inline __nv_bfloat16 float_to_state<__nv_bfloat16>(float v) { return __float2bfloat16(v); }
+
 // ---- 逐元素 ----
 
 // 手写 bf16 GEMV：Y[out_dim] = W[out_dim, in_dim] · X[in_dim]（decode 单 token 的投影专用）。
@@ -233,9 +242,10 @@ __global__ void full_attention_q_batch_kernel(const float *q_and_gate, const uin
                      rope_theta, partial_rotary_factor, eps, src, dst, partial);
 }
 
+template <typename KvT>
 __device__ inline void full_attn_kv_head(const float *k_in, const float *v_in,
-                                         const uint16_t *k_norm_weight, float *key_cache,
-                                         float *value_cache, int kv_heads, int head_dim, int pos,
+                                         const uint16_t *k_norm_weight, KvT *key_cache,
+                                         KvT *value_cache, int kv_heads, int head_dim, int pos,
                                          float rope_theta, float partial_rotary_factor, float eps,
                                          size_t base, float *partial, float *k_local) {
     const int tid = threadIdx.x;
@@ -273,14 +283,15 @@ __device__ inline void full_attn_kv_head(const float *k_in, const float *v_in,
     const int h = static_cast<int>(base / head_dim) % kv_heads;
     const size_t cache_base = (static_cast<size_t>(pos) * kv_heads + h) * head_dim;
     for (int d = tid; d < head_dim; d += blockDim.x) {
-        key_cache[cache_base + d] = k_local[d];
-        value_cache[cache_base + d] = v_in[base + d];
+        key_cache[cache_base + d] = float_to_state<KvT>(k_local[d]);
+        value_cache[cache_base + d] = float_to_state<KvT>(v_in[base + d]);
     }
 }
 
+template <typename KvT>
 __global__ void full_attention_kv_kernel(const float *k_in, const float *v_in,
-                                         const uint16_t *k_norm_weight, float *key_cache,
-                                         float *value_cache, int kv_heads, int head_dim,
+                                         const uint16_t *k_norm_weight, KvT *key_cache,
+                                         KvT *value_cache, int kv_heads, int head_dim,
                                          int max_seq_len, const int *pos_dev, float rope_theta,
                                          float partial_rotary_factor, float eps) {
     const int pos = *pos_dev;
@@ -289,14 +300,21 @@ __global__ void full_attention_kv_kernel(const float *k_in, const float *v_in,
     const int h = blockIdx.x;
     if (h >= kv_heads) return;
     const size_t base = static_cast<size_t>(h) * head_dim;
-    full_attn_kv_head(k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim, pos,
+    full_attn_kv_head<KvT>(k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim, pos,
                       rope_theta, partial_rotary_factor, eps, base, partial, k_local);
     (void) max_seq_len;
 }
+template __global__ void full_attention_kv_kernel<float>(
+    const float *, const float *, const uint16_t *, float *, float *, int, int, int,
+    const int *, float, float, float);
+template __global__ void full_attention_kv_kernel<__nv_bfloat16>(
+    const float *, const float *, const uint16_t *, __nv_bfloat16 *, __nv_bfloat16 *, int, int, int,
+    const int *, float, float, float);
 
+template <typename KvT>
 __global__ void full_attention_kv_batch_kernel(const float *k_in, const float *v_in,
-                                               const uint16_t *k_norm_weight, float *key_cache,
-                                               float *value_cache, int tokens, int kv_heads,
+                                               const uint16_t *k_norm_weight, KvT *key_cache,
+                                               KvT *value_cache, int tokens, int kv_heads,
                                                int head_dim, int max_seq_len, int start_pos,
                                                float rope_theta, float partial_rotary_factor, float eps) {
     __shared__ float partial[kBlockConst];
@@ -307,10 +325,16 @@ __global__ void full_attention_kv_batch_kernel(const float *k_in, const float *v
     if (tok >= tokens) return;
     const int kv_total = kv_heads * head_dim;
     const size_t base = static_cast<size_t>(tok) * kv_total + static_cast<size_t>(h) * head_dim;
-    full_attn_kv_head(k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim,
+    full_attn_kv_head<KvT>(k_in, v_in, k_norm_weight, key_cache, value_cache, kv_heads, head_dim,
                       start_pos + tok, rope_theta, partial_rotary_factor, eps, base, partial, k_local);
     (void) max_seq_len;
 }
+template __global__ void full_attention_kv_batch_kernel<float>(
+    const float *, const float *, const uint16_t *, float *, float *, int, int, int, int, int,
+    float, float, float);
+template __global__ void full_attention_kv_batch_kernel<__nv_bfloat16>(
+    const float *, const float *, const uint16_t *, __nv_bfloat16 *, __nv_bfloat16 *, int, int, int, int, int,
+    float, float, float);
 
 // causal attention + 输出门控。每个 block 处理一个 (tok, head)，pos 为该 token 绝对位置。
 // FlashAttention 式实现：按 tile（每 tile = blockDim 个 key）遍历 KV，用 online softmax
@@ -318,8 +342,9 @@ __global__ void full_attention_kv_batch_kernel(const float *k_in, const float *v
 // shared 需求为 O(blockDim + head_dim)，与序列长度无关（利于长上下文与 CUDA Graph 稳定 smem）。
 // 数学上与传统三趟 softmax 完全等价，数值上用 online rescale 保证稳定。
 //   shared 布局：s_p[blockDim]（tile 内 score/概率）| s_acc[head_dim]（输出累加）| s_red[blockDim]（归约）
+template <typename KvT>
 __device__ inline void full_attn_attend_head(const float *q, const float *gate,
-                                             const float *key_cache, const float *value_cache,
+                                             const KvT *key_cache, const KvT *value_cache,
                                              float *attn, int n_heads, int kv_heads, int head_dim,
                                              int pos, size_t q_off, size_t out_off,
                                              float *s_p, float *s_acc, float *s_red) {
@@ -347,9 +372,9 @@ __device__ inline void full_attn_attend_head(const float *q, const float *gate,
         // 1) 每线程算一个 key 的 score = q·k * scale（越界置 -inf）。
         float score = -INFINITY;
         if (j < n_keys) {
-            const float *key = key_cache + (static_cast<size_t>(j) * kv_heads + kh) * head_dim;
+            const KvT *key = key_cache + (static_cast<size_t>(j) * kv_heads + kh) * head_dim;
             float dot = 0.0f;
-            for (int d = 0; d < head_dim; ++d) dot += qh[d] * key[d];
+            for (int d = 0; d < head_dim; ++d) dot += qh[d] * state_to_float<KvT>(key[d]);
             score = dot * scale;
         }
         s_p[tid] = score;
@@ -383,8 +408,8 @@ __device__ inline void full_attn_attend_head(const float *q, const float *gate,
             float a = s_acc[d] * correction;
             for (int u = 0; u < tile_len; ++u) {
                 const int jj = tile + u;
-                const float *value = value_cache + (static_cast<size_t>(jj) * kv_heads + kh) * head_dim;
-                a += s_p[u] * value[d];
+                const KvT *value = value_cache + (static_cast<size_t>(jj) * kv_heads + kh) * head_dim;
+                a += s_p[u] * state_to_float<KvT>(value[d]);
             }
             s_acc[d] = a;
         }
@@ -404,8 +429,9 @@ __device__ inline void full_attn_attend_head(const float *q, const float *gate,
     }
 }
 
+template <typename KvT>
 __global__ void full_attention_attend_kernel(const float *q, const float *gate,
-                                             const float *key_cache, const float *value_cache,
+                                             const KvT *key_cache, const KvT *value_cache,
                                              float *attn, int n_heads, int kv_heads, int head_dim,
                                              int max_seq_len, const int *pos_dev) {
     const int pos = *pos_dev;
@@ -417,13 +443,18 @@ __global__ void full_attention_attend_kernel(const float *q, const float *gate,
     const int h = blockIdx.x;
     if (h >= n_heads) return;
     const size_t off = static_cast<size_t>(h) * head_dim;
-    full_attn_attend_head(q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim,
+    full_attn_attend_head<KvT>(q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim,
                           pos, off, off, s_p, s_acc, s_red);
     (void) max_seq_len;
 }
+template __global__ void full_attention_attend_kernel<float>(
+    const float *, const float *, const float *, const float *, float *, int, int, int, int, const int *);
+template __global__ void full_attention_attend_kernel<__nv_bfloat16>(
+    const float *, const float *, const __nv_bfloat16 *, const __nv_bfloat16 *, float *, int, int, int, int, const int *);
 
+template <typename KvT>
 __global__ void full_attention_attend_batch_kernel(const float *q, const float *gate,
-                                                   const float *key_cache, const float *value_cache,
+                                                   const KvT *key_cache, const KvT *value_cache,
                                                    float *attn, int tokens, int n_heads, int kv_heads,
                                                    int head_dim, int max_seq_len, int start_pos) {
     extern __shared__ float shared[];
@@ -438,10 +469,14 @@ __global__ void full_attention_attend_batch_kernel(const float *q, const float *
     float *s_red = s_acc + head_dim;
     const int q_total = n_heads * head_dim;
     const size_t off = static_cast<size_t>(tok) * q_total + static_cast<size_t>(h) * head_dim;
-    full_attn_attend_head(q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim,
+    full_attn_attend_head<KvT>(q, gate, key_cache, value_cache, attn, n_heads, kv_heads, head_dim,
                           pos, off, off, s_p, s_acc, s_red);
     (void) max_seq_len;
 }
+template __global__ void full_attention_attend_batch_kernel<float>(
+    const float *, const float *, const float *, const float *, float *, int, int, int, int, int, int);
+template __global__ void full_attention_attend_batch_kernel<__nv_bfloat16>(
+    const float *, const float *, const __nv_bfloat16 *, const __nv_bfloat16 *, float *, int, int, int, int, int, int);
 
 // ---- linear attention ----
 
@@ -473,15 +508,6 @@ __global__ void linear_attention_conv_batch_kernel(const float *mixed, const uin
         conv_out[static_cast<size_t>(t) * conv_dim + d] = sum / (1.0f + __expf(-sum));
     }
 }
-
-// recurrent_state 存储精度转换：支持 fp32 或 bf16 存储，kernel 内一律 float 计算。
-template <typename StateT>
-__device__ inline float state_to_float(StateT v);
-template <> __device__ inline float state_to_float<float>(float v) { return v; }
-template <> __device__ inline float state_to_float<__nv_bfloat16>(__nv_bfloat16 v) { return __bfloat162float(v); }
-template <typename StateT> __device__ inline StateT float_to_state(float v);
-template <> __device__ inline float float_to_state<float>(float v) { return v; }
-template <> __device__ inline __nv_bfloat16 float_to_state<__nv_bfloat16>(float v) { return __float2bfloat16(v); }
 
 // gated delta 递归单步。shared: q[k_dim] k[k_dim] delta[v_dim] core[v_dim] partial[2*blockDim]。
 template <typename StateT>

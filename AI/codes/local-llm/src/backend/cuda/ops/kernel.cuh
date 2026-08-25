@@ -66,27 +66,28 @@ void launch_full_attention_q_batch(const float *q_and_gate, const uint16_t *q_no
                                    void *stream);
 
 // k/v：归一化 + RoPE(k) 后写入 KV cache（cache 布局 [max_seq_len, kv_heads * head_dim]）。
+// kv_bf16=true 时 key_cache/value_cache 为 __nv_bfloat16 存储，否则 float。
 void launch_full_attention_kv(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
-                              float *key_cache, float *value_cache,
+                              void *key_cache, void *value_cache, bool kv_bf16,
                               int kv_heads, int head_dim, int max_seq_len, const int *pos_dev,
                               float rope_theta, float partial_rotary_factor, float eps,
                               void *stream);
 
 void launch_full_attention_kv_batch(const float *k_in, const float *v_in, const uint16_t *k_norm_weight,
-                                    float *key_cache, float *value_cache,
+                                    void *key_cache, void *value_cache, bool kv_bf16,
                                     int tokens, int kv_heads, int head_dim, int max_seq_len, int start_pos,
                                     float rope_theta, float partial_rotary_factor, float eps,
                                     void *stream);
 
 // causal attention + 输出门控（out = softmax(qk/sqrt(d)) · v * sigmoid(gate)）。
 void launch_full_attention_attend(const float *q, const float *gate,
-                                  const float *key_cache, const float *value_cache, float *attn,
+                                  const void *key_cache, const void *value_cache, bool kv_bf16, float *attn,
                                   int n_heads, int kv_heads, int head_dim, int max_seq_len,
                                   const int *pos_dev,
                                   void *stream);
 
 void launch_full_attention_attend_batch(const float *q, const float *gate,
-                                        const float *key_cache, const float *value_cache, float *attn,
+                                        const void *key_cache, const void *value_cache, bool kv_bf16, float *attn,
                                         int tokens, int n_heads, int kv_heads, int head_dim,
                                         int max_seq_len, int start_pos, void *stream);
 

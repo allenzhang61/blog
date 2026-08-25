@@ -46,22 +46,27 @@ __global__ void full_attention_q_batch_kernel(const float *q_and_gate, const uin
                                               float *q, float *gate, int tokens, int n_heads,
                                               int head_dim, int start_pos, float rope_theta,
                                               float partial_rotary_factor, float eps);
+// full attention KV / attend kernel（模板：KvT=float 或 __nv_bfloat16，KV cache 存储精度）。
+template <typename KvT>
 __global__ void full_attention_kv_kernel(const float *k_in, const float *v_in,
-                                         const uint16_t *k_norm_weight, float *key_cache,
-                                         float *value_cache, int kv_heads, int head_dim,
+                                         const uint16_t *k_norm_weight, KvT *key_cache,
+                                         KvT *value_cache, int kv_heads, int head_dim,
                                          int max_seq_len, const int *pos_dev, float rope_theta,
                                          float partial_rotary_factor, float eps);
+template <typename KvT>
 __global__ void full_attention_kv_batch_kernel(const float *k_in, const float *v_in,
-                                               const uint16_t *k_norm_weight, float *key_cache,
-                                               float *value_cache, int tokens, int kv_heads,
+                                               const uint16_t *k_norm_weight, KvT *key_cache,
+                                               KvT *value_cache, int tokens, int kv_heads,
                                                int head_dim, int max_seq_len, int start_pos,
                                                float rope_theta, float partial_rotary_factor, float eps);
+template <typename KvT>
 __global__ void full_attention_attend_kernel(const float *q, const float *gate,
-                                             const float *key_cache, const float *value_cache,
+                                             const KvT *key_cache, const KvT *value_cache,
                                              float *attn, int n_heads, int kv_heads, int head_dim,
                                              int max_seq_len, const int *pos_dev);
+template <typename KvT>
 __global__ void full_attention_attend_batch_kernel(const float *q, const float *gate,
-                                                   const float *key_cache, const float *value_cache,
+                                                   const KvT *key_cache, const KvT *value_cache,
                                                    float *attn, int tokens, int n_heads, int kv_heads,
                                                    int head_dim, int max_seq_len, int start_pos);
 

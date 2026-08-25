@@ -32,16 +32,18 @@ QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
     for (const std::string &type : text_config.layer_types) {
         if (type == "full_attention") {
             FullAttnKVCache cache;
+            // KV cache 改 bf16 存储：显存减半、decode 读 KV 带宽减半（与 llama.cpp f16 KV 口径对齐）。
+            // attend/kv kernel 已模板化 KvT，读写时按需转 float 计算。
             const size_t cache_bytes =
-                max_seq_len * kv_total * sizeof(float);
+                max_seq_len * kv_total * sizeof(uint16_t);
             const std::vector<int64_t> cache_shape = {
                 static_cast<int64_t>(max_seq_len),
                 static_cast<int64_t>(kv_total),
             };
             cache.g_key_cache_f32 = GPUTensor(
-                CudaWeight(cache_bytes, CUDA_R_32F, false, "full key cache"), cache_shape);
+                CudaWeight(cache_bytes, CUDA_R_16BF, false, "full key cache"), cache_shape);
             cache.g_value_cache_f32 = GPUTensor(
-                CudaWeight(cache_bytes, CUDA_R_32F, false, "full value cache"), cache_shape);
+                CudaWeight(cache_bytes, CUDA_R_16BF, false, "full value cache"), cache_shape);
             cache.seq_len = 0;
             full_attn_kv_cache.push_back(std::move(cache));
         } else {
