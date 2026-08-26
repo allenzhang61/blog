@@ -9,15 +9,13 @@
 #include "tensor/CPUTensor.h"
 #include "tensor/StorageTensor.h"
 
-#include <vector>
-
 class DeepseekConfig;
 class DeepseekSession;
 struct DeepseekLayerWeights;
 
 struct MoERoute {
-    std::vector<int> expert_ids;
-    std::vector<float> weights;
+    CPUTensor c_expert_ids_i32;
+    CPUTensor c_weights_f32;
 };
 
 class MoERouter : public Module {

@@ -69,7 +69,7 @@ inline bool is_supported_dtype(DType dt) {
     }
 }
 
-inline size_t tensor_dtype_byte_size(DType dt) {
+inline size_t dense_tensor_dtype_byte_size(DType dt) {
     switch (dt) {
         case DType::F32:
         case DType::I32:
@@ -128,10 +128,12 @@ public:
     DType dtype = DType::UNKNOWN;
     size_t nbytes = 0;
 
+    //暂时无用
     size_t ndim() const {
         return shape.size();
     }
 
+    //暂时无用
     int64_t dim(size_t axis) const {
         if (axis >= shape.size()) {
             throw std::runtime_error("tensor shape 维度越界: " + name);
@@ -158,7 +160,7 @@ public:
     }
 
     size_t byte_size() const {
-        return static_cast<size_t>(numel()) * tensor_dtype_byte_size(dtype);
+        return static_cast<size_t>(numel()) * dense_tensor_dtype_byte_size(dtype);
     }
 };
 

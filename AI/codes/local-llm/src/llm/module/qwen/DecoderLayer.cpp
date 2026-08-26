@@ -5,6 +5,7 @@
 #include "DecoderLayer.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 
 #include <cuda_runtime.h>
@@ -33,11 +34,10 @@ DecoderLayer::DecoderLayer(const LayerWeights &weights, const TextConfig &config
 }
 
 void DecoderLayer::prefill(QwenSession &session, const GPUTensor &g_hidden_f32) {
-    const size_t input_size = static_cast<size_t>(g_hidden_f32.rows());
-    CudaScratch &scratch = session.scratch;
-    const int hidden_size = text_config_.hidden_size;
-    const std::vector<int64_t> act_shape = {static_cast<int64_t>(input_size),
-                                            static_cast<int64_t>(hidden_size)};
+    const int64_t input_size = g_hidden_f32.rows();
+    CudaScratch &scratch = session.cuda_scratch;
+    const int64_t hidden_size = text_config_.hidden_size;
+    const std::vector<int64_t> act_shape = {input_size, hidden_size};
 
     GPUTensor g_token_hidden_a_f32 = GPUTensor(scratch, scratch_key::kTokenHiddenA, act_shape, DType::F32);
     GPUTensor g_mixer_f32 = GPUTensor(scratch, scratch_key::kMixer, act_shape, DType::F32);
@@ -68,9 +68,9 @@ void DecoderLayer::prefill(QwenSession &session, const GPUTensor &g_hidden_f32) 
 }
 
 void DecoderLayer::decode(QwenSession &session, const GPUTensor &g_hidden_f32, int pos) {
-    CudaScratch &scratch = session.scratch;
-    const int hidden_size = text_config_.hidden_size;
-    const std::vector<int64_t> act_shape = {1, static_cast<int64_t>(hidden_size)};
+    CudaScratch &scratch = session.cuda_scratch;
+    const int64_t hidden_size = text_config_.hidden_size;
+    const std::vector<int64_t> act_shape = {1, hidden_size};
 
     GPUTensor g_token_hidden_a_f32 = GPUTensor(scratch, scratch_key::kTokenHiddenA, act_shape, DType::F32);
     GPUTensor g_mixer_f32 = GPUTensor(scratch, scratch_key::kMixer, act_shape, DType::F32);

@@ -15,6 +15,10 @@ int meta_i32(const MF &file, const std::string &key, int default_value) {
     return file.contain_metadata(key) ? static_cast<int>(file.metadata<int64_t>(key)) : default_value;
 }
 
+int64_t meta_i64(const MF &file, const std::string &key, int64_t default_value) {
+    return file.contain_metadata(key) ? file.metadata<int64_t>(key) : default_value;
+}
+
 float meta_f32(const MF &file, const std::string &key, float default_value) {
     return file.contain_metadata(key) ? file.metadata<float>(key) : default_value;
 }
@@ -44,7 +48,7 @@ std::vector<int> meta_i32_array(const MF &file, const std::string &key) {
 } // namespace
 
 QwenConfig::QwenConfig(const MF &mf) {
-    data.text.hidden_size = meta_i32(mf, "text_config.hidden_size", 0);
+    data.text.hidden_size = meta_i64(mf, "text_config.hidden_size", 0);
     data.text.num_hidden_layers = meta_i32(mf, "text_config.num_hidden_layers", 0);
     data.text.layer_types = meta_str_array(mf, "text_config.layer_types");
     data.text.num_attention_heads = meta_i32(mf, "text_config.num_attention_heads", 0);
@@ -101,14 +105,14 @@ QwenConfig::QwenConfig(const MF &mf) {
         meta_i32_array(mf, "vision_config.deepstack_visual_indexes");
     data.vision.depth = meta_i32(mf, "vision_config.depth", 0);
     data.vision.hidden_act = meta_str(mf, "vision_config.hidden_act");
-    data.vision.hidden_size = meta_i32(mf, "vision_config.hidden_size", 0);
+    data.vision.hidden_size = meta_i64(mf, "vision_config.hidden_size", 0);
     data.vision.in_channels = meta_i32(mf, "vision_config.in_channels", 0);
     data.vision.initializer_range = meta_f32(mf, "vision_config.initializer_range", 0.0f);
     data.vision.intermediate_size = meta_i32(mf, "vision_config.intermediate_size", 0);
     data.vision.model_type = meta_str(mf, "vision_config.model_type");
     data.vision.num_heads = meta_i32(mf, "vision_config.num_heads", 0);
     data.vision.num_position_embeddings = meta_i32(mf, "vision_config.num_position_embeddings", 0);
-    data.vision.out_hidden_size = meta_i32(mf, "vision_config.out_hidden_size", 0);
+    data.vision.out_hidden_size = meta_i64(mf, "vision_config.out_hidden_size", 0);
     data.vision.patch_size = meta_i32(mf, "vision_config.patch_size", 0);
     data.vision.spatial_merge_size = meta_i32(mf, "vision_config.spatial_merge_size", 0);
     data.vision.temporal_patch_size = meta_i32(mf, "vision_config.temporal_patch_size", 0);

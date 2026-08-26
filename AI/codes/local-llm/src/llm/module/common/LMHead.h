@@ -12,15 +12,13 @@ class SessionBase;
 class Sampler;
 class GPUTensor;
 
-namespace common {
-
 // 通用输出头：对 norm 后的单行隐状态 [1, hidden_size] 计算 logits，拷回 host 交由
 // Sampler 采样得到下一个 token id。与具体模型无关，Qwen / DeepSeek 共用。
 //
 // s_weight：lm_head 投影权重，逻辑形状 [vocab_size, hidden_size]
 //   （Qwen tie_word_embeddings 复用 embed_tokens；DeepSeek 用 output，缺失时加载阶段
 //    已回退到 token_embd）。
-// logits 及输入低精度中间量走 session.scratch；重复惩罚所需历史 token 取自 session.outputs。
+// logits 及输入低精度中间量走 session.scratch；重复惩罚所需历史 token 取自 session.h_output_i32。
 class LMHead : public Module {
 public:
     LMHead() = default;
@@ -37,7 +35,5 @@ public:
     void forward_argmax_device(const StorageTensor &s_weight, SessionBase &session,
                                const GPUTensor &g_hidden_f32, int *d_out_token, void *stream = nullptr);
 };
-
-} // namespace common
 
 #endif // LOCAL_LLM_COMMON_LMHEAD_H

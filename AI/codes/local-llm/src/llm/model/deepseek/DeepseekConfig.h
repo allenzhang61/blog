@@ -5,6 +5,7 @@
 #ifndef LOCAL_LLM_DEEPSEEKCONFIG_H
 #define LOCAL_LLM_DEEPSEEKCONFIG_H
 
+#include <cstdint>
 #include <string>
 
 class MF;
@@ -13,7 +14,7 @@ class MF;
 // 见 design.md「Ground-Truth GGUF Layout」。
 struct DeepseekConfig {
     // 基本结构
-    int hidden_size = 2048;
+    int64_t hidden_size = 2048;
     int num_layers = 27;
     int vocab_size = 102400;
     int num_heads = 16; // number of attention heads，也就是注意力头的数量；在多头注意力里，hidden 会被拆成多个 head

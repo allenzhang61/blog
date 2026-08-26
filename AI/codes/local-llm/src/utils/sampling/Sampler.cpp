@@ -21,39 +21,39 @@ std::string SamplingConfig::DebugString() const {
 
 Sampler::Sampler(const SamplingConfig &config) : config_(config), rng_(config.seed) {}
 
-int Sampler::argmax(const float *logits, const int vocab) {
+int Sampler::argmax(const float *h_logits, const int vocab) {
     int best = 0;
-    float best_v = logits[0];
+    float best_v = h_logits[0];
     for (int i = 1; i < vocab; ++i) {
-        if (logits[i] > best_v) {
-            best_v = logits[i];
+        if (h_logits[i] > best_v) {
+            best_v = h_logits[i];
             best = i;
         }
     }
     return best;
 }
 
-int Sampler::sample(float *logits, const int vocab, const std::vector<int> &prev_tokens) {
+int Sampler::sample(float *h_logits, const int vocab, const std::vector<int> &prev_tokens) {
     // 1) 重复惩罚：对上下文中已出现的 token 施加惩罚（HF 约定：正 logit 除以 penalty，
     //    负 logit 乘以 penalty，均使其更不易被选中）。
     if (config_.repetition_penalty > 1.0f && !prev_tokens.empty()) {
         const float p = config_.repetition_penalty;
         for (const int t : prev_tokens) {
             if (t < 0 || t >= vocab) continue;
-            float &l = logits[t];
+            float &l = h_logits[t];
             l = (l > 0.0f) ? (l / p) : (l * p);
         }
     }
 
     // 贪心：温度<=0 直接取 argmax，忽略 top-k/top-p。
     if (config_.is_greedy()) {
-        return argmax(logits, vocab);
+        return argmax(h_logits, vocab);
     }
 
     // 2) 温度缩放。
     const float inv_t = 1.0f / config_.temperature;
     for (int i = 0; i < vocab; ++i) {
-        logits[i] *= inv_t;
+        h_logits[i] *= inv_t;
     }
 
     // 3) 构造候选 (logit, id)。为减少排序开销，先用 top-k 截断（若启用），
@@ -65,18 +65,18 @@ int Sampler::sample(float *logits, const int vocab, const std::vector<int> &prev
     if (k < vocab) {
         // 部分排序出前 k 大（按 logit 降序）。
         std::partial_sort(idx.begin(), idx.begin() + k, idx.end(),
-                          [&](int a, int b) { return logits[a] > logits[b]; });
+                          [&](int a, int b) { return h_logits[a] > h_logits[b]; });
         idx.resize(k);
     } else {
-        std::sort(idx.begin(), idx.end(), [&](int a, int b) { return logits[a] > logits[b]; });
+        std::sort(idx.begin(), idx.end(), [&](int a, int b) { return h_logits[a] > h_logits[b]; });
     }
 
     // 4) softmax（对截断后的候选，减最大值稳定）。
-    const float max_logit = logits[idx[0]];
+    const float max_logit = h_logits[idx[0]];
     std::vector<float> probs(idx.size());
     float sum = 0.0f;
     for (size_t i = 0; i < idx.size(); ++i) {
-        const float e = std::exp(logits[idx[i]] - max_logit);
+        const float e = std::exp(h_logits[idx[i]] - max_logit);
         probs[i] = e;
         sum += e;
     }

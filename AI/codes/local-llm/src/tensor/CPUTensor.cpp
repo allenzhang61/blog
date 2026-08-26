@@ -5,6 +5,7 @@
 #include "tensor/CPUTensor.h"
 
 #include "backend/cuda/common.h"
+#include "tensor/CPUScratch.h"
 #include "tensor/GPUTensor.h"
 
 #include <utility>
@@ -16,6 +17,26 @@ CPUTensor::CPUTensor(const void *host_ptr, std::vector<int64_t> shape, DType dt)
     this->dtype = dt;
     this->nbytes = byte_size();
     this->data_ = host_ptr;
+}
+
+CPUTensor::CPUTensor(CPUScratch &scratch, const std::string &key, std::vector<int64_t> shape, DType dt) {
+    this->shape = std::move(shape);
+    this->dtype = dt;
+    this->nbytes = byte_size();
+    switch (dt) {
+        case DType::F32:
+            this->data_ = scratch.ensure<float>(key, static_cast<size_t>(numel()));
+            break;
+        case DType::I32:
+            this->data_ = scratch.ensure<int>(key, static_cast<size_t>(numel()));
+            break;
+        case DType::F16:
+        case DType::BF16:
+            this->data_ = scratch.ensure<uint16_t>(key, static_cast<size_t>(numel()));
+            break;
+        default:
+            throw std::runtime_error(std::string("CPUTensor scratch 构造不支持 dtype: ") + dtype_name(dt));
+    }
 }
 
 GPUTensor CPUTensor::to_gpu(CudaScratch &scratch, const std::string &key,

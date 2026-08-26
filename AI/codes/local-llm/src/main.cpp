@@ -2,7 +2,9 @@
 #include <iostream>
 #include <cstdlib>
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <string>
 
 #include <cuda_runtime.h>
 
@@ -12,8 +14,7 @@
 #include "format/MFFactory.h"
 #include "llm/model/BaseModel.h"
 #include "llm/model/ModelFactory.h"
-#include "tensor/CPUTensor.h"
-#include "tensor/StorageTensor.h"
+#include "backend/cuda/mem/SessionBase.h"
 #include "backend/cuda/mem/CudaWeightDequantPool.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "utils/stats/DeviceMonitor.h"
@@ -43,10 +44,7 @@ int main(int argc, char **argv) {
                                                     args.max_output_tokens, args.sampling);
     CudaWeightPool &pool = global_cuda_weight_pool();
 
-    std::vector<int> encoded_input = model->encode(std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是");
-    CPUTensor c_input_i32 = CPUTensor(encoded_input.data(),
-                                           {static_cast<int64_t>(encoded_input.size())}, DType::I32);
-    const int input_tokens = static_cast<int>(c_input_i32.numel());
+    const std::string text = std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是";
     const int eos = model->eos_token_id();
 
     // 性能采集：仅 --profile 时开启，所有埋点否则零开销。
@@ -63,14 +61,13 @@ int main(int argc, char **argv) {
 
     // warmup：正式计时前跑一遍完整前向，触发权重惰性上传、CUDA context / cuBLAS
     // 初始化与 kernel 首次启动，避免首步冷启动污染稳态计时。
-    // BaseModel::prefill 每次会重建内部 session，因此 warmup 与正式跑天然隔离。
+    // warmup 使用独立 session，作用域结束释放，因此与正式跑天然隔离。
     {
-        int wnext = model->prefill(c_input_i32);
-        int wpos = input_tokens;
+        std::unique_ptr<SessionBase> warmup_session(model->create_session(text));
+        int wnext = model->prefill(*warmup_session);
         for (int i = 0; i < 4 && wnext != eos; ++i) {
-            model->append_output(wnext);
-            wnext = model->decode(wnext, wpos);
-            ++wpos;
+            warmup_session->append_output(wnext);
+            wnext = model->decode(*warmup_session);
         }
     }
     // warmup 已把权重全部搬入显存并触发首启，清零聚合与时间线，只统计稳态。
@@ -80,18 +77,20 @@ int main(int argc, char **argv) {
         device_monitor.start(100);
     }
 
-    // prefill：喂入整段 prompt，跑完各层，返回首个生成 token。
+    std::unique_ptr<SessionBase> session(model->create_session(text));
+    const int64_t input_size = session->h_input_i32_.numel();
+
+    // prefill：喂入整段输入 token，跑完各层，返回首个生成 token。
     int next;
     {
         ScopedCpuTimer t("prefill");
-        next = model->prefill(c_input_i32);
+        next = model->prefill(*session);
     }
     if (args.profile) {
-        mem_reporter.sample(pool, model->memory_usage(), "prefill");
+        mem_reporter.sample(pool, model->memory_usage(*session), "prefill");
     }
 
-    // decode：从 prompt 之后的位置开始逐 token 生成。
-    int pos = input_tokens;
+    // decode：从输入 token 之后的位置开始逐 token 生成。
     int decode_tokens = 0;
     // 基础墙钟计时：与 profile 埋点无关，无 CUDA 同步、无落盘，恒定开销可忽略。
     const auto decode_wall_start = std::chrono::steady_clock::now();
@@ -99,7 +98,7 @@ int main(int argc, char **argv) {
         ScopedCpuTimer t("decode_total");
         for (int step = 0; step < args.max_output_tokens; ++step) {
             if (next == eos) break;
-            model->append_output(next);
+            session->append_output(next);
             // 采样式 profile：仅每隔 profile_sample_every 步开启一次全量 GPU event
             // 计时，其余步零 event 开销（timer 短路，不插 event 进流）。稳态吞吐因此
             // 接近无 profile；--profile-sample-every 1 时等价每步全量最细。
@@ -109,15 +108,14 @@ int main(int argc, char **argv) {
             Profiler::instance().set_capture(sample_this_step);
             {
                 ScopedCpuTimer td("decode_token");
-                next = model->decode(next, pos);
+                next = model->decode(*session);
             }
-            ++pos;
             ++decode_tokens;
             if (sample_this_step) {
                 // 本采样步结束即结算其 GPU event（此时该步各层 kernel 已随层内
                 // cudaDeviceSynchronize 全部完成），把 event 归还池中复用。
                 Profiler::instance().flush_gpu_events();
-                mem_reporter.sample(pool, model->memory_usage(), "decode");
+                mem_reporter.sample(pool, model->memory_usage(*session), "decode");
             }
         }
     }
@@ -133,7 +131,7 @@ int main(int argc, char **argv) {
         Profiler::instance().flush_gpu_events();
     }
 
-    std::cout << "生成结果：" << model->decode_text(model->output()) << std::endl;
+    std::cout << "生成结果：" << model->output(*session) << std::endl;
 
     // 基础耗时：无论是否 profile 都打印（仅墙钟，无逐算子埋点/同步/落盘）。
     if (decode_tokens > 0 && decode_wall_ms > 0.0) {
@@ -181,7 +179,7 @@ int main(int argc, char **argv) {
 
     // 同时在 stdout 打印稳态端到端指标，便于快速查看。
     std::cout << "PROFILE model=" << model->name()
-              << " input_tokens=" << input_tokens
+              << " input_tokens=" << input_size
               << " decode_tokens=" << decode_tokens
               << " reports=" << prefix << ".{jsonl,_summary.json,_summary.md}"
               << std::endl;

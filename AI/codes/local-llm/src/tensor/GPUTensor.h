@@ -10,6 +10,7 @@
 #include <memory>
 
 class CPUTensor;
+class CPUScratch;
 class CudaScratch;
 class CudaWeight;
 class CudaWeightPool;
@@ -32,7 +33,7 @@ public:
         return static_cast<std::remove_cv_t<T> *>(data_);
     }
 
-    CPUTensor to_host(void *host_ptr, const std::string &what) const;
+    CPUTensor to_host(CPUScratch &scratch, const std::string &key, const std::string &what) const;
 
 private:
     friend class StorageTensor;

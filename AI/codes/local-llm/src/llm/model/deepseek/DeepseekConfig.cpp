@@ -10,7 +10,7 @@
 #include <cstdio>
 
 DeepseekConfig::DeepseekConfig(const MF &mf) {
-    hidden_size = static_cast<int>(mf.metadata<int64_t>("deepseek2.embedding_length"));
+    hidden_size = mf.metadata<int64_t>("deepseek2.embedding_length");
     num_layers = static_cast<int>(mf.metadata<int64_t>("deepseek2.block_count"));
     vocab_size = static_cast<int>(mf.metadata<int64_t>("deepseek2.vocab_size"));
     num_heads = static_cast<int>(mf.metadata<int64_t>("deepseek2.attention.head_count"));
@@ -58,10 +58,10 @@ DeepseekConfig::DeepseekConfig(const MF &mf) {
 
 void DeepseekConfig::debug_dump() const {
     std::printf(
-        "[DeepseekConfig] hidden=%d layers=%d vocab=%d heads=%d | MLA kv_lora=%d qk_nope=%d qk_rope=%d "
+        "[DeepseekConfig] hidden=%lld layers=%d vocab=%d heads=%d | MLA kv_lora=%d qk_nope=%d qk_rope=%d "
         "v_head=%d | rope_theta=%.1f eps=%g yarn=%d factor=%.1f orig_ctx=%d log_mul=%g | MoE experts=%d "
         "used=%d shared=%d first_dense=%d dense_ffn=%d expert_ffn=%d routed_scale=%.3f | eos=%d bos=%d\n",
-        hidden_size, num_layers, vocab_size, num_heads, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim,
+        static_cast<long long>(hidden_size), num_layers, vocab_size, num_heads, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim,
         v_head_dim, rope_theta, rms_norm_eps, static_cast<int>(use_yarn), yarn_scaling_factor,
         yarn_original_context, yarn_mscale, expert_count, expert_used, expert_shared, first_k_dense,
         dense_ffn, expert_ffn, routed_scaling, eos_token_id, bos_token_id);

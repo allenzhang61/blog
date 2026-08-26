@@ -7,6 +7,7 @@
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
+#include "tensor/CPUScratch.h"
 #include "tensor/CPUTensor.h"
 
 #include <stdexcept>
@@ -70,7 +71,7 @@ GPUTensor::GPUTensor(CudaScratch &scratch, const std::string &key,
     this->data_ = device_ptr;
 }
 
-GPUTensor::GPUTensor(const GPUTensor &parent, size_t byte_offset,
+GPUTensor::GPUTensor(const GPUTensor &parent, const size_t byte_offset,
                      std::vector<int64_t> shape) {
     if (parent.data_ == nullptr) {
         throw std::runtime_error("GPUTensor view 构造需要 parent device data: " + parent.name);
@@ -90,11 +91,12 @@ GPUTensor::GPUTensor(const GPUTensor &parent, size_t byte_offset,
     this->weight_view_lease_ = parent.weight_view_lease_;
 }
 
-CPUTensor GPUTensor::to_host(void *host_ptr, const std::string &what) const {
+CPUTensor GPUTensor::to_host(CPUScratch &scratch, const std::string &key, const std::string &what) const {
     if (data_ == nullptr) {
         throw std::runtime_error("GPUTensor::to_host 需要 device data: " + name);
     }
+    CPUTensor h_dst(scratch, key, shape, dtype);
     // 走当前流的 async+sync 拷贝：logits 在 compute_stream 上算出，必须在同流同步后再回读，避免读到未完成结果。
-    cuda_memcpy_d2h(host_ptr, data_, byte_size(), what);
-    return CPUTensor(host_ptr, shape, dtype);
+    cuda_memcpy_d2h(h_dst.data(), data_, byte_size(), what);
+    return h_dst;
 }

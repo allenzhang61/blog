@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 // 前向过程中反复覆盖的临时激活暂存区（grow-only 复用），与具体模型无关。
 // 内部按 key 维护一批「只增不减」的 device 缓冲：容量足够时复用旧内存，不够时重分配。
@@ -38,11 +37,6 @@ public:
 
     // 释放全部 device 缓冲并清空。
     void reset();
-
-    // === host 端采样暂存 ===
-    // logits 从 device 拷回 host 的暂存（长度 vocab），供 Sampler 做温度 / top-k /
-    // top-p / 重复惩罚。不计入 device 显存统计。
-    std::vector<float> h_logits;
 
 private:
     // 单个 key 对应的字节缓冲：只增不减。

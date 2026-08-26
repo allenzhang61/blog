@@ -42,13 +42,13 @@ public:
     // prev_tokens：本次生成上下文已出现的 token（prompt + 已生成），用于重复惩罚；
     //             传空则不惩罚。
     // 返回：下一个 token id。
-    int sample(float *logits, int vocab, const std::vector<int> &prev_tokens);
+    int sample(float *h_logits, int vocab, const std::vector<int> &prev_tokens);
 
     // 是否为贪心（argmax）采样。贪心时 decode 可走 GPU argmax + CUDA Graph 闭环。
     bool is_greedy() const { return config_.is_greedy(); }
 
 private:
-    static int argmax(const float *logits, int vocab);
+    static int argmax(const float *h_logits, int vocab);
 
     SamplingConfig config_;
     std::mt19937_64 rng_;

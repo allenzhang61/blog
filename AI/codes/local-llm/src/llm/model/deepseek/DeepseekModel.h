@@ -6,7 +6,6 @@
 #define LOCAL_LLM_DEEPSEEKMODEL_H
 
 #include "llm/model/BaseModel.h"
-#include "backend/cuda/mem/CudaWeightPool.h"
 #include "format/MF.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
@@ -16,6 +15,7 @@
 #include "llm/module/deepseek/MLP.h"
 #include "llm/module/common/LMHead.h"
 #include "llm/module/common/RMSNorm.h"
+#include "tensor/CPUTensor.h"
 #include "utils/sampling/Sampler.h"
 
 #include <memory>
@@ -30,14 +30,13 @@ public:
 
     const char *name() const override { return "deepseek"; }
     int eos_token_id() const override { return config_.eos_token_id; }
-    std::vector<int> encode(const std::string &text) const override { return mf_->tokenizer_encode(text); }
+    std::vector<int> encode_text(const std::string &text) const override { return mf_->tokenizer_encode(text); }
     std::string decode_text(const std::vector<int> &ids) const override { return mf_->tokenizer_decode(ids); }
-    int prefill(const CPUTensor &c_input_i32) override;
-    int decode(int prev_token_id, int pos) override;
-    void append_output(int token_id) override;
-    const std::vector<int> &output() const override;
-    const MemoryUsageProvider &memory_usage() const override;
-    CudaWeightPool &weight_pool() override { return global_cuda_weight_pool(); }
+    SessionBase *create_session(const std::string &text) override;
+    int prefill(SessionBase &session) override;
+    int decode(SessionBase &session) override;
+    std::string output(const SessionBase &session) const override;
+    const MemoryUsageProvider &memory_usage(const SessionBase &session) const override;
 
 private:
     int forward_session(DeepseekSession &session, const CPUTensor &c_input_i32, int start_pos);
@@ -47,11 +46,10 @@ private:
     DeepseekWeights weights_;
     int max_output_tokens_ = 0;
     Sampler sampler_;
-    common::Embedding embedding_;
+    Embedding embedding_;
     std::vector<MLA> mla_layers_;
     std::vector<MLP> mlp_layers_;
-    common::LMHead lm_head_;
-    std::unique_ptr<DeepseekSession> session_;
+    LMHead lm_head_;
 };
 
 #endif // LOCAL_LLM_DEEPSEEKMODEL_H

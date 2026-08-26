@@ -7,8 +7,10 @@
 #include <cstddef>
 #include <vector>
 
+#include <cuda_runtime.h>
+
 #include "backend/cuda/mem/SessionBase.h"
-#include "tensor/CPUTensor.h"
+#include "backend/cuda/graph/CudaGraph.h"
 #include "tensor/GPUTensor.h"
 #include "tensor/StorageTensor.h"
 
@@ -38,8 +40,8 @@ struct LinearAttnRecurrentState {
 class QwenSession : public SessionBase {
 public:
     // 按 config 为每一层分配对应的 KV cache / recurrent state。
-    // max_seq_len = inputs.numel() + max_output_tokens。
-    QwenSession(const QwenConfig &config, const CPUTensor &c_input, int max_output_tokens);
+    // max_seq_len = input_ids.size() + max_output_tokens。
+    QwenSession(const QwenConfig &config, std::vector<int> h_input_i32, int max_output_tokens);
 
     // 释放 device 端 pos buffer（d_pos_）。
     ~QwenSession() override;
@@ -56,6 +58,12 @@ public:
     std::vector<FullAttnKVCache> full_attn_kv_cache;
     // 每个 linear_attention 层一份 recurrent state；顺序与 config.layer_types 中 linear 层出现顺序一致。
     std::vector<LinearAttnRecurrentState> linear_attn_recurrent_states;
+
+    // === CUDA Graph（decode 单步）===
+    // graph 绑定本 session 的 scratch / KV / token / pos device buffer，必须随 session 一起释放。
+    CudaGraph decode_graph;
+    // 本 session 已跑过的贪心 decode 步数：首步走 eager 路径预热 scratch，随后 capture/replay。
+    int decode_greedy_steps = 0;
 
     // === MemoryUsageProvider ===
     // 跨 token 状态字节数：所有 full attention KV cache + linear attention

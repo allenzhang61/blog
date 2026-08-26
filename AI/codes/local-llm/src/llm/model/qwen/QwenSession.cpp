@@ -8,11 +8,17 @@
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaWeight.h"
 
-QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
-                         int max_output_tokens) {
+#include <algorithm>
+#include <utility>
+
+QwenSession::QwenSession(const QwenConfig &config, std::vector<int> h_input_i32, int max_output_tokens) {
+    h_input_i32_ = CPUTensor(cpu_scratch, cpu_scratch_key::kInputIds,
+                             {static_cast<int64_t>(h_input_i32.size())}, DType::I32);
+    std::copy(h_input_i32.begin(), h_input_i32.end(), h_input_i32_.data<int>());
+
     const TextConfig &text_config = config.data.text;
-    max_seq_len = static_cast<size_t>(c_input.numel()) + static_cast<size_t>(max_output_tokens);
-    output.reserve(static_cast<size_t>(max_output_tokens));
+    max_seq_len_ = static_cast<size_t>(h_input_i32_.numel()) + static_cast<size_t>(max_output_tokens);
+    h_output_i32_.reserve(static_cast<size_t>(max_output_tokens));
 
     // full attention 维度。
     const size_t kv_total =
@@ -35,9 +41,9 @@ QwenSession::QwenSession(const QwenConfig &config, const CPUTensor &c_input,
             // KV cache 改 bf16 存储：显存减半、decode 读 KV 带宽减半（与 llama.cpp f16 KV 口径对齐）。
             // attend/kv kernel 已模板化 KvT，读写时按需转 float 计算。
             const size_t cache_bytes =
-                max_seq_len * kv_total * sizeof(uint16_t);
+                max_seq_len_ * kv_total * sizeof(uint16_t);
             const std::vector<int64_t> cache_shape = {
-                static_cast<int64_t>(max_seq_len),
+                static_cast<int64_t>(max_seq_len_),
                 static_cast<int64_t>(kv_total),
             };
             cache.g_key_cache_f32 = GPUTensor(

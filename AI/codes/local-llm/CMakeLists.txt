@@ -23,7 +23,7 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 86)
 endif()
 
-add_executable(local_llm main.cpp
+add_executable(local_llm src/main.cpp
         src/utils/cli/Args.cpp
         src/utils/cli/Args.h
         src/backend/common.h
@@ -48,6 +48,8 @@ add_executable(local_llm main.cpp
         src/backend/cuda/mem/SessionBase.h
         src/backend/cuda/mem/Quant.cpp
         src/backend/cuda/mem/Quant.h
+        src/backend/cuda/graph/CudaGraph.cpp
+        src/backend/cuda/graph/CudaGraph.h
         src/llm/model/qwen/QwenSession.cpp
         src/llm/model/qwen/QwenSession.h
         src/backend/cuda/ops/kernel.cu
@@ -61,6 +63,7 @@ add_executable(local_llm main.cpp
         src/format/MF.cpp
         src/format/MF.h
         src/tensor/TensorCommon.h
+        src/tensor/CPUScratch.h
         src/tensor/StorageTensor.cpp
         src/tensor/StorageTensor.h
         src/tensor/CPUTensor.cpp
@@ -136,7 +139,7 @@ add_executable(local_llm main.cpp
         src/llm/module/common/Embedding.cpp
 )
 
-target_include_directories(local_llm PRIVATE src)
+target_include_directories(local_llm PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR})
 
 # 外部依赖：PCRE2（pre-tokenize 的 Unicode 正则）、utf8proc（NFC 规范化）。
 # 直接用 find_path/find_library 定位，不强依赖 pkg-config；并把 Homebrew 的
@@ -210,7 +213,7 @@ if(LOCAL_LLM_BUILD_TESTS)
     )
 
     target_include_directories(local_llm_tests SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
-    target_include_directories(local_llm_tests PRIVATE src)
+    target_include_directories(local_llm_tests PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(local_llm_tests PRIVATE GTest::gtest_main CUDA::cudart)
 
     include(GoogleTest)

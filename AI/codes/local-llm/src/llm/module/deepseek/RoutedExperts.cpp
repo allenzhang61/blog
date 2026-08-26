@@ -34,37 +34,39 @@ RoutedExperts::RoutedExperts(const DeepseekLayerWeights &weights, const Deepseek
 
 void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_f32, const MoERoute &route,
                             const GPUTensor &g_moe_f32) {
-    const int input_size = static_cast<int>(g_normed_f32.rows());
-    auto &s = session.scratch;
-    const int hidden_size = config_.hidden_size;
-    const int ffn = config_.expert_ffn;
+    const int64_t input_size = g_normed_f32.rows();
+    auto &s = session.cuda_scratch;
+    const int64_t hidden_size = config_.hidden_size;
+    const int64_t ffn = config_.expert_ffn;
     const int n_exp = config_.expert_count;
     const int k = config_.expert_used;
 
-    GPUTensor g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, static_cast<int64_t>(ffn)}, DType::F32);
-    GPUTensor g_up_out_f32 = GPUTensor(s, scratch_key::kUp, {1, static_cast<int64_t>(ffn)}, DType::F32);
-    GPUTensor g_act_f32 = GPUTensor(s, scratch_key::kAct, {1, static_cast<int64_t>(ffn)}, DType::F32);
+    GPUTensor g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, ffn}, DType::F32);
+    GPUTensor g_up_out_f32 = GPUTensor(s, scratch_key::kUp, {1, ffn}, DType::F32);
+    GPUTensor g_act_f32 = GPUTensor(s, scratch_key::kAct, {1, ffn}, DType::F32);
     GPUTensor g_expert_out_f32 = GPUTensor(
-        s, scratch_key::kExpertOut, {1, static_cast<int64_t>(hidden_size)}, DType::F32);
+        s, scratch_key::kExpertOut, {1, hidden_size}, DType::F32);
+    const int *expert_ids = route.c_expert_ids_i32.data<int>();
+    const float *weights = route.c_weights_f32.data<float>();
 
-    for (int input_index = 0; input_index < input_size; ++input_index) {
+    for (int64_t input_index = 0; input_index < input_size; ++input_index) {
         const size_t token_offset = static_cast<size_t>(input_index) * hidden_size * sizeof(float);
-        GPUTensor g_tok_in_f32 = GPUTensor(g_normed_f32, token_offset, {1, static_cast<int64_t>(hidden_size)});
+        GPUTensor g_tok_in_f32 = GPUTensor(g_normed_f32, token_offset, {1, hidden_size});
         for (int r = 0; r < k; ++r) {
             const size_t route_idx = static_cast<size_t>(input_index) * k + r;
-            const int e = route.expert_ids[route_idx];
-            const float w = route.weights[route_idx];
+            const int e = expert_ids[route_idx];
+            const float w = weights[route_idx];
             StorageTensor s_gate = s_expert_tensor_view(*lw_.s_ffn_gate_exps, e, n_exp);
-            s_gate.shape = {static_cast<int64_t>(ffn), static_cast<int64_t>(hidden_size)};
+            s_gate.shape = {ffn, hidden_size};
             TensorTool::gemm(s_gate, g_tok_in_f32, g_gate_out_f32, s, scratch_key::kFfnInLowp, "ds.gemm.egate");
             StorageTensor s_up = s_expert_tensor_view(*lw_.s_ffn_up_exps, e, n_exp);
-            s_up.shape = {static_cast<int64_t>(ffn), static_cast<int64_t>(hidden_size)};
+            s_up.shape = {ffn, hidden_size};
             TensorTool::gemm(s_up, g_tok_in_f32, g_up_out_f32, s, scratch_key::kFfnInLowp, "ds.gemm.eup");
             TensorTool::silu_mul(g_gate_out_f32, g_up_out_f32, g_act_f32);
             StorageTensor s_down = s_expert_tensor_view(*lw_.s_ffn_down_exps, e, n_exp);
-            s_down.shape = {static_cast<int64_t>(hidden_size), static_cast<int64_t>(ffn)};
+            s_down.shape = {hidden_size, ffn};
             TensorTool::gemm(s_down, g_act_f32, g_expert_out_f32, s, scratch_key::kActLowp, "ds.gemm.edown");
-            GPUTensor g_tok_moe_f32 = GPUTensor(g_moe_f32, token_offset, {1, static_cast<int64_t>(hidden_size)});
+            GPUTensor g_tok_moe_f32 = GPUTensor(g_moe_f32, token_offset, {1, hidden_size});
             TensorTool::moe_accumulate(g_expert_out_f32, w, g_tok_moe_f32);
         }
     }

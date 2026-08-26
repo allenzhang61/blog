@@ -12,8 +12,6 @@
 class CudaScratch;
 class GPUTensor;
 
-namespace common {
-
 // 词嵌入查表：token id -> g_hidden 向量。
 // 权重形状统一约定为 [vocab_size, hidden_size]。
 class Embedding : public Module {
@@ -26,7 +24,5 @@ public:
     void forward(const StorageTensor &s_weight, CPUTensor c_input_i32,
                  const GPUTensor &g_hidden_f32, CudaScratch &scratch);
 };
-
-} // namespace common
 
 #endif // LOCAL_LLM_COMMON_EMBEDDING_H

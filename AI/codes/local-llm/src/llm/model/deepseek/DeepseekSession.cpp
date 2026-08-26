@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -21,18 +22,20 @@ float yarn_corr_dim(float num_rot, int dim, float base, int orig_ctx) {
 
 } // namespace
 
-DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &c_input,
-                                 int max_output_tokens) {
-    max_seq_len = static_cast<int>(c_input.numel()) + max_output_tokens;
+DeepseekSession::DeepseekSession(const DeepseekConfig &config, std::vector<int> h_input_i32, int max_output_tokens) {
+    h_input_i32_ = CPUTensor(cpu_scratch, cpu_scratch_key::kInputIds,
+                             {static_cast<int64_t>(h_input_i32.size())}, DType::I32);
+    std::copy(h_input_i32.begin(), h_input_i32.end(), h_input_i32_.data<int>());
+    max_seq_len_ = static_cast<size_t>(h_input_i32_.numel()) + static_cast<size_t>(max_output_tokens);
 
     // latent KV cache：每层 [max_seq_len, kv_lora + qk_rope] float。
     const int kv_total = config.kv_lora_rank + config.qk_rope_head_dim;
     kv_caches.resize(config.num_layers);
     for (int i = 0; i < config.num_layers; ++i) {
-        const size_t bytes = static_cast<size_t>(max_seq_len) * kv_total * sizeof(float);
+        const size_t bytes = static_cast<size_t>(max_seq_len_) * kv_total * sizeof(float);
         kv_caches[i].g_cache_f32 = GPUTensor(
             CudaWeight(bytes, CUDA_R_32F, false, "deepseek.kv_cache"),
-            {static_cast<int64_t>(max_seq_len), static_cast<int64_t>(kv_total)});
+            {static_cast<int64_t>(max_seq_len_), static_cast<int64_t>(kv_total)});
         kv_caches[i].seq_len = 0;
     }
 
@@ -73,7 +76,7 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, const CPUTensor &
     // softmax 会过度放大注意力打分导致退化（实测验证），故这里不做额外缩放。
     attn_softmax_scale = 1.0f / std::sqrt(static_cast<float>(config.qk_head_dim()));
     g_inv_freq_f32 = CPUTensor(h_inv_freq_f32.data(), {half}, DType::F32)
-                     .to_gpu(scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
+                     .to_gpu(cuda_scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
 }
 
 size_t DeepseekSession::kv_state_bytes() const {

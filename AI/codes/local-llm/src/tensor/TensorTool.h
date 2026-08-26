@@ -8,6 +8,8 @@
 #include "tensor/CPUTensor.h"
 #include "tensor/StorageTensor.h"
 
+#include <cstdint>
+
 class CudaScratch;
 
 class TensorTool {
@@ -24,7 +26,7 @@ public:
 
     // 复用已转换好的低精度输入执行 GEMM：w*x=y。d_input_lowp 由 prepare_lowp_input 得到。
     // 权重 dtype 必须与 prepare_lowp_input 传入的 weight_dtype 一致，否则 GEMM 结果错误。
-    static void gemm_lowp(const StorageTensor &s_weight, const void *d_input_lowp, int input_rows,
+    static void gemm_lowp(const StorageTensor &s_weight, const void *d_input_lowp, int64_t input_rows,
                           const GPUTensor &g_output_f32, const char *name = "");
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
     static void embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32, const GPUTensor &g_hidden_f32,
@@ -113,12 +115,12 @@ public:
                                              int k_dim, int v_dim, int kernel, float eps, void *stream = nullptr);
 
     static void mla_kv_a(const GPUTensor &g_kv_a_f32, const StorageTensor &s_kv_a_norm_weight,
-                         const GPUTensor &g_kv_cache_f32, int input_size, int kv_lora, int qk_rope,
+                         const GPUTensor &g_kv_cache_f32, int64_t input_size, int kv_lora, int qk_rope,
                          int start_pos, const GPUTensor &g_inv_freq_f32, float eps, void *stream = nullptr);
-    static void mla_rope_q(const GPUTensor &g_q_f32, int input_size, int n_heads, int qk_nope, int qk_rope,
+    static void mla_rope_q(const GPUTensor &g_q_f32, int64_t input_size, int n_heads, int qk_nope, int qk_rope,
                            int start_pos, const GPUTensor &g_inv_freq_f32, void *stream = nullptr);
     static void mla_attend(const GPUTensor &g_q_f32, const GPUTensor &g_kv_b_out_f32, const GPUTensor &g_kv_cache_f32,
-                           const GPUTensor &g_attn_f32, int input_size, int n_heads, int qk_nope, int qk_rope,
+                           const GPUTensor &g_attn_f32, int64_t input_size, int n_heads, int qk_nope, int qk_rope,
                            int v_head, int kv_lora, int start_pos, float softmax_scale, void *stream = nullptr);
 
     static void moe_router_topk(const GPUTensor &g_router_logits_f32, const GPUTensor &g_top_idx_i32, const GPUTensor &g_top_w_f32,

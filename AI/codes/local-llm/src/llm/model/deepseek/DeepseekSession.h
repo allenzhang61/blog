@@ -7,10 +7,10 @@
 
 #include "backend/cuda/mem/SessionBase.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
-#include "tensor/CPUTensor.h"
 #include "tensor/StorageTensor.h"
 #include "tensor/GPUTensor.h"
 
+#include <cstddef>
 #include <vector>
 
 // 每层 latent KV cache：布局 [max_seq_len, kv_lora + qk_rope]，float。
@@ -23,8 +23,7 @@ struct LatentKVCache {
 // 前向 scratch 与已生成 token。prefill 时重建，decode 时复用。
 class DeepseekSession : public SessionBase {
 public:
-    DeepseekSession(const DeepseekConfig &config, const CPUTensor &c_input,
-                    int max_output_tokens);
+    DeepseekSession(const DeepseekConfig &config, std::vector<int> h_input_i32, int max_output_tokens);
 
     std::vector<LatentKVCache> kv_caches;
     GPUTensor g_inv_freq_f32;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）

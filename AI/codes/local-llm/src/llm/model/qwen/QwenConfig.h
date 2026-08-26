@@ -4,6 +4,7 @@
 
 #ifndef LOCAL_LLM_QWENCONFIG_H
 #define LOCAL_LLM_QWENCONFIG_H
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -27,7 +28,7 @@ struct RopeParametersConfig {
 // text_config 配置。
 struct TextConfig {
     // Transformer hidden size；推理实际使用。
-    int hidden_size = 0;
+    int64_t hidden_size = 0;
     // 总层数；推理实际使用。
     int num_hidden_layers = 0;
     // 每层类型，例如 linear_attention 或 full_attention；推理实际使用。
@@ -101,7 +102,7 @@ struct VisionConfig {
     // vision_config.hidden_act；当前未使用。
     std::string hidden_act;
     // vision_config.hidden_size；当前未使用。
-    int hidden_size = 0;
+    int64_t hidden_size = 0;
     // vision_config.in_channels；当前未使用。
     int in_channels = 0;
     // vision_config.initializer_range；当前未使用。
@@ -115,7 +116,7 @@ struct VisionConfig {
     // vision_config.num_position_embeddings；当前未使用。
     int num_position_embeddings = 0;
     // vision_config.out_hidden_size；当前未使用。
-    int out_hidden_size = 0;
+    int64_t out_hidden_size = 0;
     // vision_config.patch_size；当前未使用。
     int patch_size = 0;
     // vision_config.spatial_merge_size；当前未使用。

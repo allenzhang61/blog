@@ -5,6 +5,7 @@
 #include "SwiGLUMlp.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -18,12 +19,11 @@
 
 void SwiGLUMlp::forward(const MlpWeights &weights, QwenSession &session,
                         const GPUTensor &g_in_f32, const GPUTensor &g_out_f32) {
-    const size_t rows = static_cast<size_t>(g_in_f32.rows());
-    CudaScratch &scratch = session.scratch;
+    const int64_t rows = g_in_f32.rows();
+    CudaScratch &scratch = session.cuda_scratch;
     // g_gate / g_up：[intermediate, hidden]；down：[hidden, intermediate]。
-    const int intermediate = static_cast<int>(weights.s_gate_proj.shape[0]);
-    const std::vector<int64_t> intermediate_shape = {static_cast<int64_t>(rows),
-                                                     static_cast<int64_t>(intermediate)};
+    const int64_t intermediate = weights.s_gate_proj.shape[0];
+    const std::vector<int64_t> intermediate_shape = {rows, intermediate};
     GPUTensor g_gate_f32 = GPUTensor(scratch, scratch_key::kGate, intermediate_shape, DType::F32);
     GPUTensor g_up_f32 = GPUTensor(scratch, scratch_key::kUp, intermediate_shape, DType::F32);
     GPUTensor g_prod_f32 = GPUTensor(scratch, scratch_key::kProd, intermediate_shape, DType::F32);
@@ -32,7 +32,7 @@ void SwiGLUMlp::forward(const MlpWeights &weights, QwenSession &session,
     // 省掉原先每个 GEMM 各自一次 f32->bf16 拷贝（旧路径每层 2 次冗余转换）。
     const void *d_in_lowp = TensorTool::prepare_lowp_input(
         g_in_f32, weights.s_gate_proj.dtype, scratch, scratch_key::kInputLowp);
-    const int in_rows = static_cast<int>(g_in_f32.rows());
+    const int64_t in_rows = g_in_f32.rows();
     TensorTool::gemm_lowp(weights.s_gate_proj, d_in_lowp, in_rows, g_gate_f32, "mlp.gate");
     TensorTool::gemm_lowp(weights.s_up_proj, d_in_lowp, in_rows, g_up_f32, "mlp.up");
 
