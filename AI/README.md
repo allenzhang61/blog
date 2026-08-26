@@ -362,6 +362,7 @@
     - https://github.com/rasbt/LLMs-from-scratch
   - 中文翻译：https://skindhu.github.io/Build-A-Large-Language-Model-CN/
   - 代码：https://github.com/rasbt/LLMs-from-scratch
+  - https://github.com/luhengshiwo/LLMForEverybody
 - CS336
 	- https://cs336.stanford.edu/
 	- https://www.youtube.com/playlist?list=PLoROMvodv4rOY23Y0BoGoBGgQ1zmU_MT_
