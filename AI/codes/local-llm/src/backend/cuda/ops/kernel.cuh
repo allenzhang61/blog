@@ -5,6 +5,7 @@
 #ifndef LOCAL_LLM_KERNEL_CUH
 #define LOCAL_LLM_KERNEL_CUH
 
+#include <cstddef>
 #include <cstdint>
 
 // 手写 CUDA kernel 的 launch 接口。矩阵乘不在此处（走 cuBLAS，见 gemm.h），
@@ -26,6 +27,12 @@ void launch_add(const float *a, const float *b, float *out, int n, void *stream)
 void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
                       int out_dim, int in_dim, void *stream);
 
+// 量化直算 GEMM：Y[M,out_dim] = X[M,in_dim] · W[out_dim,in_dim]^T，权重量化常驻、on-the-fly 反量化。
+// quant_type 12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0；row_bytes 为每行量化字节数。X f32，Y f32，均 row-major。
+// 避免把量化权重展开成 F16（省显存 + 省一次读写），直接在 kernel 内解块，追平 llama.cpp 的量化直算路径。
+void launch_quant_gemv(int quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
+                       float *y, int out_dim, int in_dim, int m, void *stream);
+
 // SwiGLU 门控：out = SiLU(gate) * up，n 个元素。
 void launch_silu_mul(const float *gate, const float *up, float *out, int n, void *stream);
 
@@ -33,6 +40,11 @@ void launch_silu_mul(const float *gate, const float *up, float *out, int n, void
 // 批量查表：按 token_ids 从低精度权重表 [vocab, hidden] 取行转 float 到 output[tokens, hidden]。
 void launch_embedding_lookup(const int *input, float *output, const uint16_t *table,
                              int input_size, int vocab_size, int hidden_size, int weight_type, void *stream);
+
+// 量化直算查表：table 量化常驻（每行 row_bytes 字节），按 token id 只反量化命中行到 f32，
+// 避免把整张 [vocab,hidden] 量化表展开成 F16。quant_type 12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。
+void launch_quant_embedding(int quant_type, const int *input, float *output, const uint8_t *table,
+                            size_t row_bytes, int hidden_size, int input_size, void *stream);
 
 // ---- RMSNorm ----
 // weight_type 指明 norm 权重（gamma）的 dtype：0=bf16，1=f16。
@@ -188,6 +200,10 @@ void launch_moe_router_topk(const float *router_logits, int *top_idx, float *top
 
 // 把专家输出按权重累加到 hidden：out[token] += weight * expert_out[token]，n=hidden。
 void launch_moe_accumulate(const float *expert_out, float weight, float *out, int n, void *stream);
+
+// 同上，但权重从 device 读（*weight）：decode 时 top_w 留在 device，避免每层回读同步。
+void launch_moe_accumulate_device(const float *expert_out, const float *weight, float *out, int n,
+                                  void *stream);
 
 // ================= argmax =================
 // 对 logits[n] 求 argmax，把 token id 写到 device 端 out_idx[0]（greedy 用，结果留在 device）。

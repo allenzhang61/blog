@@ -4,18 +4,23 @@
 
 #include "tensor/TensorTool.h"
 
+#include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeightPool.h"
+#include "backend/cuda/mem/Quant.h"
 #include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
 #include "tensor/GPUTensor.h"
+#include "utils/stats/ScopedTimer.h"
 
 #include <stdexcept>
+#include <string>
 
 namespace {
     int norm_weight_type_of(DType dtype) {
         if (dtype == DType::BF16) return 0;
         if (dtype == DType::F16) return 1;
+        if (dtype == DType::F32) return 2;
         throw std::runtime_error(std::string("RMSNorm 不支持的 norm dtype：") + dtype_name(dtype));
     }
 
@@ -43,6 +48,25 @@ namespace {
 //w*x=y
 void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                       CudaScratch &scratch, const std::string &lowp_key, const char *name) {
+    // 权重量化时一律走量化直算 GEMM（M=1 decode / M>1 prefill 通用）：权重量化常驻、on-the-fly
+    // 反量化，绝不展开成 F16。这样量化模型（约 9.65GB）整体常驻即可，不再需要 F16 dequant pool，
+    // 从根本上消除「量化常驻 + F16 展开」在 12GB 卡上的显存冲突，对齐 llama.cpp 的量化直算路径。
+    if (Quant::is_quantized_dtype(s_weight.dtype)) {
+        CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight);
+        if (q == nullptr) {
+            throw std::runtime_error("TensorTool::gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
+        }
+        const int out_dim = static_cast<int>(s_weight.shape[0]);
+        const int in_dim = static_cast<int>(s_weight.shape[1]);
+        const int m = static_cast<int>(g_input_f32.rows());
+        const size_t row_bytes = q->bytes / static_cast<size_t>(out_dim);
+        ScopedGpuTimer timer(name && name[0] ? name : nullptr, nullptr, q->bytes);
+        launch_quant_gemv(static_cast<int>(s_weight.dtype), static_cast<const uint8_t *>(q->ptr),
+                          row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
+                          out_dim, in_dim, m, get_current_cuda_stream());
+        return;
+    }
+
     GPUTensor g_weight = s_weight.to_gpu(true);
     uint16_t *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(g_input_f32.numel()));
 
@@ -111,18 +135,45 @@ void TensorTool::embedding_lookup(const StorageTensor &s_table, CPUTensor c_inpu
                                   CudaScratch &scratch) {
     GPUTensor g_input_i32 = c_input_i32.to_gpu(scratch, scratch_key::kInput,
                                                "cudaMemcpy embedding token ids 失败");
+    // 量化表（如 DeepSeek 的 Q4_K token_embd）直接走量化直算查表：量化常驻、按行反量化，
+    // 不把整张 [vocab,hidden] 表展开成 F16（省近 0.4GB 显存 + 消除大 F16 lease）。
+    if (Quant::is_quantized_dtype(s_table.dtype)) {
+        CudaWeight *q = global_cuda_weight_pool().cached_weight(s_table);
+        if (q == nullptr) {
+            throw std::runtime_error("TensorTool::embedding_lookup 量化表超过 CudaWeightPool 上限: " + s_table.name);
+        }
+        const int vocab = static_cast<int>(s_table.shape[0]);
+        const size_t row_bytes = q->bytes / static_cast<size_t>(vocab);
+        launch_quant_embedding(static_cast<int>(s_table.dtype), g_input_i32.data<int>(),
+                               g_hidden_f32.data<float>(), static_cast<const uint8_t *>(q->ptr),
+                               row_bytes, static_cast<int>(s_table.shape[1]),
+                               static_cast<int>(c_input_i32.numel()), nullptr);
+        return;
+    }
     GPUTensor g_table_u16 = s_table.to_gpu(true);
     launch_embedding_lookup(g_input_i32.data<int>(), g_hidden_f32.data<float>(),
                             g_table_u16.data<uint16_t>(),
                             static_cast<int>(c_input_i32.numel()), static_cast<int>(s_table.shape[0]),
-                            static_cast<int>(s_table.shape[1]), embedding_weight_type_of(s_table.dtype),
+                            static_cast<int>(s_table.shape[1]), embedding_weight_type_of(g_table_u16.dtype),
                             nullptr);
 }
 
 void TensorTool::embedding_lookup_device(const StorageTensor &s_table, const int *d_token,
                                          const GPUTensor &g_hidden_f32, void *stream) {
-    GPUTensor g_table_u16 = s_table.to_gpu(true);
     // token id 直接来自 device buffer，input_size 恒为 1（decode 单 token）。
+    if (Quant::is_quantized_dtype(s_table.dtype)) {
+        CudaWeight *q = global_cuda_weight_pool().cached_weight(s_table);
+        if (q == nullptr) {
+            throw std::runtime_error("TensorTool::embedding_lookup_device 量化表超过 CudaWeightPool 上限: " + s_table.name);
+        }
+        const int vocab = static_cast<int>(s_table.shape[0]);
+        const size_t row_bytes = q->bytes / static_cast<size_t>(vocab);
+        launch_quant_embedding(static_cast<int>(s_table.dtype), d_token, g_hidden_f32.data<float>(),
+                               static_cast<const uint8_t *>(q->ptr), row_bytes,
+                               static_cast<int>(s_table.shape[1]), /*input_size=*/1, stream);
+        return;
+    }
+    GPUTensor g_table_u16 = s_table.to_gpu(true);
     launch_embedding_lookup(d_token, g_hidden_f32.data<float>(),
                             g_table_u16.data<uint16_t>(),
                             /*input_size=*/1, static_cast<int>(s_table.shape[0]),
@@ -135,7 +186,9 @@ void TensorTool::rms_norm(const StorageTensor &s_weight_u16, const GPUTensor &g_
                           float eps, bool one_plus) {
     GPUTensor g_weight_u16 = s_weight_u16.to_gpu(true);
     const int f16_or_bf16 = norm_weight_type_of(g_weight_u16.dtype);
-    launch_rms_norm(g_input_f32.data<float>(), g_output_f32.data<float>(), g_weight_u16.data<uint16_t>(),
+    // norm 权重可能为 f32（DeepSeek GGUF），此时按字节取指针，kernel 内按 weight_type 重解释。
+    launch_rms_norm(g_input_f32.data<float>(), g_output_f32.data<float>(),
+                    static_cast<const uint16_t *>(g_weight_u16.data()),
                     f16_or_bf16, static_cast<int>(g_input_f32.rows()),
                     static_cast<int>(g_input_f32.cols()), eps, one_plus, nullptr);
 }
@@ -146,8 +199,8 @@ void TensorTool::add_rms_norm(const StorageTensor &s_weight, const GPUTensor &g_
     const GPUTensor g_weight_u16 = s_weight.to_gpu(true);
     const int f16_or_bf16 = norm_weight_type_of(g_weight_u16.dtype);
     launch_add_rms_norm(g_x_f32.data<float>(), g_residual_f32.data<float>(), g_residual_io_f32.data<float>(),
-                        g_norm_out_f32.data<float>(), g_weight_u16.data<uint16_t>(), f16_or_bf16,
-                        static_cast<int>(g_x_f32.rows()), static_cast<int>(g_x_f32.cols()),
+                        g_norm_out_f32.data<float>(), static_cast<const uint16_t *>(g_weight_u16.data()),
+                        f16_or_bf16, static_cast<int>(g_x_f32.rows()), static_cast<int>(g_x_f32.cols()),
                         eps, one_plus, stream);
 }
 
@@ -362,6 +415,12 @@ void TensorTool::moe_accumulate(const GPUTensor &g_expert_out_f32, float weight,
                                 void *stream) {
     launch_moe_accumulate(g_expert_out_f32.data<float>(), weight, g_out_f32.data<float>(),
                           static_cast<int>(g_out_f32.numel()), stream);
+}
+
+void TensorTool::moe_accumulate_device(const GPUTensor &g_expert_out_f32, const float *d_weight,
+                                       const GPUTensor &g_out_f32, void *stream) {
+    launch_moe_accumulate_device(g_expert_out_f32.data<float>(), d_weight, g_out_f32.data<float>(),
+                                 static_cast<int>(g_out_f32.numel()), stream);
 }
 
 void TensorTool::argmax(const GPUTensor &g_logits_f32, int *d_out_idx, int vocab, void *stream) {

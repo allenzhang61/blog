@@ -71,10 +71,21 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, std::vector<int> 
             h_inv_freq_f32[i] = 1.0f / std::pow(base, static_cast<float>(2 * i) / dim);
         }
     }
-    // softmax 缩放固定为 1/sqrt(qk_head_dim)。YARN 的 mscale（yarn_log_multiplier）在
-    // llama.cpp 中作用于 RoPE 的 cos/sin 幅值，对短上下文近似为恒等；直接把它塞进
-    // softmax 会过度放大注意力打分导致退化（实测验证），故这里不做额外缩放。
-    attn_softmax_scale = 1.0f / std::sqrt(static_cast<float>(config.qk_head_dim()));
+    // softmax 缩放严格对齐 llama.cpp deepseek2：kq_scale = mscale^2 / sqrt(n_embd_head_k)。
+    //   RoPE cos/sin 幅值 mscale 在 ext_factor!=0 时净为 1.0（attn_factor*(1+0.1*ln(1/freq_scale))），
+    //   故 RoPE 不做额外幅值缩放；但 kq_scale 用的 mscale 额外含 yarn_log_multiplier 项：
+    //   mscale = attn_factor_org * (1 + 0.1 * rope_yarn_log_mul * ln(1/freq_scale))
+    // 其中 attn_factor_org = attn_factor * (1 + 0.1*ln(1/freq_scale))，而 RoPE 净幅值=1 意味着
+    //   attn_factor_org = 1.0，因此 mscale = 1 + 0.1 * log_mul * ln(scale)。
+    {
+        float mscale = 1.0f;
+        if (config.use_yarn) {
+            const float log_mul = config.yarn_mscale;   // = yarn_log_multiplier = 0.1*mscale_all_dim
+            const float ln_scale = std::log(config.yarn_scaling_factor);
+            mscale = 1.0f + 0.1f * log_mul * ln_scale;
+        }
+        attn_softmax_scale = mscale * mscale / std::sqrt(static_cast<float>(config.qk_head_dim()));
+    }
     g_inv_freq_f32 = CPUTensor(h_inv_freq_f32.data(), {half}, DType::F32)
                      .to_gpu(cuda_scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
 }

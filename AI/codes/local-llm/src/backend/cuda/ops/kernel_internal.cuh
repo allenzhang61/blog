@@ -27,6 +27,14 @@ inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 // ---- 逐元素 / Embedding / Norm ----
 __global__ void bf16_gemv_kernel(const uint16_t *weight, const uint16_t *x, float *y,
                                  int out_dim, int in_dim);
+// 量化直算 GEMM（decode M=1 / prefill M>1）：QUANT_TYPE 12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。
+template <int QUANT_TYPE>
+__global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
+                                  float *y, int out_dim, int in_dim, int m);
+// 量化直算 Embedding：按 token id 只反量化命中行到 f32，避免整表展开成 F16。
+template <int QUANT_TYPE>
+__global__ void quant_embedding_kernel(const int *input, float *output, const uint8_t *table,
+                                       size_t row_bytes, int hidden_size, int input_size);
 __global__ void add_kernel(const float *a, const float *b, float *out, int n);
 __global__ void silu_mul_kernel(const float *gate, const float *up, float *out, int n);
 __global__ void embedding_lookup_kernel(const int *input, float *output, const uint16_t *table,
@@ -133,6 +141,7 @@ __global__ void mla_attend_batch_kernel(const float *q, const float *kv_b_out,
 __global__ void moe_router_topk_kernel(const float *router_logits, int *top_idx, float *top_w,
                                        int tokens, int n_experts, int k, float routed_scaling);
 __global__ void moe_accumulate_kernel(const float *expert_out, float weight, float *out, int n);
+__global__ void moe_accumulate_device_kernel(const float *expert_out, const float *weight, float *out, int n);
 
 // ---- argmax ----
 // 两阶段归约：阶段1 多 block 各求局部 argmax，阶段2 单 block 归约局部结果。

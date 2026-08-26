@@ -129,6 +129,11 @@ public:
     static void moe_accumulate(const GPUTensor &g_expert_out_f32, float weight, const GPUTensor &g_out_f32,
                                void *stream = nullptr);
 
+    // 加权累加，权重从 device 读（d_weight 指向 device 端单个 float）：decode 时 top_w 留在 device，
+    // 免去每层把权重回读到 host 造成的同步。
+    static void moe_accumulate_device(const GPUTensor &g_expert_out_f32, const float *d_weight,
+                                      const GPUTensor &g_out_f32, void *stream = nullptr);
+
     // 对 logits[vocab] 求 argmax，把 token id 写到 device 端 d_out_idx（greedy 用，结果留在 device）。
     static void argmax(const GPUTensor &g_logits_f32, int *d_out_idx, int vocab, void *stream = nullptr);
 };

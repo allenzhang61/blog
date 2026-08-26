@@ -41,6 +41,14 @@ MoERoute MoERouter::forward(DeepseekSession &session, const GPUTensor &g_normed_
 
     MoERoute route;
     route.c_expert_ids_i32 = g_top_idx_i32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeExpertIds, "ds.moe.idx");
-    route.c_weights_f32 = g_top_w_f32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeWeights, "ds.moe.w");
+    if (input_size == 1) {
+        // decode：top_w 不回读 host，保留 device 指针供加权累加 kernel 直接读取；
+        // 只回读了 k 个 int 索引（上面那次，host 侧按专家反量化权重切片需要），
+        // 省掉每层一次 top_w 的 device 同步回读。
+        route.d_weights_f32 = g_top_w_f32.data<float>();
+        route.decode_device = true;
+    } else {
+        route.c_weights_f32 = g_top_w_f32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeWeights, "ds.moe.w");
+    }
     return route;
 }

@@ -25,6 +25,16 @@ __device__ inline float f16_or_bf16_to_float(uint16_t v, int f16_or_bf16) {
     return __bfloat162float(b);
 }
 
+// 读第 j 个 norm 权重（gamma）成 float。weight_type: 0=bf16, 1=f16, 2=f32。
+// f32 时 weight 实为 float* 的位模式（DeepSeek GGUF 的 *_norm.weight 为 F32），
+// 按 j 取对应 float；f16/bf16 时按 uint16 元素取。
+__device__ inline float norm_weight_to_float(const uint16_t *weight, int j, int weight_type) {
+    if (weight_type == 2) {
+        return reinterpret_cast<const float *>(weight)[j];
+    }
+    return f16_or_bf16_to_float(weight[j], weight_type);
+}
+
 // 持久状态（recurrent state / KV cache）可选 fp32 或 bf16 存储：kernel 内一律 float 计算，
 // 只在读写显存时做精度转换。定义放在文件前部，供 full attention / linear attention 共用。
 template <typename StateT> __device__ inline float state_to_float(StateT v);
@@ -129,7 +139,7 @@ __global__ void rms_norm_kernel(const float *input, float *output, const uint16_
 
     float *dst = output + static_cast<size_t>(row) * hidden_size;
     for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
-        float w = f16_or_bf16_to_float(weight[j], weight_type);
+        float w = norm_weight_to_float(weight, j, weight_type);
         if (one_plus) w += 1.0f;
         float y = x[j] * inv_rms * w;
         dst[j] = y;
@@ -166,7 +176,7 @@ __global__ void add_rms_norm_kernel(const float *x, const float *residual, float
 
     float *dst = out_norm + static_cast<size_t>(row) * hidden_size;
     for (int j = threadIdx.x; j < hidden_size; j += blockDim.x) {
-        float w = f16_or_bf16_to_float(weight[j], weight_type);
+        float w = norm_weight_to_float(weight, j, weight_type);
         if (one_plus) w += 1.0f;
         dst[j] = sr[j] * inv_rms * w;
     }
@@ -1037,19 +1047,171 @@ __global__ void f32_to_bf16_copy_kernel(const float *src, uint16_t *out, int64_t
     out[i] = *reinterpret_cast<const uint16_t *>(&b);
 }
 
+// ================= 量化直算 GEMV（decode 单 token，权重量化常驻，不展开 F16）=================
+// 逐 dtype 提供「给定行内线性下标 idx，返回该权重元素的反量化 float 值」的 device 函数。
+// 每个 warp 负责一个输出行（out_dim 行），warp 内 32 lane 沿 in_dim 分工点积后归约。
+// 与对应 dequantize_* kernel 的块布局严格一致（Q4_K/Q6_K/Q5_0/Q8_0），保证数值等价。
+
+// Q4_K：super-block 256 元素 / 144 字节；布局 d(f16) dmin(f16) scales[12] qs[128]。
+__device__ inline float q4k_at(const uint8_t *row_base, int idx) {
+    const int64_t blk = idx >> 8;          // idx / 256
+    const int in_blk = idx & 255;          // 0..255
+    const uint8_t *base = row_base + blk * 144;
+    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+    const float dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
+    const uint8_t *scales = base + 4;
+    const uint8_t *qs = base + 16;
+    const int j = in_blk >> 5;             // sub-block 0..7
+    const int inner = in_blk & 31;         // 0..31
+    // qs 每 32 字节服务一对 sub-block(2p,2p+1)：低4bit->2p, 高4bit->2p+1。
+    const int pair = j >> 1;
+    const uint8_t q = qs[pair * 32 + inner];
+    uint8_t sc, m;
+    q4k_scale_min(j, scales, sc, m);
+    const int nib = (j & 1) ? (q >> 4) : (q & 0x0F);
+    return d * sc * nib - dmin * m;
+}
+
+// Q6_K：super-block 256 元素 / 210 字节；布局 ql[128] qh[64] scales[16](int8) d(f16)。
+__device__ inline float q6k_at(const uint8_t *row_base, int idx) {
+    const int64_t blk = idx >> 8;
+    const int in_blk = idx & 255;
+    const uint8_t *base = row_base + blk * 210;
+    const uint8_t *ql = base;
+    const uint8_t *qh = base + 128;
+    const int8_t *scales = reinterpret_cast<const int8_t *>(base + 192);
+    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 208)));
+    // 还原 dequantize_q6k 的映射：half=in_blk/128, n=half*128, l=(in_blk%128)%32, grp=(in_blk%128)/32。
+    const int half = in_blk >> 7;          // 0 或 1
+    const int n = half * 128;
+    const int within = in_blk & 127;       // 0..127
+    const int grp = within >> 5;           // 0..3
+    const int l = within & 31;             // 0..31
+    const int is = l / 16;
+    const uint8_t *qlp = ql + (n / 2);
+    const uint8_t *qhp = qh + (n / 4);
+    const int8_t *sc = scales + (n / 16);
+    int8_t q;
+    int scale_idx;
+    if (grp == 0) {
+        q = static_cast<int8_t>((qlp[l + 0] & 0xF) | (((qhp[l] >> 0) & 3) << 4)) - 32;
+        scale_idx = is + 0;
+    } else if (grp == 1) {
+        q = static_cast<int8_t>((qlp[l + 32] & 0xF) | (((qhp[l] >> 2) & 3) << 4)) - 32;
+        scale_idx = is + 2;
+    } else if (grp == 2) {
+        q = static_cast<int8_t>((qlp[l + 0] >> 4) | (((qhp[l] >> 4) & 3) << 4)) - 32;
+        scale_idx = is + 4;
+    } else {
+        q = static_cast<int8_t>((qlp[l + 32] >> 4) | (((qhp[l] >> 6) & 3) << 4)) - 32;
+        scale_idx = is + 6;
+    }
+    return d * sc[scale_idx] * static_cast<float>(q);
+}
+
+// Q5_0：block 32 元素 / 22 字节；布局 d(f16) qh[4] qs[16]。元素 j∈[0,16)->低半，j+16->高半。
+__device__ inline float q50_at(const uint8_t *row_base, int idx) {
+    const int64_t blk = idx >> 5;          // idx / 32
+    const int in_blk = idx & 31;           // 0..31
+    const uint8_t *base = row_base + blk * 22;
+    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+    const uint32_t qh = base[2] | (base[3] << 8) | (base[4] << 16) | (static_cast<uint32_t>(base[5]) << 24);
+    const uint8_t *qs = base + 6;
+    int q;
+    if (in_blk < 16) {
+        const int j = in_blk;
+        q = (qs[j] & 0x0F) | (((qh >> j) & 1) << 4);
+    } else {
+        const int j = in_blk - 16;
+        q = (qs[j] >> 4) | (((qh >> (j + 16)) & 1) << 4);
+    }
+    return d * static_cast<float>(q - 16);
+}
+
+// Q8_0：block 32 元素 / 34 字节；布局 d(f16) qs[32](int8)。
+__device__ inline float q80_at(const uint8_t *row_base, int idx) {
+    const int64_t blk = idx >> 5;
+    const int in_blk = idx & 31;
+    const uint8_t *base = row_base + blk * 34;
+    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+    const int8_t *qs = reinterpret_cast<const int8_t *>(base + 2);
+    return d * static_cast<float>(qs[in_blk]);
+}
+
+// 量化直算 GEMM：Y[M,out_dim] = X[M,in_dim] · W[out_dim,in_dim]^T，权重量化常驻、on-the-fly 反量化。
+// quant_type：12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。row_bytes 为每行量化字节数（out_dim 行等长）。
+// X/Y 均为 row-major（x[m*in_dim+k], y[m*out_dim+o]），与 gemm_main 的列主序 [dim,tokens] 一致。
+// 每个 warp 负责一个输出行 o，内层循环 M 个 token；权重块按需解量化（M 小，重解成本远低于 F16 展开）。
+template <int QUANT_TYPE>
+__global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
+                                  float *y, int out_dim, int in_dim, int m) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    if (warp_id >= out_dim) return;
+    const uint8_t *row_base = weight + static_cast<size_t>(warp_id) * row_bytes;
+    for (int row = 0; row < m; ++row) {
+        const float *xr = x + static_cast<size_t>(row) * in_dim;
+        float acc = 0.0f;
+        for (int k = lane; k < in_dim; k += 32) {
+            float w;
+            if (QUANT_TYPE == 12) w = q4k_at(row_base, k);
+            else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
+            else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
+            else w = q80_at(row_base, k);
+            acc += w * xr[k];
+        }
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            acc += __shfl_down_sync(0xffffffff, acc, offset);
+        }
+        if (lane == 0) y[static_cast<size_t>(row) * out_dim + warp_id] = acc;
+    }
+}
+
+template __global__ void quant_gemv_kernel<12>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<14>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<6>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<8>(const uint8_t *, size_t, const float *, float *, int, int, int);
+
+// 量化直算 Embedding 查表：table 量化常驻（每 token 一行 hidden 个元素、row_bytes 字节），
+// 按 token id 只反量化命中的那一行到 f32，避免把整张 [vocab,hidden] 表展开成 F16。
+template <int QUANT_TYPE>
+__global__ void quant_embedding_kernel(const int *input, float *output, const uint8_t *table,
+                                       size_t row_bytes, int hidden_size, int input_size) {
+    const int token = blockIdx.x;                // 每个 block 负责一个输入 token
+    if (token >= input_size) return;
+    const int id = input[token];
+    const uint8_t *row_base = table + static_cast<size_t>(id) * row_bytes;
+    float *out = output + static_cast<size_t>(token) * hidden_size;
+    for (int k = threadIdx.x; k < hidden_size; k += blockDim.x) {
+        float w;
+        if (QUANT_TYPE == 12) w = q4k_at(row_base, k);
+        else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
+        else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
+        else w = q80_at(row_base, k);
+        out[k] = w;
+    }
+}
+
+template __global__ void quant_embedding_kernel<12>(const int *, float *, const uint8_t *, size_t, int, int);
+template __global__ void quant_embedding_kernel<14>(const int *, float *, const uint8_t *, size_t, int, int);
+template __global__ void quant_embedding_kernel<6>(const int *, float *, const uint8_t *, size_t, int, int);
+template __global__ void quant_embedding_kernel<8>(const int *, float *, const uint8_t *, size_t, int, int);
+
 // ================= MLA（多头潜在注意力）=================
-// 解耦 RoPE：对 rope 段做 GPT-NeoX 风格旋转（对 (i, i+half) 配对）。
+// 解耦 RoPE：对 rope 段做 GGML_ROPE_TYPE_NORM 风格旋转（相邻对 (2i, 2i+1) 配对）。
 // inv_freq[half] 为预计算好的频率（含 YARN 缩放），host 侧一次算好。
 __device__ inline void mla_rope_inplace(float *vec, int rope_dim, int pos, const float *inv_freq) {
+    // DeepSeek-V2 GGUF 采用 GGML_ROPE_TYPE_NORM（相邻对 interleaved），
+    // 即旋转 (vec[2i], vec[2i+1])，pair i 使用 inv_freq[i]，而非 NeoX 的半分。
     const int half = rope_dim / 2;
     for (int i = threadIdx.x; i < half; i += blockDim.x) {
         const float angle = static_cast<float>(pos) * inv_freq[i];
         const float c = cosf(angle);
         const float s = sinf(angle);
-        const float x1 = vec[i];
-        const float x2 = vec[i + half];
-        vec[i] = x1 * c - x2 * s;
-        vec[i + half] = x2 * c + x1 * s;
+        const float x0 = vec[2 * i];
+        const float x1 = vec[2 * i + 1];
+        vec[2 * i] = x0 * c - x1 * s;
+        vec[2 * i + 1] = x0 * s + x1 * c;
     }
 }
 
@@ -1238,6 +1400,14 @@ __global__ void moe_accumulate_kernel(const float *expert_out, float weight, flo
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     out[i] += weight * expert_out[i];
+}
+
+// 加权累加（权重从 device 读）：out += (*weight) * expert_out。decode 时 top_w 留在 device，
+// 避免每层把权重回读到 host 造成同步。
+__global__ void moe_accumulate_device_kernel(const float *expert_out, const float *weight, float *out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    out[i] += (*weight) * expert_out[i];
 }
 
 // ---- argmax ----
