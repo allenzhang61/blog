@@ -13,6 +13,7 @@
 #include "tensor/GPUTensor.h"
 #include "utils/stats/ScopedTimer.h"
 
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -43,14 +44,24 @@ namespace {
         return g_device_weight.data<uint16_t>();
     }
 
+    bool env_flag_enabled(const char *key) {
+        const char *env = std::getenv(key);
+        return env != nullptr && std::atoi(env) > 0;
+    }
+
+    bool should_use_safe_dequant_gemm(const char *name) {
+        if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV")) return false;
+        const std::string op_name = name ? name : "";
+        return op_name.rfind("ds.gemm.", 0) == 0;
+    }
+
 } // namespace
 
 //w*x=y
 void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                       CudaScratch &scratch, const std::string &lowp_key, const char *name) {
-    // 权重量化时一律走量化直算 GEMM（M=1 decode / M>1 prefill 通用）：权重量化常驻、on-the-fly
-    // 反量化，绝不展开成 F16。这样量化模型（约 9.65GB）整体常驻即可，不再需要 F16 dequant pool，
-    // 从根本上消除「量化常驻 + F16 展开」在 12GB 卡上的显存冲突，对齐 llama.cpp 的量化直算路径。
+    // DeepSeek 层内 GEMM 对逐层数值漂移非常敏感，默认沿用已验证正确的
+    // dequantize-to-F16 + cuBLAS 路径；量化直算保留为显式实验开关。
     if (Quant::is_quantized_dtype(s_weight.dtype)) {
         CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight);
         if (q == nullptr) {
@@ -59,6 +70,16 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
         const int out_dim = static_cast<int>(s_weight.shape[0]);
         const int in_dim = static_cast<int>(s_weight.shape[1]);
         const int m = static_cast<int>(g_input_f32.rows());
+        if (should_use_safe_dequant_gemm(name)) {
+            CudaWeight dequant = q->try_dequant();
+            uint16_t *d_input_f16 = scratch.ensure<uint16_t>(lowp_key + ".safe.f16",
+                                                             static_cast<size_t>(g_input_f32.numel()));
+            launch_f32_to_f16_copy(g_input_f32.data<float>(), d_input_f16, g_input_f32.numel(), nullptr);
+            gemm_main(global_cuda_weight_pool().handle, dequant.ptr, d_input_f16, g_output_f32.data<float>(),
+                      out_dim, in_dim, static_cast<size_t>(m), CUDA_R_16F, CUDA_R_16F,
+                      dequant.bytes, name);
+            return;
+        }
         const size_t row_bytes = q->bytes / static_cast<size_t>(out_dim);
         ScopedGpuTimer timer(name && name[0] ? name : nullptr, nullptr, q->bytes);
         launch_quant_gemv(static_cast<int>(s_weight.dtype), static_cast<const uint8_t *>(q->ptr),

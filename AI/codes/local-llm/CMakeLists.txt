@@ -202,6 +202,8 @@ if(LOCAL_LLM_BUILD_TESTS)
 
     add_executable(local_llm_tests
             test/LaunchAddTest.cpp
+            test/ModelFunctionalTest.cpp
+            src/backend/cuda/common.cpp
             src/backend/cuda/ops/kernel.cu
             src/backend/cuda/ops/kernel.cuh
             src/backend/cuda/ops/kernel_internal.cuh
@@ -214,7 +216,11 @@ if(LOCAL_LLM_BUILD_TESTS)
 
     target_include_directories(local_llm_tests SYSTEM PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
     target_include_directories(local_llm_tests PRIVATE src ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(local_llm_tests PRIVATE LOCAL_LLM_BINARY_PATH="$<TARGET_FILE:local_llm>")
     target_link_libraries(local_llm_tests PRIVATE GTest::gtest_main CUDA::cudart)
+    if(UNIX AND EXISTS "/usr/lib/x86_64-linux-gnu/libstdc++.so.6")
+        target_link_libraries(local_llm_tests PRIVATE "/usr/lib/x86_64-linux-gnu/libstdc++.so.6")
+    endif()
 
     include(GoogleTest)
     gtest_discover_tests(local_llm_tests)
