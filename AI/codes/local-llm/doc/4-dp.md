@@ -164,42 +164,61 @@ LOCAL_LLM_CUDA_WEIGHT_POOL_GB=6 LOCAL_LLM_CUDA_DEQUANT_POOL_GB=3 \
 
 **根因**：llama.cpp 之所以能在同卡跑到 132 t/s，是因为它**直接做量化 GEMV（不展开成 F16）**，把 9.65GB 量化模型整体常驻显存、还留有余量；而本引擎走「反量化成 F16 再 cuBLAS」，在 12GB 卡上既放不下 F16、量化常驻又与 CUDA Graph 的 device 索引冲突。
 
-**结论**：要真正追平 llama.cpp，需实现**量化 GEMV kernel（Q4_K / Q5_0 / Q6_K / Q8_0 直算，权重量化常驻、device 索引驱动 MoE）**，这等价于重写 ggml 的 CUDA MoE 路径。**本轮已按此结论落地**（见下一节），从根本上消除了 F16-dequant 与显存/同步的冲突。
+**结论**：要真正追平 llama.cpp，需实现**量化 GEMV kernel（Q4_K / Q5_0 / Q6_K / Q8_0 直算，权重量化常驻、device 索引驱动 MoE）**，这等价于重写 ggml 的 CUDA MoE 路径。但后续 exact-output 功能测试表明，全量量化直算虽然单 GEMM 误差很小，跨层累计后仍会改变 greedy token，因此当前只能按子路径保守打开。
 
-## 四、量化直算重构：消除 F16-dequant，量化权重整体常驻
+## 四、量化直算调研与第一阶段落地
 
-针对 P1 调研定位的根本约束，重构了 GEMM 与 Embedding 的权重访问路径，从「量化权重 → 反量化成 F16 → cuBLAS」改为**「量化权重常驻 device + 量化直算 kernel（on-the-fly 解块）」**，与 llama.cpp 的量化直算路径一致。
+针对 P1 调研定位的根本约束，重构了 GEMM 与 Embedding 的权重访问路径，探索从「量化权重 → 反量化成 F16 → cuBLAS」改为**「量化权重常驻 device + 量化直算 kernel（on-the-fly 解块）」**。但 DeepSeek 的 greedy 输出对逐层数值漂移非常敏感，后续 exact-output 功能测试发现全量直通会跑偏，因此当前默认策略改为：**Embedding 保持量化查表；DeepSeek 层内 GEMM 大部分继续使用正确性已验证的 safe dequant+cuBLAS，仅 MoE expert down-proj (`ds.gemm.edown`) 默认启用量化直通**。
 
 ### 1. 量化直算 GEMM kernel（`quant_gemv_kernel`）
 
 在 [`kernel.cu`](../src/backend/cuda/ops/kernel.cu) 新增一族模板 kernel，支持 `Y[M,out] = X[M,in]·W[out,in]^T`，权重按 GGUF 原始量化格式常驻，kernel 内**逐元素 on-the-fly 反量化**，不再展开成 F16：
 
 - 每个 warp 负责一个输出行 `o`，32 lane 沿 `in_dim` 分工点积后 warp 归约；内层循环 M 个 token（decode M=1、prefill M>1 通用）。
-- 逐 dtype 提供 `q4k_at / q6k_at / q50_at / q80_at` 解块函数，块布局与对应 `dequantize_*` kernel 严格一致（Q4_K 144B/256、Q6_K 210B/256、Q5_0 22B/32、Q8_0 34B/32），保证数值等价。
-- 入口 [`TensorTool::gemm`](../src/tensor/TensorTool.cpp) 对**所有量化权重**统一走此路径（M 任意），彻底不再触发 F16 dequant。
+- 逐 dtype 提供 `q4k_at / q6k_at / q50_at / q80_at` 解块函数，块布局与对应 `dequantize_*` kernel 对齐（Q4_K 144B/256、Q6_K 210B/256、Q5_0 22B/32、Q8_0 34B/32）。
+- 入口 [`TensorTool::gemm`](../src/tensor/TensorTool.cpp) 对量化权重支持直算；DeepSeek `ds.gemm.*` 默认仍使用 safe path，只有 `ds.gemm.edown` 默认直通。可用 `LOCAL_LLM_DISABLE_DEEPSEEK_EDOWN_QUANT_GEMV=1` 回退，也可用 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV=1` 显式测试全量直通。
 
 ### 2. 量化直算 Embedding（`quant_embedding_kernel`）
 
 `token_embd`（Q4_K，`[102400,2048]`，F16 展开约 0.42GB）原先经 `to_gpu(true)` 整表反量化。新增按 token id **只反量化命中行**的 kernel，消除这最后一处大 F16 lease。
 
-### 3. 权重整体常驻
+### 3. 正确性边界与当前默认策略
 
-去掉 F16 dequant lease 后，量化全模型（约 9.65GB）可整体常驻在 `CudaWeightPool`（默认 10GB 上限即可容纳，不再触发 evict-all 抖动重传），加上 KV cache（`max_seq_len × 576 × 4B × 27层`，仅数十 MB）、scratch 与 CUDA context，稳定落在 12GB 内。
+单 GEMM 对拍显示量化直通与 safe dequant+cuBLAS 的误差通常只有 `1e-4 ~ 1e-3` 量级，但 DeepSeek 多层 greedy 会放大这些差异：
+
+- `d_attn,kv_` 直通：输出会明显跑偏（出现 URL-like 文本）。
+- `egate/eup/edown` 任意两个或三个同时直通：短输出会退化为重复 `!`。
+- 单独 `egate`、`eup`、`edown`：32 token 前缀保持连贯；其中 `edown` 收益最好，作为第一阶段默认开启。
+
+因此当前不是“全量量化直通”，而是**选择性量化直通**：保留 correctness-safe 的 `ds.gemm.*` 主路径，仅让 MoE expert down-proj 走直算，避免反量化 `Q8_0 [2048,1408]` expert down 权重。
 
 ### 4. 实测效果（RTX 3080，同一 Q4_K_M GGUF）
 
 | 阶段 | tg (t/s) | 相对基线 | 说明 |
-| --- | --- | --- | --- |
-| 修复正确性后基线 | ~3.7 | 1x | 反量化成 F16 → cuBLAS + evict-all 抖动 |
-| 量化直算 GEMV（权重部分常驻） | ~22.5 | ~6x | 短 prompt 实测，正确性保持（Paris） |
-| 量化直算 + 量化权重整体常驻 | ~42.8 | ~11.6x | 无 evict-all 抖动；正确性保持 |
+| --- | ---: | ---: | --- |
+| 修复正确性后基线 | ~3.66 | 1.0x | `ds.gemm.*` safe dequant+cuBLAS |
+| P0（权重留 device） | ~3.70 | ~1.0x | MoE top_w 不回读 host |
+| 仅 `ds.gemm.edown` 量化直通 + device argmax | **~4.60–4.68** | **~1.26x** | 128 token story prompt，exact-output 测试通过 |
+| Routed expert view 预缓存 | **~4.62–4.64** | **~1.27x** | 构造期预切 64 个 expert 的 gate/up/down view，减少 decode 热循环的 slice 与字符串构造 |
+| 禁用 `edown` 直通回退 | ~3.86 | ~1.05x | `LOCAL_LLM_DISABLE_DEEPSEEK_EDOWN_QUANT_GEMV=1` 同 prompt 对照 |
 
-> 正确性：`What is the capital of France?` → `The capital of France is Paris.`，与 llama.cpp ground truth 一致。
+> 正确性：`What is the capital of France?` → `The capital of France is Paris.`；Qwen/DeepSeek 功能测试改为 exact-output 断言，211 上 `ctest` 5/5 通过。
 
-与 llama.cpp 的 132.68 t/s 相比仍有差距，剩余差距主要来自 host launch/同步开销（每层约 30 次 kernel launch + 路由回读），需 **CUDA Graph** 收口——量化直算已扫清其前置的 F16-dequant/显存障碍（量化权重常驻、可按 device 索引选块），是后续可选的收尾项。
+与 llama.cpp 的 132.68 t/s 相比仍有巨大差距。当前真正可行的后续方向不再是盲目扩大全量量化直通，而是按 exact-output 测试逐项推进：
 
 ### 已落地成果小结
 
 - **正确性**：DeepSeek-V2-Lite 输出已与 llama.cpp 完全对齐（修复 RoPE 类型 + attn softmax mscale²）。
-- **量化直算重构**：GEMM/Embedding 改为量化权重常驻 + on-the-fly 解块，消除 F16-dequant 与 evict-all 抖动。
-- **性能**：tg 从 ~3.7 → **~42.8 t/s（~11.6x）**，正确性保持；与 llama.cpp 132.68 t/s 的剩余差距待 CUDA Graph 收口。
+- **测试护栏**：Qwen / DeepSeek 功能测试已覆盖长输出 exact-output，避免“短 prompt 正确、长生成跑偏”再次漏过。
+- **选择性量化直通**：`ds.gemm.edown` 默认走量化直算，可用环境变量回退；全量直通保留为实验开关。
+- **decode 尾部优化**：DeepSeek greedy decode 复用 Qwen 的 device embedding + GPU argmax，避免每步把完整 logits 回传 host，仅回传一个 token id，为后续 CUDA Graph 铺路。
+- **host 热路径瘦身**：Routed experts 在构造期预缓存每个 expert 的 `StorageTensor` view，decode 时按 route id 直接取数组元素，避免每 token 反复 slice 和拼接名字。
+- **性能**：当前 story prompt tg 约 **4.60–4.68 t/s**（相对 safe 回退约 +16%–21%）。剩余差距仍主要来自 MoE host 编排、expert id 回读和每层大量小 kernel launch。
+- **失败实验**：尝试把 6 个 expert 的 `edown + accumulate` 合成单个 device-indexed 量化 kernel，但 exact-output 发生偏移且吞吐降到约 **2.9 t/s**。根因是单 warp 串行处理 6 个 expert 降低并行度，同时累加路径的细微数值差异仍会改变 greedy token，因此已回退。
+
+### 后续可行优化
+
+- **优先级 1：device-indexed MoE 量化 GEMV**。把 `expert_ids` 保持在 device，让 kernel 按 route id 直接定位量化 expert 权重，避免 host 回读和每 expert 逐个 launch。这是对齐 llama.cpp MoE decode 的关键。
+- **优先级 2：融合 MoE gate/up/silu/down/accumulate 的 decode 专用 kernel**。上次 F16 指针融合失败的根因是 dequant lease 生命周期和指针上传同步；量化直算后可在 kernel 内用 expert id 直接解块读取，绕开 F16 lease。
+- **优先级 3：DeepSeek CUDA Graph**。当前已具备 device token/argmax；还需要 MLA 读 device pos、MoE route 全 device 化，才能捕获整段 decode。
+- **优先级 4：数值等价量化直算修复**。继续对拍 `egate/eup` 与 safe path，若能把多层漂移压到 exact-output 不变，可逐步扩大直通范围。

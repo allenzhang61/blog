@@ -10,6 +10,8 @@
 #include "tensor/StorageTensor.h"
 #include "llm/module/deepseek/MoERouter.h"
 
+#include <vector>
+
 class DeepseekConfig;
 class DeepseekSession;
 struct DeepseekLayerWeights;
@@ -28,6 +30,9 @@ private:
     //   s_ffn_gate_exps/s_ffn_up_exps [expert_count, expert_ffn, hidden]
     //   s_ffn_down_exps [expert_count, hidden, expert_ffn]
     const DeepseekLayerWeights &lw_;
+    std::vector<StorageTensor> s_gate_experts_;
+    std::vector<StorageTensor> s_up_experts_;
+    std::vector<StorageTensor> s_down_experts_;
 };
 
 #endif // LOCAL_LLM_DEEPSEEK_ROUTED_EXPERTS_H

@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <utility>
 
+#include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
 #include "tensor/GPUTensor.h"
+#include "tensor/TensorTool.h"
 
 DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, const SamplingConfig &sampling)
     : mf_(std::move(mf)),
@@ -60,10 +62,39 @@ int DeepseekModel::prefill(SessionBase &session) {
 }
 
 int DeepseekModel::decode(SessionBase &session) {
-    const int prev_token_id = session.prev_token_id();
-    const int pos = session.decode_pos();
-    const auto c_input_i32 = CPUTensor(&prev_token_id, {1}, DType::I32);
-    return forward_session(dynamic_cast<DeepseekSession &>(session), c_input_i32, pos);
+    auto &deepseek_session = dynamic_cast<DeepseekSession &>(session);
+    const int prev_token_id = deepseek_session.prev_token_id();
+    const int pos = deepseek_session.decode_pos();
+
+    if (!sampler_.is_greedy()) {
+        const auto c_input_i32 = CPUTensor(&prev_token_id, {1}, DType::I32);
+        return forward_session(deepseek_session, c_input_i32, pos);
+    }
+
+    cudaStream_t stream = get_current_cuda_stream();
+    check_cuda(cudaMemcpyAsync(deepseek_session.d_token(), &prev_token_id, sizeof(int),
+                               cudaMemcpyHostToDevice, stream),
+               "deepseek decode token H2D 失败");
+
+    auto &scratch = deepseek_session.cuda_scratch;
+    const int64_t hidden_size = config_.hidden_size;
+    const auto g_hidden_f32 = GPUTensor(scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
+    TensorTool::embedding_lookup_device(*weights_.s_token_embd, deepseek_session.d_token(), g_hidden_f32, stream);
+
+    for (int i = 0; i < config_.num_layers; ++i) {
+        mla_layers_[i].forward(deepseek_session, g_hidden_f32, pos);
+        mlp_layers_[i].forward(deepseek_session, g_hidden_f32);
+    }
+
+    const auto g_normed_f32 = GPUTensor(scratch, scratch_key::kNormed, {1, hidden_size}, DType::F32);
+    RMSNorm::forward(*weights_.s_output_norm, g_hidden_f32, g_normed_f32,
+                     config_.rms_norm_eps, /*one_plus=*/false);
+    lm_head_.forward_argmax_device(*weights_.s_output, deepseek_session, g_normed_f32,
+                                   deepseek_session.d_token(), stream);
+
+    int next_token = 0;
+    cuda_memcpy_d2h(&next_token, deepseek_session.d_token(), sizeof(int), "deepseek decode token D2H 失败");
+    return next_token;
 }
 
 std::string DeepseekModel::output(const SessionBase &session) const {

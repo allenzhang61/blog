@@ -145,5 +145,5 @@ TEST(ModelFunctionalTest, DeepseekStoryPromptOutputsCoherentContinuation) {
 
 RoboArt was different from the other robots in the city. While his peers were busy with their tasks, performing tasks and completing chores, RoboArt spent his days in a small studio, painting. He would mix colors and create beautiful scenes on canvas, capturing the beauty of the world around him.
 
-One day)");
+Robo)");
 }

@@ -24,12 +24,20 @@ struct LatentKVCache {
 class DeepseekSession : public SessionBase {
 public:
     DeepseekSession(const DeepseekConfig &config, std::vector<int> h_input_i32, int max_output_tokens);
+    ~DeepseekSession() override;
+
+    // decode 单步 token id 常驻 device：embedding 从此读取输入 token，
+    // greedy argmax 将下一 token 写回此处，避免每步回传整行 logits。
+    int *d_token() const { return d_token_; }
 
     std::vector<LatentKVCache> kv_caches;
     GPUTensor g_inv_freq_f32;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）
     float attn_softmax_scale = 0; // = mscale^2 / sqrt(qk_head)
 
     size_t kv_state_bytes() const override;
+
+private:
+    int *d_token_ = nullptr;
 };
 
 #endif // LOCAL_LLM_DEEPSEEK_SESSION_H

@@ -4,6 +4,7 @@
 
 #include "DeepseekSession.h"
 
+#include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
 
@@ -88,6 +89,11 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, std::vector<int> 
     }
     g_inv_freq_f32 = CPUTensor(h_inv_freq_f32.data(), {half}, DType::F32)
                      .to_gpu(cuda_scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
+    d_token_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "deepseek decode token device buffer"));
+}
+
+DeepseekSession::~DeepseekSession() {
+    cuda_free_device(d_token_);
 }
 
 size_t DeepseekSession::kv_state_bytes() const {

@@ -55,6 +55,16 @@ namespace {
         return op_name.rfind("ds.gemm.", 0) == 0;
     }
 
+    bool should_force_quant_gemv(const char *name) {
+        if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV")) return true;
+        const std::string op_name = name ? name : "";
+        if (op_name.find("ds.gemm.edown") != std::string::npos &&
+            !env_flag_enabled("LOCAL_LLM_DISABLE_DEEPSEEK_EDOWN_QUANT_GEMV")) {
+            return true;
+        }
+        return false;
+    }
+
 } // namespace
 
 //w*x=y
@@ -70,7 +80,7 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
         const int out_dim = static_cast<int>(s_weight.shape[0]);
         const int in_dim = static_cast<int>(s_weight.shape[1]);
         const int m = static_cast<int>(g_input_f32.rows());
-        if (should_use_safe_dequant_gemm(name)) {
+        if (should_use_safe_dequant_gemm(name) && !should_force_quant_gemv(name)) {
             CudaWeight dequant = q->try_dequant();
             uint16_t *d_input_f16 = scratch.ensure<uint16_t>(lowp_key + ".safe.f16",
                                                              static_cast<size_t>(g_input_f32.numel()));
