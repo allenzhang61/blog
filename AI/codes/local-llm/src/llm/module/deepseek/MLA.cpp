@@ -36,11 +36,11 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
     const int kvb_out = n_heads * (qk_nope + v_head); // 4096
     const GPUTensor &g_inv_freq_f32 = session.g_inv_freq_f32;
 
-    GPUTensor g_normed_f32 = GPUTensor(scratch, scratch_key::kNormed, {input_size, hidden_size}, DType::F32);
+    auto g_normed_f32 = GPUTensor(scratch, scratch_key::kNormed, {input_size, hidden_size}, DType::F32);
     RMSNorm::forward(*lw_.s_attn_norm, g_hidden_f32, g_normed_f32,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    GPUTensor g_q_f32 = GPUTensor(scratch, scratch_key::kQ,
+    auto g_q_f32 = GPUTensor(scratch, scratch_key::kQ,
                                   {
                                       input_size,
                                       static_cast<int64_t>(n_heads),

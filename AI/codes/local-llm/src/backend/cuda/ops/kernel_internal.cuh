@@ -28,7 +28,7 @@ inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 __global__ void bf16_gemv_kernel(const uint16_t *weight, const uint16_t *x, float *y,
                                  int out_dim, int in_dim);
 // 量化直算 GEMM（decode M=1 / prefill M>1）：QUANT_TYPE 12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。
-template <int QUANT_TYPE>
+template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                   float *y, int out_dim, int in_dim, int m);
 // 量化直算 Embedding：按 token id 只反量化命中行到 f32，避免整表展开成 F16。

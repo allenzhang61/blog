@@ -19,6 +19,7 @@ class StorageTensor;
 class GPUTensor : public TensorShape {
 public:
     GPUTensor() = default;
+    GPUTensor(void *device_ptr, std::vector<int64_t> shape, DType dt, std::string name = "");
     GPUTensor(CudaWeight &&weight, std::vector<int64_t> shape);
     GPUTensor(std::shared_ptr<CudaWeight> weight, std::vector<int64_t> shape);
     GPUTensor(CudaScratch &scratch, const std::string &key,

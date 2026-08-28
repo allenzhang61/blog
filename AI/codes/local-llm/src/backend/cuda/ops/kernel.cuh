@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "tensor/TensorCommon.h"
+
 // 手写 CUDA kernel 的 launch 接口。矩阵乘不在此处（走 cuBLAS，见 gemm.h），
 // 这里只放 cuBLAS 覆盖不到的逐元素 / 归一化 / 采样等算子。
 //
@@ -28,10 +30,11 @@ void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
                       int out_dim, int in_dim, void *stream);
 
 // 量化直算 GEMM：Y[M,out_dim] = X[M,in_dim] · W[out_dim,in_dim]^T，权重量化常驻、on-the-fly 反量化。
-// quant_type 12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0；row_bytes 为每行量化字节数。X f32，Y f32，均 row-major。
+// quant_type 指明权重量化格式；row_bytes 为每行量化字节数。X f32，Y f32，均 row-major。
+// f16_operands=true 时，on-the-fly 解出的权重和输入先 round 到 F16，再转回 F32 累加，用于贴近 safe path。
 // 避免把量化权重展开成 F16（省显存 + 省一次读写），直接在 kernel 内解块，追平 llama.cpp 的量化直算路径。
-void launch_quant_gemv(int quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
-                       float *y, int out_dim, int in_dim, int m, void *stream);
+void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
+                       float *y, int out_dim, int in_dim, int m, bool f16_operands, void *stream);
 
 // SwiGLU 门控：out = SiLU(gate) * up，n 个元素。
 void launch_silu_mul(const float *gate, const float *up, float *out, int n, void *stream);
@@ -42,8 +45,8 @@ void launch_embedding_lookup(const int *input, float *output, const uint16_t *ta
                              int input_size, int vocab_size, int hidden_size, int weight_type, void *stream);
 
 // 量化直算查表：table 量化常驻（每行 row_bytes 字节），按 token id 只反量化命中行到 f32，
-// 避免把整张 [vocab,hidden] 量化表展开成 F16。quant_type 12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。
-void launch_quant_embedding(int quant_type, const int *input, float *output, const uint8_t *table,
+// 避免把整张 [vocab,hidden] 量化表展开成 F16。quant_type 指明权重量化格式。
+void launch_quant_embedding(DType quant_type, const int *input, float *output, const uint8_t *table,
                             size_t row_bytes, int hidden_size, int input_size, void *stream);
 
 // ---- RMSNorm ----

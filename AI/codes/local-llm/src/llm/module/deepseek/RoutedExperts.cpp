@@ -62,15 +62,15 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
     const bool decode_device = (input_size == 1 && route.decode_device);
     const float *weights = decode_device ? nullptr : route.c_weights_f32.data<float>();
 
-    GPUTensor g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, ffn}, DType::F32);
-    GPUTensor g_up_out_f32 = GPUTensor(s, scratch_key::kUp, {1, ffn}, DType::F32);
-    GPUTensor g_act_f32 = GPUTensor(s, scratch_key::kAct, {1, ffn}, DType::F32);
-    GPUTensor g_expert_out_f32 = GPUTensor(
+    auto g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, ffn}, DType::F32);
+    auto g_up_out_f32 = GPUTensor(s, scratch_key::kUp, {1, ffn}, DType::F32);
+    auto g_act_f32 = GPUTensor(s, scratch_key::kAct, {1, ffn}, DType::F32);
+    auto g_expert_out_f32 = GPUTensor(
         s, scratch_key::kExpertOut, {1, hidden_size}, DType::F32);
 
     for (int64_t input_index = 0; input_index < input_size; ++input_index) {
         const size_t token_offset = static_cast<size_t>(input_index) * hidden_size * sizeof(float);
-        GPUTensor g_tok_in_f32 = GPUTensor(g_normed_f32, token_offset, {1, hidden_size});
+        auto g_tok_in_f32 = GPUTensor(g_normed_f32, token_offset, {1, hidden_size});
         for (int r = 0; r < k; ++r) {
             const size_t route_idx = static_cast<size_t>(input_index) * k + r;
             const int e = expert_ids[route_idx];
@@ -81,7 +81,7 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
             TensorTool::silu_mul(g_gate_out_f32, g_up_out_f32, g_act_f32);
             TensorTool::gemm(s_down_experts_[e], g_act_f32, g_expert_out_f32, s, scratch_key::kActLowp,
                              "ds.gemm.edown");
-            GPUTensor g_tok_moe_f32 = GPUTensor(g_moe_f32, token_offset, {1, hidden_size});
+            auto g_tok_moe_f32 = GPUTensor(g_moe_f32, token_offset, {1, hidden_size});
             if (decode_device) {
                 // 权重指针指向 device 端 top_w[r]，avoid host readback。
                 TensorTool::moe_accumulate_device(g_expert_out_f32, route.d_weights_f32 + r, g_tok_moe_f32);

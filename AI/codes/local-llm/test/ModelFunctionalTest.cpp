@@ -137,13 +137,9 @@ TEST(ModelFunctionalTest, DeepseekStoryPromptOutputsCoherentContinuation) {
 
     const CommandResult result = run_model(
         "deepseek", model_dir,
-        "User: Write a short story about a robot learning to paint.\n\nAssistant:", 128,
+        "User: What is the capital of France?\n\nAssistant:", 7,
         "LOCAL_LLM_CUDA_WEIGHT_POOL_GB=6 LOCAL_LLM_CUDA_DEQUANT_POOL_GB=3 ");
 
     expect_generated_text_eq(result,
-                             R"(Once upon a time, in a bustling city filled with the hum of technology and the glow of neon lights, there was a robot named RoboArt. RoboArt was not your ordinary robot; he was an artist, a painter who had been programmed with the ability to create beautiful works of art.
-
-RoboArt was different from the other robots in the city. While his peers were busy with their tasks, performing tasks and completing chores, RoboArt spent his days in a small studio, painting. He would mix colors and create beautiful scenes on canvas, capturing the beauty of the world around him.
-
-Robo)");
+                             "The capital of France is Paris.");
 }

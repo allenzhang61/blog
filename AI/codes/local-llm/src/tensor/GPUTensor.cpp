@@ -27,6 +27,17 @@ void GPUTensor::init_from_weight(const CudaWeight &weight,
     this->data_ = weight.ptr;
 }
 
+GPUTensor::GPUTensor(void *device_ptr, std::vector<int64_t> shape, DType dt, std::string name) {
+    if (device_ptr == nullptr) {
+        throw std::runtime_error("GPUTensor device view 需要非空 device data");
+    }
+    this->shape = std::move(shape);
+    this->dtype = dt;
+    this->nbytes = byte_size();
+    this->name = std::move(name);
+    this->data_ = device_ptr;
+}
+
 GPUTensor::GPUTensor(CudaWeight &&weight, std::vector<int64_t> shape) {
     this->owned_weight_ = std::make_shared<CudaWeight>(std::move(weight));
     init_from_weight(*owned_weight_, std::move(shape));

@@ -36,6 +36,14 @@ int main(int argc, char **argv) {
     cudaStream_t compute_stream = nullptr;
     check_cuda(cudaStreamCreateWithFlags(&compute_stream, cudaStreamNonBlocking), "创建 compute stream 失败");
     set_current_cuda_stream(compute_stream);
+    auto destroy_compute_stream = [&compute_stream]() {
+        if (compute_stream != nullptr) {
+            check_cuda(cudaStreamSynchronize(compute_stream), "同步 compute stream 失败");
+            set_current_cuda_stream(nullptr);
+            check_cuda(cudaStreamDestroy(compute_stream), "销毁 compute stream 失败");
+            compute_stream = nullptr;
+        }
+    };
 
     // main 负责打开具体模型文件格式；模型本身只接收 MF 抽象。
     std::unique_ptr<MF> mf = open_mf(args.model_dir);
@@ -144,6 +152,7 @@ int main(int argc, char **argv) {
     }
 
     if (!args.profile) {
+        destroy_compute_stream();
         return 0;
     }
 
@@ -183,5 +192,6 @@ int main(int argc, char **argv) {
               << " decode_tokens=" << decode_tokens
               << " reports=" << prefix << ".{jsonl,_summary.json,_summary.md}"
               << std::endl;
+    destroy_compute_stream();
     return 0;
 }

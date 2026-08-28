@@ -29,43 +29,56 @@ void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
     bf16_gemv_kernel<<<blocks, kBlock, 0, as_stream(stream)>>>(weight, x, y, out_dim, in_dim);
 }
 
-void launch_quant_gemv(int quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
-                       float *y, int out_dim, int in_dim, int m, void *stream) {
+template <int QUANT_TYPE>
+void launch_quant_gemv_typed(const uint8_t *weight, size_t row_bytes, const float *x,
+                             float *y, int out_dim, int in_dim, int m,
+                             bool f16_operands, cudaStream_t stream) {
     constexpr int warps_per_block = kBlock / 32;
     const int blocks = (out_dim + warps_per_block - 1) / warps_per_block;
-    cudaStream_t s = as_stream(stream);
+    if (f16_operands) {
+        quant_gemv_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, stream>>>(
+            weight, row_bytes, x, y, out_dim, in_dim, m);
+    } else {
+        quant_gemv_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, stream>>>(
+            weight, row_bytes, x, y, out_dim, in_dim, m);
+    }
+}
+
+void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
+                       float *y, int out_dim, int in_dim, int m, bool f16_operands, void *stream) {
+    const cudaStream_t s = as_stream(stream);
     switch (quant_type) {
-        case 12:
-            quant_gemv_kernel<12><<<blocks, kBlock, 0, s>>>(weight, row_bytes, x, y, out_dim, in_dim, m);
+        case DType::Q4_K:
+            launch_quant_gemv_typed<12>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
             break;
-        case 14:
-            quant_gemv_kernel<14><<<blocks, kBlock, 0, s>>>(weight, row_bytes, x, y, out_dim, in_dim, m);
+        case DType::Q6_K:
+            launch_quant_gemv_typed<14>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
             break;
-        case 6:
-            quant_gemv_kernel<6><<<blocks, kBlock, 0, s>>>(weight, row_bytes, x, y, out_dim, in_dim, m);
+        case DType::Q5_0:
+            launch_quant_gemv_typed<6>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
             break;
-        case 8:
-            quant_gemv_kernel<8><<<blocks, kBlock, 0, s>>>(weight, row_bytes, x, y, out_dim, in_dim, m);
+        case DType::Q8_0:
+            launch_quant_gemv_typed<8>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
             break;
         default:
             break;
     }
 }
 
-void launch_quant_embedding(int quant_type, const int *input, float *output, const uint8_t *table,
+void launch_quant_embedding(DType quant_type, const int *input, float *output, const uint8_t *table,
                             size_t row_bytes, int hidden_size, int input_size, void *stream) {
     cudaStream_t s = as_stream(stream);
     switch (quant_type) {
-        case 12:
+        case DType::Q4_K:
             quant_embedding_kernel<12><<<input_size, kBlock, 0, s>>>(input, output, table, row_bytes, hidden_size, input_size);
             break;
-        case 14:
+        case DType::Q6_K:
             quant_embedding_kernel<14><<<input_size, kBlock, 0, s>>>(input, output, table, row_bytes, hidden_size, input_size);
             break;
-        case 6:
+        case DType::Q5_0:
             quant_embedding_kernel<6><<<input_size, kBlock, 0, s>>>(input, output, table, row_bytes, hidden_size, input_size);
             break;
-        case 8:
+        case DType::Q8_0:
             quant_embedding_kernel<8><<<input_size, kBlock, 0, s>>>(input, output, table, row_bytes, hidden_size, input_size);
             break;
         default:

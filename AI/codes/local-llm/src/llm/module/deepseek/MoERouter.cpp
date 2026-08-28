@@ -27,15 +27,14 @@ MoERoute MoERouter::forward(DeepseekSession &session, const GPUTensor &g_normed_
     const int64_t n_exp = config_.expert_count;
     const int64_t k = config_.expert_used;
 
-    GPUTensor g_router_logits_f32 = GPUTensor(
-        s, scratch_key::kRouterLogits, {input_size, n_exp}, DType::F32);
+    auto g_router_logits_f32 = GPUTensor(s, scratch_key::kRouterLogits, {input_size, n_exp}, DType::F32);
     // lw_.s_ffn_gate_inp->to_gpu(true);
     TensorTool::gemm(*lw_.s_ffn_gate_inp, g_normed_f32, g_router_logits_f32, s, scratch_key::kFfnInLowp,
                      "ds.gemm.router");
 
     const std::vector<int64_t> route_shape = {input_size, k};
-    GPUTensor g_top_idx_i32 = GPUTensor(s, scratch_key::kTopIdx, route_shape, DType::I32);
-    GPUTensor g_top_w_f32 = GPUTensor(s, scratch_key::kTopW, route_shape, DType::F32);
+    auto g_top_idx_i32 = GPUTensor(s, scratch_key::kTopIdx, route_shape, DType::I32);
+    auto g_top_w_f32 = GPUTensor(s, scratch_key::kTopW, route_shape, DType::F32);
     TensorTool::moe_router_topk(g_router_logits_f32, g_top_idx_i32, g_top_w_f32,
                                 static_cast<int>(n_exp), static_cast<int>(k), config_.routed_scaling);
 

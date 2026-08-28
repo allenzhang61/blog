@@ -144,7 +144,8 @@ void QwenModel::eager_decode_greedy_device(QwenSession &session) {
 
     const auto g_hidden_f32 = GPUTensor(
         scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
-    TensorTool::embedding_lookup_device(weights_.s_token_embd, session.d_token(), g_hidden_f32, stream);
+    const auto g_input_i32 = GPUTensor(session.d_token(), {1}, DType::I32, "qwen.decode.token");
+    TensorTool::embedding_lookup(weights_.s_token_embd, g_input_i32, g_hidden_f32, stream);
     for (DecoderLayer &layer : layers_) layer.decode(session, g_hidden_f32, /*pos=*/0);
     const auto g_normed_f32 = GPUTensor(
         scratch, scratch_key::kTokenHiddenA, {1, hidden_size}, DType::F32);
@@ -168,7 +169,8 @@ void QwenModel::record_decode_graph(QwenSession &session) {
     const auto g_hidden_f32 = GPUTensor(
         scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
     // embedding 从 device token buffer 读输入 token（不做 H2D）。
-    TensorTool::embedding_lookup_device(weights_.s_token_embd, session.d_token(), g_hidden_f32, stream);
+    const auto g_input_i32 = GPUTensor(session.d_token(), {1}, DType::I32, "qwen.decode.token");
+    TensorTool::embedding_lookup(weights_.s_token_embd, g_input_i32, g_hidden_f32, stream);
 
     for (DecoderLayer &layer : layers_) {
         // pos 走 session.d_pos()（device），此处 host pos 仅用于层内已废弃的 seq_len 记账，传 0 即可。

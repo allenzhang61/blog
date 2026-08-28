@@ -1142,7 +1142,15 @@ __device__ inline float q80_at(const uint8_t *row_base, int idx) {
 // quant_type：12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。row_bytes 为每行量化字节数（out_dim 行等长）。
 // X/Y 均为 row-major（x[m*in_dim+k], y[m*out_dim+o]），与 gemm_main 的列主序 [dim,tokens] 一致。
 // 每个 warp 负责一个输出行 o，内层循环 M 个 token；权重块按需解量化（M 小，重解成本远低于 F16 展开）。
-template <int QUANT_TYPE>
+template <bool F16_OPERANDS>
+__device__ inline float quant_gemv_operand(float v) {
+    if constexpr (F16_OPERANDS) {
+        return __half2float(__float2half(v));
+    }
+    return v;
+}
+
+template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                   float *y, int out_dim, int in_dim, int m) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
@@ -1158,7 +1166,9 @@ __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const
             else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
             else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
             else w = q80_at(row_base, k);
-            acc += w * xr[k];
+            w = quant_gemv_operand<F16_OPERANDS>(w);
+            const float xv = quant_gemv_operand<F16_OPERANDS>(xr[k]);
+            acc = fmaf(w, xv, acc);
         }
         for (int offset = 16; offset > 0; offset >>= 1) {
             acc += __shfl_down_sync(0xffffffff, acc, offset);
@@ -1167,10 +1177,14 @@ __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const
     }
 }
 
-template __global__ void quant_gemv_kernel<12>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<14>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<6>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<8>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<12, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<14, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<6, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<8, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<12, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<14, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 
 // 量化直算 Embedding 查表：table 量化常驻（每 token 一行 hidden 个元素、row_bytes 字节），
 // 按 token id 只反量化命中的那一行到 f32，避免把整张 [vocab,hidden] 表展开成 F16。

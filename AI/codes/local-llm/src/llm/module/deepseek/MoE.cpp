@@ -29,15 +29,14 @@ void MoE::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32) {
     const int64_t input_size = g_hidden_f32.rows();
     auto &s = session.cuda_scratch;
     const int64_t hidden_size = config_.hidden_size;
-    const std::vector<int64_t> act_shape = {input_size, hidden_size};
 
-    GPUTensor g_normed_f32 = GPUTensor(s, scratch_key::kNormed, act_shape, DType::F32);
+    const auto g_normed_f32 = GPUTensor(s, scratch_key::kNormed, {input_size, hidden_size}, DType::F32);
     RMSNorm::forward(*weights_.s_ffn_norm, g_hidden_f32, g_normed_f32,
                      config_.rms_norm_eps, /*one_plus=*/false);
 
-    MoERoute route = router_.forward(session, g_normed_f32);
+    const MoERoute route = router_.forward(session, g_normed_f32);
 
-    GPUTensor g_moe_out_f32 = GPUTensor(s, scratch_key::kMoeOut, act_shape, DType::F32);
+    const auto g_moe_out_f32 = GPUTensor(s, scratch_key::kMoeOut, {input_size, hidden_size}, DType::F32);
     float *d_moe_out = g_moe_out_f32.data<float>();
     check_cuda(cudaMemset(d_moe_out, 0, static_cast<size_t>(input_size) * hidden_size * sizeof(float)), "ds.moe.zero");
 

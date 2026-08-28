@@ -10,5 +10,7 @@
 
 void Embedding::forward(const StorageTensor &s_weight, CPUTensor c_input_i32,
                         const GPUTensor &g_hidden_f32, CudaScratch &scratch) {
-    TensorTool::embedding_lookup(s_weight, c_input_i32, g_hidden_f32, scratch);
+    GPUTensor g_input_i32 = c_input_i32.to_gpu(scratch, scratch_key::kInput,
+                                               "cudaMemcpy embedding token ids 失败");
+    TensorTool::embedding_lookup(s_weight, g_input_i32, g_hidden_f32);
 }

@@ -49,6 +49,23 @@ namespace {
         return env != nullptr && std::atoi(env) > 0;
     }
 
+    bool env_list_contains(const char *key, const std::string &needle) {
+        const char *env = std::getenv(key);
+        if (env == nullptr || env[0] == '\0' || needle.empty()) return false;
+        const std::string list = env;
+        size_t start = 0;
+        while (start <= list.size()) {
+            const size_t comma = list.find(',', start);
+            const std::string item = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            if (!item.empty() && needle.find(item) != std::string::npos) {
+                return true;
+            }
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        return false;
+    }
+
     bool should_use_safe_dequant_gemm(const char *name) {
         if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV")) return false;
         const std::string op_name = name ? name : "";
@@ -58,11 +75,16 @@ namespace {
     bool should_force_quant_gemv(const char *name) {
         if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV")) return true;
         const std::string op_name = name ? name : "";
-        if (op_name.find("ds.gemm.edown") != std::string::npos &&
-            !env_flag_enabled("LOCAL_LLM_DISABLE_DEEPSEEK_EDOWN_QUANT_GEMV")) {
+        if (env_list_contains("LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS", op_name)) {
             return true;
         }
         return false;
+    }
+
+    bool should_use_f16_quant_gemv_operands(const char *name) {
+        if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_QUANT_GEMV_F16_OPERANDS")) return true;
+        const std::string op_name = name ? name : "";
+        return env_list_contains("LOCAL_LLM_QUANT_GEMV_F16_OPERAND_OPS", op_name);
     }
 
 } // namespace
@@ -73,7 +95,7 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
     // DeepSeek 层内 GEMM 对逐层数值漂移非常敏感，默认沿用已验证正确的
     // dequantize-to-F16 + cuBLAS 路径；量化直算保留为显式实验开关。
     if (Quant::is_quantized_dtype(s_weight.dtype)) {
-        CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight);
+        const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight);
         if (q == nullptr) {
             throw std::runtime_error("TensorTool::gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
         }
@@ -82,9 +104,10 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
         const int m = static_cast<int>(g_input_f32.rows());
         if (should_use_safe_dequant_gemm(name) && !should_force_quant_gemv(name)) {
             CudaWeight dequant = q->try_dequant();
-            uint16_t *d_input_f16 = scratch.ensure<uint16_t>(lowp_key + ".safe.f16",
+            void *stream = get_current_cuda_stream();
+            auto *d_input_f16 = scratch.ensure<uint16_t>(lowp_key + ".safe.f16",
                                                              static_cast<size_t>(g_input_f32.numel()));
-            launch_f32_to_f16_copy(g_input_f32.data<float>(), d_input_f16, g_input_f32.numel(), nullptr);
+            launch_f32_to_f16_copy(g_input_f32.data<float>(), d_input_f16, g_input_f32.numel(), stream);
             gemm_main(global_cuda_weight_pool().handle, dequant.ptr, d_input_f16, g_output_f32.data<float>(),
                       out_dim, in_dim, static_cast<size_t>(m), CUDA_R_16F, CUDA_R_16F,
                       dequant.bytes, name);
@@ -92,14 +115,15 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
         }
         const size_t row_bytes = q->bytes / static_cast<size_t>(out_dim);
         ScopedGpuTimer timer(name && name[0] ? name : nullptr, nullptr, q->bytes);
-        launch_quant_gemv(static_cast<int>(s_weight.dtype), static_cast<const uint8_t *>(q->ptr),
+        const bool f16_operands = should_use_f16_quant_gemv_operands(name);
+        launch_quant_gemv(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
                           row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
-                          out_dim, in_dim, m, get_current_cuda_stream());
+                          out_dim, in_dim, m, f16_operands, get_current_cuda_stream());
         return;
     }
 
-    GPUTensor g_weight = s_weight.to_gpu(true);
-    uint16_t *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(g_input_f32.numel()));
+    const GPUTensor g_weight = s_weight.to_gpu(true);
+    auto *d_input_lowp = scratch.ensure<uint16_t>(lowp_key, static_cast<size_t>(g_input_f32.numel()));
 
     const void *d_input = g_input_f32.data<float>();
     cudaDataType_t d_input_type = CUDA_R_32F;
@@ -161,54 +185,28 @@ void TensorTool::gemm_lowp(const StorageTensor &s_weight, const void *d_input_lo
               name);
 }
 
-void TensorTool::embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32,
-                                  const GPUTensor &g_hidden_f32,
-                                  CudaScratch &scratch) {
-    GPUTensor g_input_i32 = c_input_i32.to_gpu(scratch, scratch_key::kInput,
-                                               "cudaMemcpy embedding token ids 失败");
+void TensorTool::embedding_lookup(const StorageTensor &s_table, const GPUTensor &g_input_i32,
+                                  const GPUTensor &g_hidden_f32, void *stream) {
     // 量化表（如 DeepSeek 的 Q4_K token_embd）直接走量化直算查表：量化常驻、按行反量化，
     // 不把整张 [vocab,hidden] 表展开成 F16（省近 0.4GB 显存 + 消除大 F16 lease）。
     if (Quant::is_quantized_dtype(s_table.dtype)) {
-        CudaWeight *q = global_cuda_weight_pool().cached_weight(s_table);
+        const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_table);
         if (q == nullptr) {
             throw std::runtime_error("TensorTool::embedding_lookup 量化表超过 CudaWeightPool 上限: " + s_table.name);
         }
         const int vocab = static_cast<int>(s_table.shape[0]);
         const size_t row_bytes = q->bytes / static_cast<size_t>(vocab);
-        launch_quant_embedding(static_cast<int>(s_table.dtype), g_input_i32.data<int>(),
+        launch_quant_embedding(s_table.dtype, g_input_i32.data<int>(),
                                g_hidden_f32.data<float>(), static_cast<const uint8_t *>(q->ptr),
                                row_bytes, static_cast<int>(s_table.shape[1]),
-                               static_cast<int>(c_input_i32.numel()), nullptr);
+                               static_cast<int>(g_input_i32.numel()), stream);
         return;
     }
     GPUTensor g_table_u16 = s_table.to_gpu(true);
     launch_embedding_lookup(g_input_i32.data<int>(), g_hidden_f32.data<float>(),
                             g_table_u16.data<uint16_t>(),
-                            static_cast<int>(c_input_i32.numel()), static_cast<int>(s_table.shape[0]),
+                            static_cast<int>(g_input_i32.numel()), static_cast<int>(s_table.shape[0]),
                             static_cast<int>(s_table.shape[1]), embedding_weight_type_of(g_table_u16.dtype),
-                            nullptr);
-}
-
-void TensorTool::embedding_lookup_device(const StorageTensor &s_table, const int *d_token,
-                                         const GPUTensor &g_hidden_f32, void *stream) {
-    // token id 直接来自 device buffer，input_size 恒为 1（decode 单 token）。
-    if (Quant::is_quantized_dtype(s_table.dtype)) {
-        CudaWeight *q = global_cuda_weight_pool().cached_weight(s_table);
-        if (q == nullptr) {
-            throw std::runtime_error("TensorTool::embedding_lookup_device 量化表超过 CudaWeightPool 上限: " + s_table.name);
-        }
-        const int vocab = static_cast<int>(s_table.shape[0]);
-        const size_t row_bytes = q->bytes / static_cast<size_t>(vocab);
-        launch_quant_embedding(static_cast<int>(s_table.dtype), d_token, g_hidden_f32.data<float>(),
-                               static_cast<const uint8_t *>(q->ptr), row_bytes,
-                               static_cast<int>(s_table.shape[1]), /*input_size=*/1, stream);
-        return;
-    }
-    GPUTensor g_table_u16 = s_table.to_gpu(true);
-    launch_embedding_lookup(d_token, g_hidden_f32.data<float>(),
-                            g_table_u16.data<uint16_t>(),
-                            /*input_size=*/1, static_cast<int>(s_table.shape[0]),
-                            static_cast<int>(s_table.shape[1]), embedding_weight_type_of(s_table.dtype),
                             stream);
 }
 

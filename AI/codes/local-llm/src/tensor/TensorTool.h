@@ -29,12 +29,8 @@ public:
     static void gemm_lowp(const StorageTensor &s_weight, const void *d_input_lowp, int64_t input_rows,
                           const GPUTensor &g_output_f32, const char *name = "");
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
-    static void embedding_lookup(const StorageTensor &s_table, CPUTensor c_input_i32, const GPUTensor &g_hidden_f32,
-                                 CudaScratch &scratch);
-    // decode 单 token 版：token id 从 device buffer d_token 读取（不做 H2D），
-    // 使 embedding 可纳入 CUDA Graph 一次 capture、后续 replay。
-    static void embedding_lookup_device(const StorageTensor &s_table, const int *d_token, const GPUTensor &g_hidden_f32,
-                                        void *stream = nullptr);
+    static void embedding_lookup(const StorageTensor &s_table, const GPUTensor &g_input_i32,
+                                 const GPUTensor &g_hidden_f32, void *stream = nullptr);
     // s_weight: RMSNorm 权重，对 g_input 归一化后写入 g_output。
     static void rms_norm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                          float eps, bool one_plus);
