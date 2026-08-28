@@ -138,11 +138,10 @@ CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight) {
         return nullptr;
     }
     if (bytes_ + bytes > limit) {
-        if (tracker_) {
-            tracker_->record(WeightLoadEventKind::EvictAll, "", bytes_, 0.0, 0);
-        }
-        items_.clear();
-        bytes_ = 0;
+        throw std::runtime_error("CudaWeightPool 超过上限，不再自动清空: tensor=" + s_weight.name +
+                                 " resident=" + std::to_string(bytes_) +
+                                 " incoming=" + std::to_string(bytes) +
+                                 " limit=" + std::to_string(limit));
     }
 
     CudaWeight device;

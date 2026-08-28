@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <stdexcept>
 
+#include <cuda_runtime.h>
+
 namespace {
 CudaWeightDequantPool *g_dequant_pool = nullptr;
 } // namespace
