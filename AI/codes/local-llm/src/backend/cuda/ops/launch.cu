@@ -65,6 +65,48 @@ void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes
     }
 }
 
+template <int QUANT_TYPE>
+void launch_quant_swiglu_typed(const uint8_t *gate_weight, const uint8_t *up_weight,
+                               size_t gate_row_bytes, size_t up_row_bytes,
+                               const float *x, float *act, int ffn_dim, int in_dim,
+                               bool f16_operands, cudaStream_t stream) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int blocks = (ffn_dim + warps_per_block - 1) / warps_per_block;
+    if (f16_operands) {
+        quant_swiglu_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, stream>>>(
+            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim);
+    } else {
+        quant_swiglu_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, stream>>>(
+            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim);
+    }
+}
+
+void launch_quant_swiglu(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
+                         size_t gate_row_bytes, size_t up_row_bytes, const float *x, float *act,
+                         int ffn_dim, int in_dim, bool f16_operands, void *stream) {
+    const cudaStream_t s = as_stream(stream);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_swiglu_typed<12>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
+                                          x, act, ffn_dim, in_dim, f16_operands, s);
+            break;
+        case DType::Q6_K:
+            launch_quant_swiglu_typed<14>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
+                                          x, act, ffn_dim, in_dim, f16_operands, s);
+            break;
+        case DType::Q5_0:
+            launch_quant_swiglu_typed<6>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
+                                         x, act, ffn_dim, in_dim, f16_operands, s);
+            break;
+        case DType::Q8_0:
+            launch_quant_swiglu_typed<8>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
+                                         x, act, ffn_dim, in_dim, f16_operands, s);
+            break;
+        default:
+            break;
+    }
+}
+
 size_t q8_1_row_bytes(int in_dim) {
     const int blocks_per_row = (in_dim + 31) / 32;
     return static_cast<size_t>(blocks_per_row) * 36;

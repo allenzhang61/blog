@@ -98,6 +98,12 @@ namespace {
         return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_QUANT_GEMV_Q8_1");
     }
 
+    bool should_use_moe_fused_swiglu(const char *name) {
+        if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU")) return false;
+        const std::string op_name = name ? name : "";
+        return op_name.rfind("ds.gemm.", 0) == 0;
+    }
+
 } // namespace
 
 //w*x=y
@@ -205,6 +211,33 @@ void TensorTool::gemm_lowp(const StorageTensor &s_weight, const void *d_input_lo
               static_cast<size_t>(input_rows),
               cuda_type_of(g_weight.dtype), d_input_type, g_weight.nbytes,
               name);
+}
+
+bool TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
+                              const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
+                              const char *name) {
+    if (!should_use_moe_fused_swiglu(name)) return false;
+    if (g_input_f32.rows() != 1 || g_input_f32.dtype != DType::F32 || g_act_f32.dtype != DType::F32) return false;
+    if (!Quant::is_quantized_dtype(s_gate_weight.dtype) || s_gate_weight.dtype != s_up_weight.dtype) return false;
+    if (s_gate_weight.shape.size() != 2 || s_up_weight.shape.size() != 2) return false;
+    if (s_gate_weight.shape != s_up_weight.shape) return false;
+    const int ffn_dim = static_cast<int>(s_gate_weight.shape[0]);
+    const int in_dim = static_cast<int>(s_gate_weight.shape[1]);
+    if (g_input_f32.cols() != in_dim || g_act_f32.rows() != 1 || g_act_f32.cols() != ffn_dim) return false;
+
+    const CudaWeight *gate_q = global_cuda_weight_pool().cached_weight(s_gate_weight);
+    const CudaWeight *up_q = global_cuda_weight_pool().cached_weight(s_up_weight);
+    const size_t gate_row_bytes = gate_q->bytes / static_cast<size_t>(ffn_dim);
+    const size_t up_row_bytes = up_q->bytes / static_cast<size_t>(ffn_dim);
+    const bool f16_operands = should_use_f16_quant_gemv_operands(name);
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, nullptr, gate_q->bytes + up_q->bytes);
+    launch_quant_swiglu(s_gate_weight.dtype,
+                        static_cast<const uint8_t *>(gate_q->ptr),
+                        static_cast<const uint8_t *>(up_q->ptr),
+                        gate_row_bytes, up_row_bytes,
+                        g_input_f32.data<float>(), g_act_f32.data<float>(),
+                        ffn_dim, in_dim, f16_operands, get_current_cuda_stream());
+    return true;
 }
 
 void TensorTool::embedding_lookup(const StorageTensor &s_table, const GPUTensor &g_input_i32,

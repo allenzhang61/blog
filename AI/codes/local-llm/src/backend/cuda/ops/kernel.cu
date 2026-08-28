@@ -1186,6 +1186,68 @@ template __global__ void quant_gemv_kernel<14, true>(const uint8_t *, size_t, co
 template __global__ void quant_gemv_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 template __global__ void quant_gemv_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 
+// MoE decode 专用：同一输入下 gate/up 两个 projection 融合，并直接写 act=SiLU(gate)*up。
+// 每个 warp 负责一个 FFN 输出元素，避免 egate/eup/silu_mul 三次小 kernel launch。
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                    size_t gate_row_bytes, size_t up_row_bytes,
+                                    const float *x, float *act, int ffn_dim, int in_dim) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    if (warp_id >= ffn_dim) return;
+
+    const uint8_t *gate_row = gate_weight + static_cast<size_t>(warp_id) * gate_row_bytes;
+    const uint8_t *up_row = up_weight + static_cast<size_t>(warp_id) * up_row_bytes;
+    float gate_acc = 0.0f;
+    float up_acc = 0.0f;
+    for (int k = lane; k < in_dim; k += 32) {
+        float wg;
+        float wu;
+        if (QUANT_TYPE == 12) {
+            wg = q4k_at(gate_row, k);
+            wu = q4k_at(up_row, k);
+        } else if (QUANT_TYPE == 14) {
+            wg = q6k_at(gate_row, k);
+            wu = q6k_at(up_row, k);
+        } else if (QUANT_TYPE == 6) {
+            wg = q50_at(gate_row, k);
+            wu = q50_at(up_row, k);
+        } else {
+            wg = q80_at(gate_row, k);
+            wu = q80_at(up_row, k);
+        }
+        wg = quant_gemv_operand<F16_OPERANDS>(wg);
+        wu = quant_gemv_operand<F16_OPERANDS>(wu);
+        const float xv = quant_gemv_operand<F16_OPERANDS>(x[k]);
+        gate_acc = fmaf(wg, xv, gate_acc);
+        up_acc = fmaf(wu, xv, up_acc);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        gate_acc += __shfl_down_sync(0xffffffff, gate_acc, offset);
+        up_acc += __shfl_down_sync(0xffffffff, up_acc, offset);
+    }
+    if (lane == 0) {
+        act[warp_id] = gate_acc / (1.0f + expf(-gate_acc)) * up_acc;
+    }
+}
+
+template __global__ void quant_swiglu_kernel<12, false>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                        const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<14, false>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                        const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<6, false>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                       const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<8, false>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                       const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<12, true>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                       const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<14, true>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                       const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<6, true>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                      const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<8, true>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                      const float *, float *, int, int);
+
 // ---- llama.cpp-style Q8_1 activation + quant GEMV（实验路径）----
 // Q8_1 activation block: f16 d + f16 sum + int8 qs[32] = 36 bytes.
 // d = max(abs(x)) / 127, qs[i] = round(x[i] / d), sum = d * sum(qs)。

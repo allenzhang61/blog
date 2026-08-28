@@ -44,6 +44,12 @@ void launch_quant_gemv_q8_1(DType quant_type, const uint8_t *weight, size_t row_
                             const uint8_t *x_q8_1, float *y,
                             int out_dim, int in_dim, void *stream);
 
+// DeepSeek MoE decode 专用：同时计算 gate/up 两个量化 GEMV，并直接写出
+// SiLU(gate) * up，减少 egate + eup + silu_mul 三次 launch 和中间张量写回。
+void launch_quant_swiglu(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
+                         size_t gate_row_bytes, size_t up_row_bytes, const float *x, float *act,
+                         int ffn_dim, int in_dim, bool f16_operands, void *stream);
+
 // SwiGLU 门控：out = SiLU(gate) * up，n 个元素。
 void launch_silu_mul(const float *gate, const float *up, float *out, int n, void *stream);
 

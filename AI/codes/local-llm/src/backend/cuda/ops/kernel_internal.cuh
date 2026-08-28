@@ -31,6 +31,10 @@ __global__ void bf16_gemv_kernel(const uint16_t *weight, const uint16_t *x, floa
 template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                   float *y, int out_dim, int in_dim, int m);
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                    size_t gate_row_bytes, size_t up_row_bytes,
+                                    const float *x, float *act, int ffn_dim, int in_dim);
 __global__ void quantize_q8_1_kernel(const float *x, uint8_t *x_q8_1, int in_dim, int m, int blocks_per_row);
 template <int QUANT_TYPE>
 __global__ void quant_gemv_q8_1_kernel(const uint8_t *weight, size_t row_bytes, const uint8_t *x_q8_1,

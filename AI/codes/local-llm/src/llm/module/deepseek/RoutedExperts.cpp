@@ -62,8 +62,6 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
     const bool decode_device = (input_size == 1 && route.decode_device);
     const float *weights = decode_device ? nullptr : route.c_weights_f32.data<float>();
 
-    auto g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, ffn}, DType::F32);
-    auto g_up_out_f32 = GPUTensor(s, scratch_key::kUp, {1, ffn}, DType::F32);
     auto g_act_f32 = GPUTensor(s, scratch_key::kAct, {1, ffn}, DType::F32);
     auto g_expert_out_f32 = GPUTensor(
         s, scratch_key::kExpertOut, {1, hidden_size}, DType::F32);
@@ -74,11 +72,16 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
         for (int r = 0; r < k; ++r) {
             const size_t route_idx = static_cast<size_t>(input_index) * k + r;
             const int e = expert_ids[route_idx];
-            TensorTool::gemm(s_gate_experts_[e], g_tok_in_f32, g_gate_out_f32, s, scratch_key::kFfnInLowp,
-                             "ds.gemm.egate");
-            TensorTool::gemm(s_up_experts_[e], g_tok_in_f32, g_up_out_f32, s, scratch_key::kFfnInLowp,
-                             "ds.gemm.eup");
-            TensorTool::silu_mul(g_gate_out_f32, g_up_out_f32, g_act_f32);
+            if (!TensorTool::quant_swiglu(s_gate_experts_[e], s_up_experts_[e],
+                                          g_tok_in_f32, g_act_f32, "ds.gemm.e_swiglu")) {
+                auto g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, ffn}, DType::F32);
+                auto g_up_out_f32 = GPUTensor(s, scratch_key::kUp, {1, ffn}, DType::F32);
+                TensorTool::gemm(s_gate_experts_[e], g_tok_in_f32, g_gate_out_f32, s, scratch_key::kFfnInLowp,
+                                 "ds.gemm.egate");
+                TensorTool::gemm(s_up_experts_[e], g_tok_in_f32, g_up_out_f32, s, scratch_key::kFfnInLowp,
+                                 "ds.gemm.eup");
+                TensorTool::silu_mul(g_gate_out_f32, g_up_out_f32, g_act_f32);
+            }
             TensorTool::gemm(s_down_experts_[e], g_act_f32, g_expert_out_f32, s, scratch_key::kActLowp,
                              "ds.gemm.edown");
             auto g_tok_moe_f32 = GPUTensor(g_moe_f32, token_offset, {1, hidden_size});

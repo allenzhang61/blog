@@ -240,8 +240,9 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 | `edown+sdown` + Q8_1 activation 直通（显式实验） | **~4.75–4.76** | **~1.30x** | 128 token 可跑通；Q4_K/Q6_K block-level dot 已实现，但当前仍不如 F32 activation 直通 |
 | 删除 weight-pool 自动清空和人工上限后 | — | — | `CudaWeightPool` 只受真实显存限制；若量化常驻 + dequant/runtime 超过 12GB，则直接 `cudaMalloc` OOM |
 | 阶段 1：DeepSeek decode 全量量化直通（显式实验） | **~34.6–35.6 t/s** | **~9.5x** | 短问答可跑通；全量 `ds.gemm.*` decode 跳过 `try_dequant()`，但输出数值基线已改变，长 story 会提前 EOS 或受真实 OOM 限制 |
+| 阶段 2：MoE fused gate/up/SiLU（显式实验） | **~36.8–37.8 t/s** | **~10.1x** | 在阶段 1 基础上打开 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1`，decode 的 routed/shared experts 用 fused `gate+up+SiLU` quant kernel；`edown/sdown` 仍走阶段 1 quant GEMV |
 
-> 正确性：`What is the capital of France?` → `The capital of France is Paris.`；Qwen/DeepSeek 功能测试改为 exact-output 断言，211 上 `ctest` 5/5 通过。
+> 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；默认 `ctest` 中基础 CUDA 与 Qwen 测试通过，但 DeepSeek exact-output 仍存在英文/中文事实回答分叉，不能把 quant-direct 路径作为默认正确性路径。
 
 与 llama.cpp 最新等条件 `232.33 t/s` 相比仍有巨大差距。当前真正可行的后续方向不再是盲目扩大全量量化直通，而是按 exact-output 测试逐项推进：
 
@@ -268,6 +269,15 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 - 结果：生成 `The capital of France is Paris.`，实际 decode 7 tokens，stdout 吞吐约 `34.6 t/s`，profile 汇总约 `35.6 t/s`。
 - 显存：采样峰值 `device used ≈ 9038 MiB`，`CudaWeightPool` 驻留峰值 `≈ 7048 MiB`，H2D 上传总量 `≈ 7048 MiB`，没有 weight-pool 驱逐。
 - 限制：长 story prompt 在阶段 1 下可能 prefill 后直接 EOS；128 token 场景在 12GB RTX 3080 上仍可能触发真实 `cudaMalloc` OOM，因为阶段 1 只移除 decode 的 F16 dequant，prefill/warmup 仍保留 safe dequant，且量化权重常驻会持续增长。
+
+阶段 2 初测：
+
+- 实现：新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1`，仅在 `m == 1`、gate/up 量化 dtype 与 shape 一致时接管 MoE decode；否则自动 fallback 到原 `egate/eup/sgate/sup + silu_mul`。
+- 覆盖：routed experts 的 `egate+eup+silu_mul` 合并为 `ds.gemm.e_swiglu`，shared experts 的 `sgate+sup+silu_mul` 合并为 `ds.gemm.s_swiglu`；`edown/sdown` 仍沿用阶段 1 的 quant GEMV。
+- 命令：`LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT=1 LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1 LOCAL_LLM_CUDA_DEQUANT_POOL_GB=0.05`，France prompt，`--max-output-tokens 16 --profile --profile-sample-every 4`。
+- 结果：生成 `The capital of France is Paris.`，实际 decode 7 tokens，stdout 吞吐约 `36.8–37.5 t/s`，profile 汇总约 `37.8 t/s`。
+- 命中：profile 中 `ds.gemm.e_swiglu` 2496 次、`ds.gemm.s_swiglu` 52 次；对应的 decode routed/shared gate/up/SiLU 已由 fused kernel 接管。
+- 显存：延迟分配 fallback-only gate/up scratch 后，采样峰值 `device used ≈ 9008 MiB`，`CudaWeightPool` 驻留峰值 `≈ 7050 MiB`，H2D 上传总量 `≈ 7050 MiB`，与阶段 1 基本同量级。
 
 ### 已落地成果小结
 

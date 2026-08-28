@@ -28,6 +28,12 @@ public:
     // 权重 dtype 必须与 prepare_lowp_input 传入的 weight_dtype 一致，否则 GEMM 结果错误。
     static void gemm_lowp(const StorageTensor &s_weight, const void *d_input_lowp, int64_t input_rows,
                           const GPUTensor &g_output_f32, const char *name = "");
+
+    // DeepSeek MoE decode 实验路径：量化 gate/up 同输入 GEMV + SiLU 融合。
+    // 成功接管时返回 true；不满足量化/shape/decode 条件时返回 false，由调用方 fallback。
+    static bool quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
+                             const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
+                             const char *name = "");
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
     static void embedding_lookup(const StorageTensor &s_table, const GPUTensor &g_input_i32,
                                  const GPUTensor &g_hidden_f32, void *stream = nullptr);
