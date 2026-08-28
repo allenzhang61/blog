@@ -65,6 +65,49 @@ void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes
     }
 }
 
+size_t q8_1_row_bytes(int in_dim) {
+    const int blocks_per_row = (in_dim + 31) / 32;
+    return static_cast<size_t>(blocks_per_row) * 36;
+}
+
+void launch_quantize_q8_1(const float *x, uint8_t *x_q8_1, int in_dim, int m, void *stream) {
+    const int blocks_per_row = (in_dim + 31) / 32;
+    const int blocks = m * blocks_per_row;
+    quantize_q8_1_kernel<<<blocks, 32, 0, as_stream(stream)>>>(x, x_q8_1, in_dim, m, blocks_per_row);
+}
+
+template <int QUANT_TYPE>
+void launch_quant_gemv_q8_1_typed(const uint8_t *weight, size_t row_bytes, const uint8_t *x_q8_1,
+                                  float *y, int out_dim, int in_dim, int blocks_per_row, cudaStream_t stream) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int blocks = (out_dim + warps_per_block - 1) / warps_per_block;
+    quant_gemv_q8_1_kernel<QUANT_TYPE><<<blocks, kBlock, 0, stream>>>(
+        weight, row_bytes, x_q8_1, y, out_dim, in_dim, blocks_per_row);
+}
+
+void launch_quant_gemv_q8_1(DType quant_type, const uint8_t *weight, size_t row_bytes,
+                            const uint8_t *x_q8_1, float *y,
+                            int out_dim, int in_dim, void *stream) {
+    const cudaStream_t s = as_stream(stream);
+    const int blocks_per_row = (in_dim + 31) / 32;
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_gemv_q8_1_typed<12>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, blocks_per_row, s);
+            break;
+        case DType::Q6_K:
+            launch_quant_gemv_q8_1_typed<14>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, blocks_per_row, s);
+            break;
+        case DType::Q5_0:
+            launch_quant_gemv_q8_1_typed<6>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, blocks_per_row, s);
+            break;
+        case DType::Q8_0:
+            launch_quant_gemv_q8_1_typed<8>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, blocks_per_row, s);
+            break;
+        default:
+            break;
+    }
+}
+
 void launch_quant_embedding(DType quant_type, const int *input, float *output, const uint8_t *table,
                             size_t row_bytes, int hidden_size, int input_size, void *stream) {
     cudaStream_t s = as_stream(stream);

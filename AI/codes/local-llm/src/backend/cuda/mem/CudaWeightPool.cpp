@@ -8,9 +8,7 @@
 #include "backend/cuda/mem/Quant.h"
 #include "utils/stats/WeightLoadTracker.h"
 
-#include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -73,12 +71,6 @@ void CudaWeightPool::memcpy_h2d_timed(void *dst, const void *src, size_t bytes,
     cudaEventDestroy(stop);
 }
 
-size_t CudaWeightPool::cache_limit_bytes() {
-    const char *env = std::getenv("LOCAL_LLM_CUDA_WEIGHT_POOL_GB");
-    const double gb = env ? std::max(std::atof(env), 0.0) : 10.0;
-    return static_cast<size_t>(gb * 1024.0 * 1024.0 * 1024.0);
-}
-
 cudaDataType_t CudaWeightPool::cuda_type_for(const StorageTensor &s_weight) {
     const DType dtype = s_weight.dtype;
     if (dtype == DType::BF16) {
@@ -133,17 +125,6 @@ CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight) {
         }
         bytes = elems * dtype_size_for(s_weight);
     }
-    const size_t limit = cache_limit_bytes();
-    if (bytes > limit) {
-        return nullptr;
-    }
-    if (bytes_ + bytes > limit) {
-        throw std::runtime_error("CudaWeightPool 超过上限，不再自动清空: tensor=" + s_weight.name +
-                                 " resident=" + std::to_string(bytes_) +
-                                 " incoming=" + std::to_string(bytes) +
-                                 " limit=" + std::to_string(limit));
-    }
-
     CudaWeight device;
     device.bytes = bytes;
     device.type = cuda_type_for(s_weight);

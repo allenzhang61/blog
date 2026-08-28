@@ -20,7 +20,8 @@ class WeightLoadTracker;
 
 // 通用的 CUDA 权重缓存：持有 cuBLAS handle，并按 tensor 名称惰性地把 host 端
 // （mmap）权重上传到 device 后缓存复用。与具体模型结构无关——只依赖通用的
-// TensorView（safetensors tensor 引用）。超过字节上限时整体清空重来。
+// TensorView（safetensors tensor 引用）。不设置人为缓存上限；显存不足时由 cudaMalloc
+// 直接报真实 OOM，避免静默清空导致重复 H2D 或隐藏容量问题。
 //
 // 注意：本类只负责“权重”这一类持久 device 内存；前向过程中反复覆盖的临时中间
 // 结果请用 CudaScratchBuffer，二者职责分离。
@@ -39,7 +40,7 @@ public:
 
     // 获取 device 权重缓存；首次访问时从 mmap host 权重上传到 GPU。
     // BF16/F16/F32 权重可直接用于 GEMM；量化权重以 CUDA_R_8I 标记原始字节，
-    // 使用前需由 Quant 反量化。单个权重超过上限时返回 nullptr。
+    // 使用前需由 Quant 反量化或由 quant-direct kernel 直接读取。
     CudaWeight *cached_weight(const StorageTensor &s_weight);
     // 只查询已经上传的 device 权重缓存；miss 时返回 nullptr，不触发上传。
     CudaWeight *find_cached_weight(const StorageTensor &s_weight);
@@ -58,9 +59,6 @@ private:
     size_t bytes_ = 0;
     // 懒加载追踪器（可选，不拥有）。
     WeightLoadTracker *tracker_ = nullptr;
-    // 返回本进程允许缓存的 CUDA 权重总字节数（可由环境变量覆盖）。
-    static size_t cache_limit_bytes();
-
     // 将 safetensors dtype 映射为 CUDA / cuBLAS dtype。
     static cudaDataType_t cuda_type_for(const StorageTensor &s_weight);
 

@@ -138,7 +138,7 @@ TEST(ModelFunctionalTest, DeepseekStoryPromptOutputsCoherentContinuation) {
     const CommandResult result = run_model(
         "deepseek", model_dir,
         "User: What is the capital of France?\n\nAssistant:", 7,
-        "LOCAL_LLM_CUDA_WEIGHT_POOL_GB=6 LOCAL_LLM_CUDA_DEQUANT_POOL_GB=3 ");
+        "LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 ");
 
     expect_generated_text_eq(result,
                              "The capital of France is Paris.");

@@ -28,7 +28,7 @@ public:
 
     // 确保 key 对应的缓冲至少能容纳 count 个 T 元素，返回 device 指针（T*）。
     // 已够大时复用旧内存，不够时重分配；分配失败信息用 key 标识。
-    // 仅对 float / uint16_t / int 做了显式实例化（见 .cpp）。
+    // 仅对常用 POD 类型做了显式实例化（见 .cpp）。
     template <typename T>
     T *ensure(const std::string &key, size_t count);
 
@@ -57,6 +57,7 @@ inline constexpr const char *kHidden = "hidden";               // 主隐状态 [
 inline constexpr const char *kLogits = "logits";               // lm_head 输出 [vocab]
 inline constexpr const char *kLogitsInLowp = "logits_in_lowp"; // lm_head gemm 输入低精度
 inline constexpr const char *kInputLowp = "input_lowp";        // gemm 输入的低精度缓冲
+inline constexpr const char *kInputQ8_1 = "input_q8_1";        // llama-style quant GEMV 的 Q8_1 输入缓冲
 
 // ---- qwen full attention ----
 inline constexpr const char *kFullProjection = "full_projection"; // q+gate 合并投影

@@ -1186,6 +1186,150 @@ template __global__ void quant_gemv_kernel<14, true>(const uint8_t *, size_t, co
 template __global__ void quant_gemv_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 template __global__ void quant_gemv_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 
+// ---- llama.cpp-style Q8_1 activation + quant GEMV（实验路径）----
+// Q8_1 activation block: f16 d + f16 sum + int8 qs[32] = 36 bytes.
+// d = max(abs(x)) / 127, qs[i] = round(x[i] / d), sum = d * sum(qs)。
+__global__ void quantize_q8_1_kernel(const float *x, uint8_t *x_q8_1, int in_dim, int m, int blocks_per_row) {
+    const int block = blockIdx.x;
+    const int row = block / blocks_per_row;
+    const int qblk = block - row * blocks_per_row;
+    if (row >= m) return;
+
+    const int lane = threadIdx.x;
+    const int k = qblk * 32 + lane;
+    const float v = (lane < 32 && k < in_dim) ? x[static_cast<size_t>(row) * in_dim + k] : 0.0f;
+
+    float amax = fabsf(v);
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_down_sync(0xffffffff, amax, offset));
+    }
+    amax = __shfl_sync(0xffffffff, amax, 0);
+    const float d = amax > 0.0f ? amax / 127.0f : 0.0f;
+    const float id = d > 0.0f ? 1.0f / d : 0.0f;
+
+    int q = __float2int_rn(v * id);
+    q = max(-127, min(127, q));
+
+    int qsum = q;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        qsum += __shfl_down_sync(0xffffffff, qsum, offset);
+    }
+
+    uint8_t *dst = x_q8_1 + static_cast<size_t>(block) * 36;
+    if (lane == 0) {
+        *reinterpret_cast<uint16_t *>(dst) = __half_as_ushort(__float2half(d));
+        *reinterpret_cast<uint16_t *>(dst + 2) = __half_as_ushort(__float2half(d * static_cast<float>(qsum)));
+    }
+    if (lane < 32) {
+        reinterpret_cast<int8_t *>(dst + 4)[lane] = static_cast<int8_t>(q);
+    }
+}
+
+template <int QUANT_TYPE>
+__global__ void quant_gemv_q8_1_kernel(const uint8_t *weight, size_t row_bytes, const uint8_t *x_q8_1,
+                                       float *y, int out_dim, int in_dim, int blocks_per_row) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    if (warp_id >= out_dim) return;
+
+    const uint8_t *row_base = weight + static_cast<size_t>(warp_id) * row_bytes;
+    float acc = 0.0f;
+    for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+        const int k = qblk * 32 + lane;
+        const uint8_t *x_blk = x_q8_1 + static_cast<size_t>(qblk) * 36;
+        const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk)));
+        const float xsum = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk + 2)));
+        const int8_t qx = (k < in_dim) ? reinterpret_cast<const int8_t *>(x_blk + 4)[lane] : 0;
+
+        if (QUANT_TYPE == 12) {
+            // Q4_K: w = d_w * scale * q - dmin_w * min.
+            // Q8_1 already stores sum(x) for this 32-wide block, so the min term can be
+            // accumulated once per block instead of per element:
+            // dot = d_w * scale * d_x * sum(q * qx) - dmin_w * min * sum(x).
+            const int super = qblk >> 3;
+            const int j = qblk & 7;
+            const uint8_t *base = row_base + static_cast<size_t>(super) * 144;
+            const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+            const float dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
+            const uint8_t *scales = base + 4;
+            const uint8_t *qs = base + 16;
+            const int pair = j >> 1;
+            const uint8_t packed = qs[pair * 32 + lane];
+            const int qw = (j & 1) ? (packed >> 4) : (packed & 0x0F);
+
+            int qdot = qw * static_cast<int>(qx);
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                qdot += __shfl_down_sync(0xffffffff, qdot, offset);
+            }
+            if (lane == 0) {
+                uint8_t sc, m;
+                q4k_scale_min(j, scales, sc, m);
+                acc = fmaf(dw * static_cast<float>(sc) * d, static_cast<float>(qdot), acc);
+                acc -= dmin * static_cast<float>(m) * xsum;
+            }
+            continue;
+        }
+        if (QUANT_TYPE == 14) {
+            // Q6_K: w = d_w * scale * q. Each 32-wide block has two 16-element
+            // scale groups, so reduce the two dot sums separately.
+            const int super = qblk >> 3;
+            const int sub = qblk & 7;
+            const int half = sub >> 2;
+            const int grp = sub & 3;
+            const int n = half * 128;
+            const uint8_t *base = row_base + static_cast<size_t>(super) * 210;
+            const uint8_t *ql = base;
+            const uint8_t *qh = base + 128;
+            const int8_t *scales = reinterpret_cast<const int8_t *>(base + 192);
+            const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 208)));
+            const uint8_t *qlp = ql + (n / 2);
+            const uint8_t *qhp = qh + (n / 4);
+            const int8_t *sc = scales + (n / 16);
+
+            int qw;
+            if (grp == 0) {
+                qw = static_cast<int8_t>((qlp[lane + 0] & 0xF) | (((qhp[lane] >> 0) & 3) << 4)) - 32;
+            } else if (grp == 1) {
+                qw = static_cast<int8_t>((qlp[lane + 32] & 0xF) | (((qhp[lane] >> 2) & 3) << 4)) - 32;
+            } else if (grp == 2) {
+                qw = static_cast<int8_t>((qlp[lane + 0] >> 4) | (((qhp[lane] >> 4) & 3) << 4)) - 32;
+            } else {
+                qw = static_cast<int8_t>((qlp[lane + 32] >> 4) | (((qhp[lane] >> 6) & 3) << 4)) - 32;
+            }
+
+            const int qprod = qw * static_cast<int>(qx);
+            int qdot0 = lane < 16 ? qprod : 0;
+            int qdot1 = lane >= 16 ? qprod : 0;
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                qdot0 += __shfl_down_sync(0xffffffff, qdot0, offset);
+                qdot1 += __shfl_down_sync(0xffffffff, qdot1, offset);
+            }
+            if (lane == 0) {
+                const float s0 = static_cast<float>(sc[grp * 2 + 0]);
+                const float s1 = static_cast<float>(sc[grp * 2 + 1]);
+                acc = fmaf(dw * d, s0 * static_cast<float>(qdot0) + s1 * static_cast<float>(qdot1), acc);
+            }
+            continue;
+        }
+        const float xv = d * static_cast<float>(qx);
+        float w = 0.0f;
+        if (k < in_dim) {
+            if (QUANT_TYPE == 6) w = q50_at(row_base, k);
+            else w = q80_at(row_base, k);
+        }
+        acc = fmaf(w, xv, acc);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xffffffff, acc, offset);
+    }
+    if (lane == 0) y[warp_id] = acc;
+}
+
+template __global__ void quant_gemv_q8_1_kernel<12>(const uint8_t *, size_t, const uint8_t *, float *, int, int, int);
+template __global__ void quant_gemv_q8_1_kernel<14>(const uint8_t *, size_t, const uint8_t *, float *, int, int, int);
+template __global__ void quant_gemv_q8_1_kernel<6>(const uint8_t *, size_t, const uint8_t *, float *, int, int, int);
+template __global__ void quant_gemv_q8_1_kernel<8>(const uint8_t *, size_t, const uint8_t *, float *, int, int, int);
+
 // 量化直算 Embedding 查表：table 量化常驻（每 token 一行 hidden 个元素、row_bytes 字节），
 // 按 token id 只反量化命中的那一行到 f32，避免把整张 [vocab,hidden] 表展开成 F16。
 template <int QUANT_TYPE>

@@ -29,6 +29,7 @@ T *CudaScratch::ensure(const std::string &key, size_t count) {
 
 // 前向过程中用到的元素类型：显式实例化，供其他 TU 链接。
 template float *CudaScratch::ensure<float>(const std::string &, size_t);
+template uint8_t *CudaScratch::ensure<uint8_t>(const std::string &, size_t);
 template uint16_t *CudaScratch::ensure<uint16_t>(const std::string &, size_t);
 template int *CudaScratch::ensure<int>(const std::string &, size_t);
 
