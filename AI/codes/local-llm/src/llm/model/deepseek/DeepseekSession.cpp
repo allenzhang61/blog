@@ -7,6 +7,7 @@
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
 #include "backend/cuda/mem/CudaWeight.h"
+#include "backend/cuda/ops/kernel.cuh"
 
 #include <algorithm>
 #include <cmath>
@@ -30,15 +31,21 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, std::vector<int> 
     max_seq_len_ = static_cast<size_t>(h_input_i32_.numel()) + static_cast<size_t>(max_output_tokens);
 
     // latent KV cache：每层 [max_seq_len, kv_lora + qk_rope] float；
+    // latent Q8_1 cache：每层 [max_seq_len, q8_1_row_bytes(kv_lora)]，供 MLA absorption 对齐 quant-direct 语义；
     // expanded KV-B cache：每层 [max_seq_len, n_heads * (qk_nope + v_head)] float。
     const int kv_total = config.kv_lora_rank + config.qk_rope_head_dim;
     const int kvb_out = config.num_heads * (config.qk_nope_head_dim + config.v_head_dim);
+    const size_t latent_q8_1_row_bytes = q8_1_row_bytes(config.kv_lora_rank);
     kv_caches.resize(config.num_layers);
     for (int i = 0; i < config.num_layers; ++i) {
         const size_t latent_bytes = static_cast<size_t>(max_seq_len_) * kv_total * sizeof(float);
         kv_caches[i].g_cache_f32 = GPUTensor(
             CudaWeight(latent_bytes, CUDA_R_32F, false, "deepseek.kv_cache"),
             {static_cast<int64_t>(max_seq_len_), static_cast<int64_t>(kv_total)});
+        const size_t latent_q8_1_bytes = static_cast<size_t>(max_seq_len_) * latent_q8_1_row_bytes;
+        kv_caches[i].latent_q8_1_cache = CudaWeight(
+            latent_q8_1_bytes, CUDA_R_8I, false, "deepseek.latent_q8_1_cache");
+        kv_caches[i].latent_q8_1_row_bytes = latent_q8_1_row_bytes;
         const size_t kvb_bytes = static_cast<size_t>(max_seq_len_) * kvb_out * sizeof(float);
         kv_caches[i].g_kv_b_cache_f32 = GPUTensor(
             CudaWeight(kvb_bytes, CUDA_R_32F, false, "deepseek.kv_b_cache"),
@@ -95,19 +102,17 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, std::vector<int> 
     }
     g_inv_freq_f32 = CPUTensor(h_inv_freq_f32.data(), {half}, DType::F32)
                      .to_gpu(cuda_scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
-    d_token_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "deepseek decode token device buffer"));
-    d_pos_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "deepseek decode pos device buffer"));
-}
-
-DeepseekSession::~DeepseekSession() {
-    cuda_free_device(d_token_);
-    cuda_free_device(d_pos_);
+    d_token_ = GPUTensor(
+        CudaWeight(sizeof(int), CUDA_R_32I, false, "deepseek decode token device buffer"), {1});
+    d_pos_ = GPUTensor(
+        CudaWeight(sizeof(int), CUDA_R_32I, false, "deepseek decode pos device buffer"), {1});
 }
 
 size_t DeepseekSession::kv_state_bytes() const {
     size_t total = 0;
     for (const auto &kv : kv_caches) {
         total += kv.g_cache_f32.nbytes;
+        total += kv.latent_q8_1_cache.bytes;
         total += kv.g_kv_b_cache_f32.nbytes;
     }
     return total;

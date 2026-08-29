@@ -114,7 +114,7 @@ void FullAttention::decode(QwenSession &session, const GPUTensor &g_hidden_f32, 
     // decode kernel 从 device buffer 读 pos，使 kernel 参数在步与步之间不变（CUDA Graph 前置条件）。
     // pos 的 device 值由 QwenModel 在每步 graph 外统一写入 session.d_pos()，此处只读地址、不做同步 H2D
     //（若在此处做同步 H2D 会破坏 graph capture）。
-    int *d_pos = session.d_pos();
+    int *d_pos = session.d_pos().data<int>();
     // attend 的 smem 现按 max_seq_len 上限固定，故传入真实 max_seq_len（不再是 0）。
     const int max_seq_len = static_cast<int>(session.max_seq_len_);
 

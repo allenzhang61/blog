@@ -28,6 +28,9 @@ void cuda_memcpy_d2h(void *dst, const void *src, size_t bytes, const std::string
 void cuda_memcpy2d_d2d(void *dst, size_t dpitch, const void *src, size_t spitch,
                        size_t width_bytes, size_t height, const std::string &what);
 
+// 在当前 CUDA 流上异步 memset，保证与当前流上的 kernel / async copy 保持顺序。
+void cuda_memset_async(void *dst, int value, size_t bytes, const std::string &what);
+
 // 分配 device 内存，失败时抛异常。
 void *cuda_malloc_device(size_t bytes, const std::string &what);
 

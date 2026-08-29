@@ -18,7 +18,7 @@
 // 层级 GPU 计时必须走 event。
 //
 // 用法：在某段 kernel 序列的作用域开头放一行
-//     ScopedGpuTimer t("mlp.gemm.down", stream, bytes_read);
+//     ScopedGpuTimer t("mlp.gemm.down", bytes_read);
 // 作用域结束即完成计时。bytes 传该段从显存读取的权重字节数，用于算有效带宽；
 // 不关心带宽时传 0。
 //
@@ -32,7 +32,7 @@ class ScopedGpuTimer {
 public:
     // name 必须是静态存储期字符串（字面量）：热路径只存指针，不拷贝，避免每算子
     // 一次 std::string 分配。实测该分配是 profile 开销的主因（远大于 event 本身）。
-    ScopedGpuTimer(const char *name, cudaStream_t stream, size_t bytes = 0);
+    ScopedGpuTimer(const char *name, size_t bytes = 0);
     ~ScopedGpuTimer();
 
     ScopedGpuTimer(const ScopedGpuTimer &) = delete;

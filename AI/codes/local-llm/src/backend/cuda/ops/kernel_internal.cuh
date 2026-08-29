@@ -9,18 +9,10 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-#include "../common.h"
-
 constexpr int kBlock = 256;
 // linear attention 递归 kernel 每个 head 一个 block，state 有 k_dim*v_dim=16384 个元素，
 // 用更大的 block（512 线程）减少每线程串行迭代次数，提高 SM 内延迟隐藏。
 constexpr int kLinearRecurBlock = 512;
-
-// 传入 nullptr 时解析到「当前流」（decode 阶段为非阻塞流，其余为 0 号流）；
-// 显式传入非 nullptr 时按原样使用。
-inline cudaStream_t as_stream(void *stream) {
-    return stream ? static_cast<cudaStream_t>(stream) : get_current_cuda_stream();
-}
 
 inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 
@@ -31,6 +23,9 @@ __global__ void bf16_gemv_kernel(const uint16_t *weight, const uint16_t *x, floa
 template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                   float *y, int out_dim, int in_dim, int m);
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void quant_gemv_add_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
+                                      float *y, int out_dim, int in_dim);
 template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_matmul_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                     float *y, int out_dim, int in_dim, int m);
@@ -180,6 +175,49 @@ __global__ void mla_gather_latent_device_pos_kernel(const float *kv_cache, float
                                                     int kv_lora, int qk_rope, const int *d_pos);
 __global__ void mla_store_kv_b_device_pos_kernel(const float *kv_b_new, float *kv_b_cache,
                                                  int kvb_out, const int *d_pos);
+__global__ void mla_store_latent_q8_1_device_pos_kernel(const float *kv_cache, uint8_t *latent_q8_1_cache,
+                                                        int kv_lora, int qk_rope, size_t row_bytes,
+                                                        int blocks_per_row, const int *d_pos);
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void mla_absorb_q_nope_kernel(const float *q, const uint8_t *kv_b_weight,
+                                         size_t row_bytes, float *q_abs, int n_heads,
+                                         int qk_nope, int qk_rope, int v_head, int kv_lora);
+template <bool F16_OPERANDS>
+__global__ void mla_absorb_q4_xsum_delta_kernel(const float *q, const uint8_t *kv_b_weight,
+                                                size_t row_bytes, float *q_abs_xsum_delta,
+                                                int n_heads, int qk_nope, int qk_rope,
+                                                int v_head, int blocks_per_row);
+__global__ void mla_absorb_attend_device_pos_kernel(const float *q_abs, const float *q,
+                                                    const uint8_t *latent_q8_1_cache,
+                                                    size_t latent_q8_1_row_bytes,
+                                                    const float *q_abs_xsum_delta, float *attn_xsum_delta,
+                                                    const float *kv_cache,
+                                                    float *attn_latent,
+                                                    int n_heads, int qk_nope, int qk_rope, int kv_lora,
+                                                    const int *d_pos, float softmax_scale);
+__global__ void mla_absorb_scores_device_pos_kernel(const float *q_abs, const float *q,
+                                                    const uint8_t *latent_q8_1_cache,
+                                                    size_t latent_q8_1_row_bytes,
+                                                    const float *q_abs_xsum_delta, const float *kv_cache,
+                                                    float *scores, int n_heads, int qk_nope, int qk_rope,
+                                                    int kv_lora, const int *d_pos, int max_seq_len,
+                                                    float softmax_scale);
+__global__ void mla_absorb_context_device_pos_kernel(const float *scores, const uint8_t *latent_q8_1_cache,
+                                                     size_t latent_q8_1_row_bytes, float *attn_xsum_delta,
+                                                     float *attn_latent, int n_heads, int kv_lora,
+                                                     const int *d_pos, int max_seq_len);
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void mla_project_v_device_pos_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
+                                                const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
+                                                float *kv_b_cache, int n_heads, int qk_nope, int v_head,
+                                                int kv_lora, const int *d_pos);
+__global__ void mla_absorb_context_v_device_pos_kernel(const float *scores, const float *kv_b_cache,
+                                                       float *attn, int n_heads, int qk_nope, int v_head,
+                                                       const int *d_pos, int max_seq_len);
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void mla_absorb_v_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
+                                    const float *attn_latent, const float *attn_xsum_delta, float *attn,
+                                    int n_heads, int qk_nope, int v_head, int kv_lora);
 
 // ---- MoE ----
 __global__ void moe_router_topk_kernel(const float *router_logits, int *top_idx, float *top_w,

@@ -102,6 +102,13 @@ GPUTensor::GPUTensor(const GPUTensor &parent, const size_t byte_offset,
     this->weight_view_lease_ = parent.weight_view_lease_;
 }
 
+void GPUTensor::setdata_from_host(const void *host_data, size_t bytes, const std::string &what) const {
+    if (data_ == nullptr) {
+        throw std::runtime_error("GPUTensor::setdata 需要 device data: " + name);
+    }
+    cuda_memcpy_h2d(data_, host_data, bytes, what);
+}
+
 CPUTensor GPUTensor::to_host(CPUScratch &scratch, const std::string &key, const std::string &what) const {
     if (data_ == nullptr) {
         throw std::runtime_error("GPUTensor::to_host 需要 device data: " + name);

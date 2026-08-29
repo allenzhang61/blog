@@ -34,12 +34,24 @@ public:
         return static_cast<std::remove_cv_t<T> *>(data_);
     }
 
+    // 将一个 host 标量异步写入当前 CUDA stream 上的单元素 tensor。
+    template <typename T>
+    void set_data(const T &value, const std::string &what = "GPUTensor::setdata") const {
+        using U = std::remove_cv_t<T>;
+        validate_tensor_cpp_type<U>(dtype, name);
+        if (numel() != 1) {
+            throw std::runtime_error("GPUTensor::setdata 仅支持单元素 tensor: " + name);
+        }
+        setdata_from_host(&value, sizeof(U), what);
+    }
+
     CPUTensor to_host(CPUScratch &scratch, const std::string &key, const std::string &what) const;
 
 private:
     friend class StorageTensor;
 
     void init_from_weight(const CudaWeight &weight, std::vector<int64_t> shape);
+    void setdata_from_host(const void *host_data, size_t bytes, const std::string &what) const;
 
     void *data_ = nullptr;
     CudaWeightPool *pool_ = nullptr;

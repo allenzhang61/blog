@@ -86,7 +86,7 @@ CudaWeight CudaWeightDequantPool::cached_dequant(const CudaWeight &quant) {
     weight->num_elements = quant.num_elements;
     weight->name = key;
     Quant::dequantize_to_f16(quant, static_cast<uint16_t *>(weight->ptr), quant.num_elements,
-                             Quant::dtype_code(quant.dtype), get_current_cuda_stream());
+                             Quant::dtype_code(quant.dtype));
 
     lru_.push_front(key);
     items_.emplace(key, Entry{weight, lru_.begin()});

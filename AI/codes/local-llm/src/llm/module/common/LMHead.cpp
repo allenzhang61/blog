@@ -38,7 +38,7 @@ int LMHead::forward(const StorageTensor &s_weight, SessionBase &session,
 }
 
 void LMHead::forward_argmax_device(const StorageTensor &s_weight, SessionBase &session,
-                                   const GPUTensor &g_hidden_f32, int *d_out_token, void *stream) {
+                                   const GPUTensor &g_hidden_f32, const GPUTensor &g_out_token_i32) {
     CudaScratch &scratch = session.cuda_scratch;
     const int vocab_size = static_cast<int>(s_weight.shape[0]);
 
@@ -50,5 +50,5 @@ void LMHead::forward_argmax_device(const StorageTensor &s_weight, SessionBase &s
                                deepseek_session->trace_pos, deepseek_session->trace_layer);
     }
     // GPU argmax 直接把下一个 token id 写到 device buffer，全程留 device，供 CUDA Graph replay。
-    TensorTool::argmax(g_logits_f32, d_out_token, vocab_size, stream);
+    TensorTool::argmax(g_logits_f32, g_out_token_i32.data<int>(), vocab_size);
 }

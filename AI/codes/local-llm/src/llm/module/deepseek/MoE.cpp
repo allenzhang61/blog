@@ -40,9 +40,8 @@ void MoE::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32) {
 
     const auto g_moe_out_f32 = GPUTensor(s, scratch_key::kMoeOut, {input_size, hidden_size}, DType::F32);
     float *d_moe_out = g_moe_out_f32.data<float>();
-    check_cuda(cudaMemsetAsync(d_moe_out, 0, static_cast<size_t>(input_size) * hidden_size * sizeof(float),
-                               get_current_cuda_stream()),
-               "ds.moe.zero");
+    cuda_memset_async(d_moe_out, 0, static_cast<size_t>(input_size) * hidden_size * sizeof(float),
+                      "ds.moe.zero");
 
     routed_experts_.forward(session, g_normed_f32, route, g_moe_out_f32);
     shared_experts_.forward(session, g_normed_f32, g_moe_out_f32);

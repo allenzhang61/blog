@@ -115,7 +115,7 @@ TEST(LaunchAddTest, AddsTwoFloatArrays) {
     ASSERT_EQ(cudaSuccess, d_a.copy_from(a));
     ASSERT_EQ(cudaSuccess, d_b.copy_from(b));
 
-    launch_add(d_a.get(), d_b.get(), d_out.get(), static_cast<int>(a.size()), nullptr);
+    launch_add(d_a.get(), d_b.get(), d_out.get(), static_cast<int>(a.size()));
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -142,7 +142,7 @@ TEST(LaunchAddTest, SupportsInPlaceOutput) {
     ASSERT_EQ(cudaSuccess, d_residual.copy_from(residual));
 
     launch_add(d_hidden.get(), d_residual.get(), d_hidden.get(),
-               static_cast<int>(original.size()), nullptr);
+               static_cast<int>(original.size()));
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -170,8 +170,7 @@ TEST(LaunchSiluMulTest, AppliesSiluGateAndMultiply) {
     ASSERT_EQ(cudaSuccess, d_gate.copy_from(gate));
     ASSERT_EQ(cudaSuccess, d_up.copy_from(up));
 
-    launch_silu_mul(d_gate.get(), d_up.get(), d_out.get(), static_cast<int>(gate.size()),
-                    nullptr);
+    launch_silu_mul(d_gate.get(), d_up.get(), d_out.get(), static_cast<int>(gate.size()));
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -221,7 +220,7 @@ TEST(LaunchQuantMatmulTest, ComputesQ80MultipleRows) {
     ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
 
     launch_quant_matmul(DType::Q8_0, d_weight.get(), row_bytes, d_x.get(), d_out.get(),
-                        out_dim, in_dim, m, false, nullptr);
+                        out_dim, in_dim, m, false);
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -278,9 +277,9 @@ TEST(LaunchQuantMatmulQ81Test, ComputesQ80MultipleRows) {
     ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
     ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
 
-    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m);
     launch_quant_matmul_q8_1(DType::Q8_0, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
-                             out_dim, in_dim, m, nullptr);
+                             out_dim, in_dim, m);
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -315,13 +314,13 @@ TEST(LaunchQuantizeQ81Test, SupportsRawAndQuantizedBlockSums) {
 
     std::vector<uint8_t> encoded(q8_1_row_bytes(in_dim), 0);
 
-    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr, false);
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, false);
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     ASSERT_EQ(cudaSuccess, d_x_q8_1.copy_to(encoded));
     const float quantized_sum = half_to_float(read_u16_le(encoded, 2));
 
-    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr, true);
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, true);
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
     ASSERT_EQ(cudaSuccess, d_x_q8_1.copy_to(encoded));
@@ -366,9 +365,9 @@ TEST(LaunchQuantMatmulQ81Test, ComputesQ4KScaleAndMinCompensation) {
     ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
     ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
 
-    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m);
     launch_quant_matmul_q8_1(DType::Q4_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
-                             out_dim, in_dim, m, nullptr);
+                             out_dim, in_dim, m);
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -413,9 +412,9 @@ TEST(LaunchQuantMatmulQ81Test, ComputesQ6KScaleGroups) {
     ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
     ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
 
-    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m);
     launch_quant_matmul_q8_1(DType::Q6_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
-                             out_dim, in_dim, m, nullptr);
+                             out_dim, in_dim, m);
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -460,9 +459,9 @@ TEST(LaunchQuantMatmulQ81MmqTest, ComputesQ4KScaleAndMinCompensation) {
     ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
     ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
 
-    launch_quantize_q8_1_mmq(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quantize_q8_1_mmq(d_x.get(), d_x_q8_1.get(), in_dim, m);
     launch_quant_matmul_q8_1_mmq(DType::Q4_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
-                                 out_dim, in_dim, m, nullptr);
+                                 out_dim, in_dim, m);
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -506,9 +505,9 @@ TEST(LaunchQuantMatmulQ81MmqTest, ComputesQ6KScaleGroups) {
     ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
     ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
 
-    launch_quantize_q8_1_mmq(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quantize_q8_1_mmq(d_x.get(), d_x_q8_1.get(), in_dim, m);
     launch_quant_matmul_q8_1_mmq(DType::Q6_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
-                                 out_dim, in_dim, m, nullptr);
+                                 out_dim, in_dim, m);
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());

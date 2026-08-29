@@ -1215,6 +1215,40 @@ template __global__ void quant_gemv_kernel<14, true>(const uint8_t *, size_t, co
 template __global__ void quant_gemv_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 template __global__ void quant_gemv_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void quant_gemv_add_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
+                                      float *y, int out_dim, int in_dim) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    if (warp_id >= out_dim) return;
+    const uint8_t *row_base = weight + static_cast<size_t>(warp_id) * row_bytes;
+
+    float acc = 0.0f;
+    for (int k = lane; k < in_dim; k += 32) {
+        float w;
+        if (QUANT_TYPE == 12) w = q4k_at(row_base, k);
+        else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
+        else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
+        else w = q80_at(row_base, k);
+        w = quant_gemv_operand<F16_OPERANDS>(w);
+        const float xv = quant_gemv_operand<F16_OPERANDS>(x[k]);
+        acc = fmaf(w, xv, acc);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xffffffff, acc, offset);
+    }
+    if (lane == 0) y[warp_id] += acc;
+}
+
+template __global__ void quant_gemv_add_kernel<12, false>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<14, false>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<6, false>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<8, false>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<12, true>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<14, true>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int);
+
 // Prefill 专用量化 MATMUL：每个 warp 负责一个输出元素 y[row,out]。
 // grid 覆盖 m*out_dim，避免 quant_gemv_kernel 在 token 维串行导致 prefill 并行度不足。
 template <int QUANT_TYPE, bool F16_OPERANDS>
@@ -2325,6 +2359,539 @@ __global__ void mla_store_kv_b_device_pos_kernel(const float *kv_b_new, float *k
     if (i >= kvb_out) return;
     kv_b_cache[static_cast<size_t>(d_pos[0]) * kvb_out + i] = kv_b_new[i];
 }
+
+__global__ void mla_store_latent_q8_1_device_pos_kernel(const float *kv_cache, uint8_t *latent_q8_1_cache,
+                                                        int kv_lora, int qk_rope, size_t row_bytes,
+                                                        int blocks_per_row, const int *d_pos) {
+    const int qblk = blockIdx.x;
+    const int lane = threadIdx.x & 31;
+    if (qblk >= blocks_per_row) return;
+    const int pos = d_pos[0];
+    const int kv_total = kv_lora + qk_rope;
+    const int k = qblk * 32 + lane;
+    const float v = (k < kv_lora) ? kv_cache[static_cast<size_t>(pos) * kv_total + k] : 0.0f;
+
+    float amax = fabsf(v);
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_down_sync(0xffffffff, amax, offset));
+    }
+    amax = __shfl_sync(0xffffffff, amax, 0);
+    const float d = amax > 0.0f ? amax / 127.0f : 0.0f;
+    const float id = d > 0.0f ? 1.0f / d : 0.0f;
+
+    int q = __float2int_rn(v * id);
+    q = max(-127, min(127, q));
+    int qsum = q;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        qsum += __shfl_down_sync(0xffffffff, qsum, offset);
+    }
+
+    uint8_t *dst = latent_q8_1_cache + static_cast<size_t>(pos) * row_bytes + static_cast<size_t>(qblk) * 36;
+    if (lane == 0) {
+        *reinterpret_cast<uint16_t *>(dst) = __half_as_ushort(__float2half(d));
+        *reinterpret_cast<uint16_t *>(dst + 2) = __half_as_ushort(__float2half(d * static_cast<float>(qsum)));
+    }
+    reinterpret_cast<int8_t *>(dst + 4)[lane] = static_cast<int8_t>(q);
+}
+
+__device__ inline float q8_1_at(const uint8_t *row_base, int idx, int in_dim) {
+    if (idx >= in_dim) return 0.0f;
+    const int qblk = idx >> 5;
+    const int lane = idx & 31;
+    const uint8_t *base = row_base + static_cast<size_t>(qblk) * 36;
+    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+    const int8_t q = reinterpret_cast<const int8_t *>(base + 4)[lane];
+    return d * static_cast<float>(q);
+}
+
+__device__ inline float q8_1_stored_sum_at(const uint8_t *row_base, int qblk) {
+    const uint8_t *base = row_base + static_cast<size_t>(qblk) * 36;
+    return __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
+}
+
+__device__ inline float q8_1_dequant_sum_at(const uint8_t *row_base, int qblk, int in_dim) {
+    const uint8_t *base = row_base + static_cast<size_t>(qblk) * 36;
+    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+    const int start = qblk * 32;
+    float sum = 0.0f;
+    for (int lane = 0; lane < 32 && start + lane < in_dim; ++lane) {
+        sum += d * static_cast<float>(reinterpret_cast<const int8_t *>(base + 4)[lane]);
+    }
+    return sum;
+}
+
+__device__ inline float q4k_min_coeff_at(const uint8_t *row_base, int qblk) {
+    const int super = qblk >> 3;
+    const int j = qblk & 7;
+    const uint8_t *base = row_base + static_cast<size_t>(super) * 144;
+    const float dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
+    const uint8_t *scales = base + 4;
+    uint8_t sc, m;
+    q4k_scale_min(j, scales, sc, m);
+    (void) sc;
+    return -dmin * static_cast<float>(m);
+}
+
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void mla_absorb_q_nope_kernel(const float *q, const uint8_t *kv_b_weight,
+                                         size_t row_bytes, float *q_abs, int n_heads,
+                                         int qk_nope, int qk_rope, int v_head, int kv_lora) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = n_heads * kv_lora;
+    if (warp_id >= total) return;
+    const int h = warp_id / kv_lora;
+    const int latent = warp_id - h * kv_lora;
+    const float *qh = q + static_cast<size_t>(h) * (qk_nope + qk_rope);
+
+    float acc = 0.0f;
+    for (int d = lane; d < qk_nope; d += 32) {
+        const int row = h * (qk_nope + v_head) + d;
+        const uint8_t *row_base = kv_b_weight + static_cast<size_t>(row) * row_bytes;
+        float w;
+        if (QUANT_TYPE == 12) w = q4k_at(row_base, latent);
+        else if (QUANT_TYPE == 14) w = q6k_at(row_base, latent);
+        else if (QUANT_TYPE == 6) w = q50_at(row_base, latent);
+        else w = q80_at(row_base, latent);
+        w = quant_gemv_operand<F16_OPERANDS>(w);
+        const float xv = quant_gemv_operand<F16_OPERANDS>(qh[d]);
+        acc = fmaf(w, xv, acc);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xffffffff, acc, offset);
+    }
+    if (lane == 0) q_abs[warp_id] = acc;
+}
+
+template __global__ void mla_absorb_q_nope_kernel<12, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<14, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<6, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<8, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<12, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<14, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<6, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<8, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+
+template <bool F16_OPERANDS>
+__global__ void mla_absorb_q4_xsum_delta_kernel(const float *q, const uint8_t *kv_b_weight,
+                                                size_t row_bytes, float *q_abs_xsum_delta,
+                                                int n_heads, int qk_nope, int qk_rope,
+                                                int v_head, int blocks_per_row) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = n_heads * blocks_per_row;
+    if (warp_id >= total) return;
+    const int h = warp_id / blocks_per_row;
+    const int qblk = warp_id - h * blocks_per_row;
+    const float *qh = q + static_cast<size_t>(h) * (qk_nope + qk_rope);
+
+    float acc = 0.0f;
+    for (int d = lane; d < qk_nope; d += 32) {
+        const int row = h * (qk_nope + v_head) + d;
+        const uint8_t *row_base = kv_b_weight + static_cast<size_t>(row) * row_bytes;
+        const float coeff = q4k_min_coeff_at(row_base, qblk);
+        const float qv = quant_gemv_operand<F16_OPERANDS>(qh[d]);
+        acc = fmaf(qv, coeff, acc);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xffffffff, acc, offset);
+    }
+    if (lane == 0) q_abs_xsum_delta[warp_id] = acc;
+}
+
+template __global__ void mla_absorb_q4_xsum_delta_kernel<false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q4_xsum_delta_kernel<true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+
+__global__ void mla_absorb_attend_device_pos_kernel(const float *q_abs, const float *q,
+                                                    const uint8_t *latent_q8_1_cache,
+                                                    size_t latent_q8_1_row_bytes,
+                                                    const float *q_abs_xsum_delta, float *attn_xsum_delta,
+                                                    const float *kv_cache, float *attn_latent,
+                                                    int n_heads, int qk_nope, int qk_rope, int kv_lora,
+                                                    const int *d_pos, float softmax_scale) {
+    extern __shared__ float shared[];
+    const int h = blockIdx.x;
+    if (h >= n_heads) return;
+    const int tid = threadIdx.x;
+    const int pos = d_pos[0];
+    const int kv_total = kv_lora + qk_rope;
+    const int blocks_per_row = (kv_lora + 31) / 32;
+    float *scores = shared;
+    float *partial = scores + pos + 1;
+    const float *qh_abs = q_abs + static_cast<size_t>(h) * kv_lora;
+    const float *qh_xsum_delta = q_abs_xsum_delta + static_cast<size_t>(h) * blocks_per_row;
+    const float *q_rope = q + static_cast<size_t>(h) * (qk_nope + qk_rope) + qk_nope;
+
+    float local_max = -INFINITY;
+    for (int t = tid; t <= pos; t += blockDim.x) {
+        const uint8_t *latent_q8 = latent_q8_1_cache + static_cast<size_t>(t) * latent_q8_1_row_bytes;
+        const float *kv = kv_cache + static_cast<size_t>(t) * kv_total;
+        float dot = 0.0f;
+        for (int d = 0; d < kv_lora; ++d) dot += qh_abs[d] * q8_1_at(latent_q8, d, kv_lora);
+        for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+            dot += qh_xsum_delta[qblk] *
+                   (q8_1_stored_sum_at(latent_q8, qblk) - q8_1_dequant_sum_at(latent_q8, qblk, kv_lora));
+        }
+        const float *k_rope = kv + kv_lora;
+        for (int d = 0; d < qk_rope; ++d) dot += q_rope[d] * k_rope[d];
+        const float sc = dot * softmax_scale;
+        scores[t] = sc;
+        local_max = fmaxf(local_max, sc);
+    }
+    partial[tid] = local_max;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) partial[tid] = fmaxf(partial[tid], partial[tid + s]);
+        __syncthreads();
+    }
+    const float max_score = partial[0];
+    float local_denom = 0.0f;
+    for (int t = tid; t <= pos; t += blockDim.x) {
+        const float e = __expf(scores[t] - max_score);
+        scores[t] = e;
+        local_denom += e;
+    }
+    partial[tid] = local_denom;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) partial[tid] += partial[tid + s];
+        __syncthreads();
+    }
+    const float denom = partial[0];
+    float *out = attn_latent + static_cast<size_t>(h) * kv_lora;
+    for (int d = tid; d < kv_lora; d += blockDim.x) {
+        float sum = 0.0f;
+        for (int t = 0; t <= pos; ++t) {
+            const float prob = scores[t] / denom;
+            const uint8_t *latent_q8 = latent_q8_1_cache + static_cast<size_t>(t) * latent_q8_1_row_bytes;
+            sum += prob * q8_1_at(latent_q8, d, kv_lora);
+        }
+        out[d] = sum;
+    }
+    float *xsum_out = attn_xsum_delta + static_cast<size_t>(h) * blocks_per_row;
+    for (int qblk = tid; qblk < blocks_per_row; qblk += blockDim.x) {
+        float sum = 0.0f;
+        for (int t = 0; t <= pos; ++t) {
+            const float prob = scores[t] / denom;
+            const uint8_t *latent_q8 = latent_q8_1_cache + static_cast<size_t>(t) * latent_q8_1_row_bytes;
+            sum += prob * (q8_1_stored_sum_at(latent_q8, qblk) -
+                           q8_1_dequant_sum_at(latent_q8, qblk, kv_lora));
+        }
+        xsum_out[qblk] = sum;
+    }
+}
+
+__global__ void mla_absorb_scores_device_pos_kernel(const float *q_abs, const float *q,
+                                                    const uint8_t *latent_q8_1_cache,
+                                                    size_t latent_q8_1_row_bytes,
+                                                    const float *q_abs_xsum_delta, const float *kv_cache,
+                                                    float *scores, int n_heads, int qk_nope, int qk_rope,
+                                                    int kv_lora, const int *d_pos, int max_seq_len,
+                                                    float softmax_scale) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = n_heads * max_seq_len;
+    if (warp_id >= total) return;
+    const int h = warp_id / max_seq_len;
+    const int t = warp_id - h * max_seq_len;
+    const int pos = d_pos[0];
+    if (t > pos) return;
+
+    const int kv_total = kv_lora + qk_rope;
+    const int blocks_per_row = (kv_lora + 31) / 32;
+    const float *qh_abs = q_abs + static_cast<size_t>(h) * kv_lora;
+    const float *qh_xsum_delta = q_abs_xsum_delta + static_cast<size_t>(h) * blocks_per_row;
+    const float *q_rope = q + static_cast<size_t>(h) * (qk_nope + qk_rope) + qk_nope;
+    const uint8_t *latent_q8 = latent_q8_1_cache + static_cast<size_t>(t) * latent_q8_1_row_bytes;
+    const float *kv = kv_cache + static_cast<size_t>(t) * kv_total;
+
+    float dot = 0.0f;
+    for (int d = lane; d < kv_lora; d += 32) {
+        dot = fmaf(qh_abs[d], q8_1_at(latent_q8, d, kv_lora), dot);
+    }
+    for (int d = lane; d < qk_rope; d += 32) {
+        dot = fmaf(q_rope[d], kv[kv_lora + d], dot);
+    }
+    for (int qblk = lane; qblk < blocks_per_row; qblk += 32) {
+        dot += qh_xsum_delta[qblk] *
+               (q8_1_stored_sum_at(latent_q8, qblk) - q8_1_dequant_sum_at(latent_q8, qblk, kv_lora));
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        dot += __shfl_down_sync(0xffffffff, dot, offset);
+    }
+    if (lane == 0) scores[static_cast<size_t>(h) * max_seq_len + t] = dot * softmax_scale;
+}
+
+__global__ void mla_absorb_context_device_pos_kernel(const float *scores, const uint8_t *latent_q8_1_cache,
+                                                     size_t latent_q8_1_row_bytes, float *attn_xsum_delta,
+                                                     float *attn_latent, int n_heads, int kv_lora,
+                                                     const int *d_pos, int max_seq_len) {
+    extern __shared__ float shared[];
+    const int h = blockIdx.x;
+    if (h >= n_heads) return;
+    const int tid = threadIdx.x;
+    const int pos = d_pos[0];
+    const int blocks_per_row = (kv_lora + 31) / 32;
+    float *local_scores = shared;
+    float *partial = local_scores + pos + 1;
+    const float *score_h = scores + static_cast<size_t>(h) * max_seq_len;
+
+    float maxv = -INFINITY;
+    for (int t = tid; t <= pos; t += blockDim.x) maxv = fmaxf(maxv, score_h[t]);
+    partial[tid] = maxv;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) partial[tid] = fmaxf(partial[tid], partial[tid + stride]);
+        __syncthreads();
+    }
+    maxv = partial[0];
+
+    float denom_part = 0.0f;
+    for (int t = tid; t <= pos; t += blockDim.x) {
+        const float e = expf(score_h[t] - maxv);
+        local_scores[t] = e;
+        denom_part += e;
+    }
+    partial[tid] = denom_part;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) partial[tid] += partial[tid + stride];
+        __syncthreads();
+    }
+    const float denom = partial[0] + 1e-9f;
+    float *out = attn_latent + static_cast<size_t>(h) * kv_lora;
+    for (int d = tid; d < kv_lora; d += blockDim.x) {
+        float sum = 0.0f;
+        for (int t = 0; t <= pos; ++t) {
+            const float prob = local_scores[t] / denom;
+            const uint8_t *latent_q8 = latent_q8_1_cache + static_cast<size_t>(t) * latent_q8_1_row_bytes;
+            sum += prob * q8_1_at(latent_q8, d, kv_lora);
+        }
+        out[d] = sum;
+    }
+    float *xsum_out = attn_xsum_delta + static_cast<size_t>(h) * blocks_per_row;
+    for (int qblk = tid; qblk < blocks_per_row; qblk += blockDim.x) {
+        float sum = 0.0f;
+        for (int t = 0; t <= pos; ++t) {
+            const float prob = local_scores[t] / denom;
+            const uint8_t *latent_q8 = latent_q8_1_cache + static_cast<size_t>(t) * latent_q8_1_row_bytes;
+            sum += prob * (q8_1_stored_sum_at(latent_q8, qblk) -
+                           q8_1_dequant_sum_at(latent_q8, qblk, kv_lora));
+        }
+        xsum_out[qblk] = sum;
+    }
+}
+
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void mla_project_v_device_pos_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
+                                                const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
+                                                float *kv_b_cache, int n_heads, int qk_nope, int v_head,
+                                                int kv_lora, const int *d_pos) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = n_heads * v_head;
+    if (warp_id >= total) return;
+    const int h = warp_id / v_head;
+    const int v = warp_id - h * v_head;
+    const int pos = d_pos[0];
+    const int kvb_stride = n_heads * (qk_nope + v_head);
+    const int weight_row = h * (qk_nope + v_head) + qk_nope + v;
+    const uint8_t *row_base = kv_b_weight + static_cast<size_t>(weight_row) * row_bytes;
+    const uint8_t *latent_q8 = latent_q8_1_cache + static_cast<size_t>(pos) * latent_q8_1_row_bytes;
+    const int blocks_per_row = (kv_lora + 31) / 32;
+
+    float acc = 0.0f;
+    for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+        const int k = qblk * 32 + lane;
+        const uint8_t *x_blk = latent_q8 + static_cast<size_t>(qblk) * 36;
+        const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk)));
+        const float xsum = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk + 2)));
+        const int8_t qx = (k < kv_lora) ? reinterpret_cast<const int8_t *>(x_blk + 4)[lane] : 0;
+
+        if (QUANT_TYPE == 12) {
+            const int super = qblk >> 3;
+            const int j = qblk & 7;
+            const uint8_t *base = row_base + static_cast<size_t>(super) * 144;
+            const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+            const float dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
+            const uint8_t *scales = base + 4;
+            const uint8_t *qs = base + 16;
+            const int pair = j >> 1;
+            const uint8_t packed = qs[pair * 32 + lane];
+            const int qw = (j & 1) ? (packed >> 4) : (packed & 0x0F);
+            int qdot = qw * static_cast<int>(qx);
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                qdot += __shfl_down_sync(0xffffffff, qdot, offset);
+            }
+            if (lane == 0) {
+                uint8_t sc, m;
+                q4k_scale_min(j, scales, sc, m);
+                acc = fmaf(dw * static_cast<float>(sc) * d, static_cast<float>(qdot), acc);
+                acc -= dmin * static_cast<float>(m) * xsum;
+            }
+            continue;
+        }
+        if (QUANT_TYPE == 14) {
+            const int super = qblk >> 3;
+            const int sub = qblk & 7;
+            const int half = sub >> 2;
+            const int grp = sub & 3;
+            const int n = half * 128;
+            const uint8_t *base = row_base + static_cast<size_t>(super) * 210;
+            const uint8_t *ql = base;
+            const uint8_t *qh = base + 128;
+            const int8_t *scales = reinterpret_cast<const int8_t *>(base + 192);
+            const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 208)));
+            const uint8_t *qlp = ql + (n / 2);
+            const uint8_t *qhp = qh + (n / 4);
+            const int8_t *sc = scales + (n / 16);
+            int qw;
+            if (grp == 0) {
+                qw = static_cast<int8_t>((qlp[lane + 0] & 0xF) | (((qhp[lane] >> 0) & 3) << 4)) - 32;
+            } else if (grp == 1) {
+                qw = static_cast<int8_t>((qlp[lane + 32] & 0xF) | (((qhp[lane] >> 2) & 3) << 4)) - 32;
+            } else if (grp == 2) {
+                qw = static_cast<int8_t>((qlp[lane + 0] >> 4) | (((qhp[lane] >> 4) & 3) << 4)) - 32;
+            } else {
+                qw = static_cast<int8_t>((qlp[lane + 32] >> 4) | (((qhp[lane] >> 6) & 3) << 4)) - 32;
+            }
+            const int qprod = qw * static_cast<int>(qx);
+            int qdot0 = lane < 16 ? qprod : 0;
+            int qdot1 = lane >= 16 ? qprod : 0;
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                qdot0 += __shfl_down_sync(0xffffffff, qdot0, offset);
+                qdot1 += __shfl_down_sync(0xffffffff, qdot1, offset);
+            }
+            if (lane == 0) {
+                const float s0 = static_cast<float>(sc[grp * 2 + 0]);
+                const float s1 = static_cast<float>(sc[grp * 2 + 1]);
+                acc = fmaf(dw * d, s0 * static_cast<float>(qdot0) + s1 * static_cast<float>(qdot1), acc);
+            }
+            continue;
+        }
+        const float xv = d * static_cast<float>(qx);
+        float w = 0.0f;
+        if (k < kv_lora) {
+            if (QUANT_TYPE == 6) w = q50_at(row_base, k);
+            else w = q80_at(row_base, k);
+        }
+        acc = fmaf(w, xv, acc);
+    }
+    if (QUANT_TYPE != 12 && QUANT_TYPE != 14) {
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            acc += __shfl_down_sync(0xffffffff, acc, offset);
+        }
+    }
+    if (lane == 0) {
+        kv_b_cache[static_cast<size_t>(pos) * kvb_stride + h * (qk_nope + v_head) + qk_nope + v] = acc;
+    }
+}
+
+template __global__ void mla_project_v_device_pos_kernel<12, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<14, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<6, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<8, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<12, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<14, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<6, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<8, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+
+__global__ void mla_absorb_context_v_device_pos_kernel(const float *scores, const float *kv_b_cache,
+                                                       float *attn, int n_heads, int qk_nope, int v_head,
+                                                       const int *d_pos, int max_seq_len) {
+    extern __shared__ float shared[];
+    const int h = blockIdx.x;
+    if (h >= n_heads) return;
+    const int tid = threadIdx.x;
+    const int pos = d_pos[0];
+    const int kvb_stride = n_heads * (qk_nope + v_head);
+    float *local_scores = shared;
+    float *partial = local_scores + pos + 1;
+    const float *score_h = scores + static_cast<size_t>(h) * max_seq_len;
+
+    float maxv = -INFINITY;
+    for (int t = tid; t <= pos; t += blockDim.x) maxv = fmaxf(maxv, score_h[t]);
+    partial[tid] = maxv;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) partial[tid] = fmaxf(partial[tid], partial[tid + stride]);
+        __syncthreads();
+    }
+    maxv = partial[0];
+
+    float denom_part = 0.0f;
+    for (int t = tid; t <= pos; t += blockDim.x) {
+        const float e = expf(score_h[t] - maxv);
+        local_scores[t] = e;
+        denom_part += e;
+    }
+    partial[tid] = denom_part;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) partial[tid] += partial[tid + stride];
+        __syncthreads();
+    }
+    const float denom = partial[0] + 1e-9f;
+    float *out = attn + static_cast<size_t>(h) * v_head;
+    for (int v = tid; v < v_head; v += blockDim.x) {
+        float sum = 0.0f;
+        for (int t = 0; t <= pos; ++t) {
+            const float prob = local_scores[t] / denom;
+            const float *kvb = kv_b_cache + static_cast<size_t>(t) * kvb_stride + h * (qk_nope + v_head);
+            sum += prob * kvb[qk_nope + v];
+        }
+        out[v] = sum;
+    }
+}
+
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void mla_absorb_v_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
+                                    const float *attn_latent, const float *attn_xsum_delta,
+                                    float *attn, int n_heads, int qk_nope, int v_head, int kv_lora) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = n_heads * v_head;
+    if (warp_id >= total) return;
+    const int h = warp_id / v_head;
+    const int v = warp_id - h * v_head;
+    const int weight_row = h * (qk_nope + v_head) + qk_nope + v;
+    const uint8_t *row_base = kv_b_weight + static_cast<size_t>(weight_row) * row_bytes;
+    const float *latent = attn_latent + static_cast<size_t>(h) * kv_lora;
+    const int blocks_per_row = (kv_lora + 31) / 32;
+
+    float acc = 0.0f;
+    for (int k = lane; k < kv_lora; k += 32) {
+        float w;
+        if (QUANT_TYPE == 12) w = q4k_at(row_base, k);
+        else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
+        else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
+        else w = q80_at(row_base, k);
+        w = quant_gemv_operand<F16_OPERANDS>(w);
+        const float xv = quant_gemv_operand<F16_OPERANDS>(latent[k]);
+        acc = fmaf(w, xv, acc);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xffffffff, acc, offset);
+    }
+    if (lane == 0) {
+        if (QUANT_TYPE == 12) {
+            const float *xsum_delta = attn_xsum_delta + static_cast<size_t>(h) * blocks_per_row;
+            for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+                acc += q4k_min_coeff_at(row_base, qblk) * xsum_delta[qblk];
+            }
+        }
+        attn[warp_id] = acc;
+    }
+}
+
+template __global__ void mla_absorb_v_kernel<12, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<14, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<6, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<8, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<12, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<14, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<6, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<8, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
 
 // ================= MoE 路由 =================
 // 每个 block 处理一个 token：对 router_logits 做 sigmoid? DeepSeek-V2 用 softmax over all experts，

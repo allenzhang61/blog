@@ -30,10 +30,10 @@ public:
                 const GPUTensor &g_hidden_f32, Sampler &sampler);
 
     // 贪心专用、可纳入 CUDA Graph 的版本：GEMM 出 logits 后直接 GPU argmax，
-    // 把下一个 token id 写到 device buffer d_out_token（不做 D2H、不经 host Sampler）。
+    // 把下一个 token id 写到 device tensor g_out_token_i32（不做 D2H、不经 host Sampler）。
     // 仅贪心时可用；温度/top-k/top-p/重复惩罚仍需走 host forward。
     void forward_argmax_device(const StorageTensor &s_weight, SessionBase &session,
-                               const GPUTensor &g_hidden_f32, int *d_out_token, void *stream = nullptr);
+                               const GPUTensor &g_hidden_f32, const GPUTensor &g_out_token_i32);
 };
 
 #endif // LOCAL_LLM_COMMON_LMHEAD_H

@@ -43,16 +43,15 @@ public:
     // max_seq_len = input_ids.size() + max_output_tokens。
     QwenSession(const QwenConfig &config, std::vector<int> h_input_i32, int max_output_tokens);
 
-    // 释放 device 端 pos buffer（d_pos_）。
-    ~QwenSession() override;
+    ~QwenSession() override = default;
 
     // decode 单步的 pos，常驻 device，供 full attention decode kernel 从 device buffer 读取，
     // 使 kernel 参数在步与步之间不变（CUDA Graph capture / replay 前置条件）。
-    int *d_pos() const { return d_pos_; }
+    const GPUTensor &d_pos() const { return d_pos_; }
 
     // decode 单步的 token id，常驻 device：embedding 从此读取输入 token，argmax 把下一 token 写回此处，
     // 构成 device 端闭环（token 不再每步 H2D/D2H），使整段 decode 可一次 capture、后续 replay。
-    int *d_token() const { return d_token_; }
+    const GPUTensor &d_token() const { return d_token_; }
 
     // 每个 full_attention 层一份 KV cache；顺序与 config.layer_types 中 full 层出现顺序一致。
     std::vector<FullAttnKVCache> full_attn_kv_cache;
@@ -71,10 +70,9 @@ public:
     size_t kv_state_bytes() const override;
 
 private:
-    // decode 单步 pos 的 device buffer（sizeof(int)），构造时分配、析构时释放。
-    int *d_pos_ = nullptr;
-    // decode 单步 token id 的 device buffer（sizeof(int)），构造时分配、析构时释放。
-    int *d_token_ = nullptr;
+    // decode 单步 pos 和 token id 的 device tensor，由 GPUTensor 自动管理显存。
+    GPUTensor d_pos_;
+    GPUTensor d_token_;
 };
 
 

@@ -94,12 +94,9 @@ int QwenModel::decode(SessionBase &session) {
     }
 
     // === 贪心：CUDA Graph 路径 ===
-    cudaStream_t stream = get_current_cuda_stream();
     // 每步 graph 外把 host 侧的 pos / 输入 token 异步写入 device buffer（graph 内 kernel 只读它们）。
-    check_cuda(cudaMemcpyAsync(qwen_session.d_pos(), &pos, sizeof(int), cudaMemcpyHostToDevice, stream),
-               "decode pos H2D 失败");
-    check_cuda(cudaMemcpyAsync(qwen_session.d_token(), &prev_token_id, sizeof(int), cudaMemcpyHostToDevice, stream),
-               "decode token H2D 失败");
+    qwen_session.d_pos().set_data(pos, "decode pos H2D 失败");
+    qwen_session.d_token().set_data(prev_token_id, "decode token H2D 失败");
 
     // profile 采样步走 eager：graph replay 内的 kernel 不经 ScopedGpuTimer 埋点，
     // 无法拿到逐 kernel 细分；此步改走 eager 让 profiler 抓到每个 kernel 的耗时。
@@ -118,13 +115,13 @@ int QwenModel::decode(SessionBase &session) {
         if (!qwen_session.decode_graph.ready()) {
             record_decode_graph(qwen_session);
         }
-        launch_cuda_graph(qwen_session.decode_graph, stream, "decode graph launch 失败");
+        launch_cuda_graph(qwen_session.decode_graph, "decode graph launch 失败");
     }
     ++qwen_session.decode_greedy_steps;
 
     // 取回 argmax 得到的下一个 token id（graph 外的一次 int D2H + 同流同步）。
     int next_token = 0;
-    cuda_memcpy_d2h(&next_token, qwen_session.d_token(), sizeof(int), "decode token D2H 失败");
+    cuda_memcpy_d2h(&next_token, qwen_session.d_token().data<int>(), sizeof(int), "decode token D2H 失败");
     return next_token;
 }
 
@@ -140,37 +137,36 @@ void QwenModel::eager_decode_greedy_device(QwenSession &session) {
     const TextConfig &text_config = config_.data.text;
     const int64_t hidden_size = text_config.hidden_size;
     CudaScratch &scratch = session.cuda_scratch;
-    cudaStream_t stream = get_current_cuda_stream();
 
     const auto g_hidden_f32 = GPUTensor(
         scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
-    const auto g_input_i32 = GPUTensor(session.d_token(), {1}, DType::I32, "qwen.decode.token");
-    TensorTool::embedding_lookup(weights_.s_token_embd, g_input_i32, g_hidden_f32, stream);
+    const GPUTensor &g_input_i32 = session.d_token();
+    TensorTool::embedding_lookup(weights_.s_token_embd, g_input_i32, g_hidden_f32);
     for (DecoderLayer &layer : layers_) layer.decode(session, g_hidden_f32, /*pos=*/0);
     const auto g_normed_f32 = GPUTensor(
         scratch, scratch_key::kTokenHiddenA, {1, hidden_size}, DType::F32);
     RMSNorm::forward(weights_.s_output_norm, g_hidden_f32, g_normed_f32,
                      config_.data.text.rms_norm_eps, /*one_plus=*/true);
-    lm_head_.forward_argmax_device(weights_.s_token_embd, session, g_normed_f32, session.d_token(), stream);
+    lm_head_.forward_argmax_device(weights_.s_token_embd, session, g_normed_f32,
+                                   session.d_token());
 }
 
 void QwenModel::record_decode_graph(QwenSession &session) {
     const TextConfig &text_config = config_.data.text;
     const int64_t hidden_size = text_config.hidden_size;
     CudaScratch &scratch = session.cuda_scratch;
-    cudaStream_t stream = get_current_cuda_stream();
 
     // 若之前有旧 graph（换 session 重建），先销毁，再开始 capture。
     destroy_cuda_graph(session.decode_graph);
 
     // ThreadLocal 模式：仅捕获本线程当前流上的操作，避免误捕获库内部的其它流活动。
-    begin_thread_local_cuda_graph_capture(stream, "decode graph begin capture 失败");
+    begin_thread_local_cuda_graph_capture("decode graph begin capture 失败");
 
     const auto g_hidden_f32 = GPUTensor(
         scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
     // embedding 从 device token buffer 读输入 token（不做 H2D）。
-    const auto g_input_i32 = GPUTensor(session.d_token(), {1}, DType::I32, "qwen.decode.token");
-    TensorTool::embedding_lookup(weights_.s_token_embd, g_input_i32, g_hidden_f32, stream);
+    const GPUTensor &g_input_i32 = session.d_token();
+    TensorTool::embedding_lookup(weights_.s_token_embd, g_input_i32, g_hidden_f32);
 
     for (DecoderLayer &layer : layers_) {
         // pos 走 session.d_pos()（device），此处 host pos 仅用于层内已废弃的 seq_len 记账，传 0 即可。
@@ -182,7 +178,8 @@ void QwenModel::record_decode_graph(QwenSession &session) {
     RMSNorm::forward(weights_.s_output_norm, g_hidden_f32, g_normed_f32,
                      config_.data.text.rms_norm_eps, /*one_plus=*/true);
     // lm_head GEMM + GPU argmax，把下一 token 写回 device token buffer（闭环，无 D2H）。
-    lm_head_.forward_argmax_device(weights_.s_token_embd, session, g_normed_f32, session.d_token(), stream);
+    lm_head_.forward_argmax_device(weights_.s_token_embd, session, g_normed_f32,
+                                   session.d_token());
 
-    end_cuda_graph_capture_and_instantiate(stream, session.decode_graph, "decode graph capture/instantiate 失败");
+    end_cuda_graph_capture_and_instantiate(session.decode_graph, "decode graph capture/instantiate 失败");
 }

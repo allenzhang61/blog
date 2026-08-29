@@ -24,8 +24,8 @@ public:
 private:
     friend void destroy_cuda_graph(CudaGraph &graph);
     friend void mark_cuda_graph_stale(CudaGraph &graph);
-    friend void end_cuda_graph_capture_and_instantiate(cudaStream_t stream, CudaGraph &graph, const char *what);
-    friend void launch_cuda_graph(const CudaGraph &graph, cudaStream_t stream, const char *what);
+    friend void end_cuda_graph_capture_and_instantiate(CudaGraph &graph, const char *what);
+    friend void launch_cuda_graph(const CudaGraph &graph, const char *what);
 
     cudaGraph_t graph_ = nullptr;
     cudaGraphExec_t exec_ = nullptr;
@@ -39,15 +39,15 @@ void destroy_cuda_graph(CudaGraph &graph);
 // 让下次使用前重新 capture。
 void mark_cuda_graph_stale(CudaGraph &graph);
 
-// 在指定 stream 上开始 ThreadLocal capture。
+// 在当前 stream 上开始 ThreadLocal capture。
 // 调用方应在 capture 前确保后续算子都走同一 stream，且不会触发 cudaMalloc 等不可捕获操作。
-void begin_thread_local_cuda_graph_capture(cudaStream_t stream, const char *what);
+void begin_thread_local_cuda_graph_capture(const char *what);
 
-// 结束指定 stream 上的 capture，并立即 instantiate 成可 launch 的 executable graph。
+// 结束当前 stream 上的 capture，并立即 instantiate 成可 launch 的 executable graph。
 // 调用前应先 destroy_cuda_graph(graph)，避免覆盖仍持有的旧 graph 句柄。
-void end_cuda_graph_capture_and_instantiate(cudaStream_t stream, CudaGraph &graph, const char *what);
+void end_cuda_graph_capture_and_instantiate(CudaGraph &graph, const char *what);
 
-// 启动已经 ready() 的 executable graph。
-void launch_cuda_graph(const CudaGraph &graph, cudaStream_t stream, const char *what);
+// 在当前 stream 上启动已经 ready() 的 executable graph。
+void launch_cuda_graph(const CudaGraph &graph, const char *what);
 
 #endif // LOCAL_LLM_CUDAGRAPH_H

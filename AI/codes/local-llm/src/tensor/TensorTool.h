@@ -8,6 +8,7 @@
 #include "tensor/CPUTensor.h"
 #include "tensor/StorageTensor.h"
 
+#include <cstddef>
 #include <cstdint>
 
 class CudaScratch;
@@ -34,6 +35,11 @@ public:
     static bool quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
                              const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
                              const char *name = "");
+    static bool quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
+                               const GPUTensor &g_output_f32, const char *name = "");
+    // DeepSeek routed MoE decode 的 device-indexed 快路径：top-k expert id/weight 保持在 GPU 上，
+    // 依次执行 gate/up 量化 GEMV + SiLU、act Q8_1 量化、down projection，并累加到 g_out_f32。
+    // 成功接管时返回 true；不满足量化/shape/decode 条件时返回 false，由调用方 fallback。
     static bool moe_routed_decode_indexed(const StorageTensor &s_gate_exps, const StorageTensor &s_up_exps,
                                           const StorageTensor &s_down_exps, const GPUTensor &g_input_f32,
                                           const int *d_expert_ids, const float *d_weights,
@@ -41,7 +47,7 @@ public:
                                           int n_experts, int k, const char *name = "");
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
     static void embedding_lookup(const StorageTensor &s_table, const GPUTensor &g_input_i32,
-                                 const GPUTensor &g_hidden_f32, void *stream = nullptr);
+                                 const GPUTensor &g_hidden_f32);
     // s_weight: RMSNorm 权重，对 g_input 归一化后写入 g_output。
     static void rms_norm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                          float eps, bool one_plus);
@@ -145,6 +151,35 @@ public:
                                              int kv_lora, int qk_rope, const int *d_pos, void *stream = nullptr);
     static void mla_store_kv_b_device_pos(const GPUTensor &g_kv_b_new_f32, const GPUTensor &g_kv_b_cache_f32,
                                           int kvb_out, const int *d_pos, void *stream = nullptr);
+    static void mla_store_latent_q8_1(const GPUTensor &g_latent_f32, uint8_t *latent_q8_1_cache,
+                                      int kv_lora, size_t row_bytes, int start_pos, bool store_raw_sum = false,
+                                      void *stream = nullptr);
+    static void mla_store_latent_q8_1_device_pos(const GPUTensor &g_kv_cache_f32, uint8_t *latent_q8_1_cache,
+                                                 int kv_lora, int qk_rope, size_t row_bytes, const int *d_pos,
+                                                 void *stream = nullptr);
+    static bool mla_absorb_components(const StorageTensor &s_kv_b_weight, const GPUTensor &g_q_f32,
+                                      const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
+                                      const GPUTensor &g_kv_cache_f32, const GPUTensor &g_q_abs_f32,
+                                      const GPUTensor &g_q_abs_xsum_delta_f32,
+                                      const GPUTensor &g_attn_latent_f32, const GPUTensor &g_attn_scores_f32,
+                                      const GPUTensor &g_attn_f32,
+                                      const GPUTensor &g_attn_xsum_delta_f32,
+                                      int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
+                                      const int *d_pos, int max_seq_len, float softmax_scale,
+                                      void *stream = nullptr);
+    static bool mla_absorb_decode(const StorageTensor &s_kv_b_weight, const GPUTensor &g_q_f32,
+                                  const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
+                                  const GPUTensor &g_kv_cache_f32, const GPUTensor &g_attn_f32,
+                                  int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
+                                  const int *d_pos, int max_seq_len, float softmax_scale,
+                                  CudaScratch &scratch, void *stream = nullptr);
+    static bool mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, const GPUTensor &g_q_f32,
+                                          const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
+                                          const GPUTensor &g_kv_cache_f32, const GPUTensor &g_kv_b_cache_f32,
+                                          const GPUTensor &g_attn_f32,
+                                          int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
+                                          const int *d_pos, int max_seq_len, float softmax_scale,
+                                          CudaScratch &scratch, void *stream = nullptr);
 
     static void moe_router_topk(const GPUTensor &g_router_logits_f32, const GPUTensor &g_top_idx_i32, const GPUTensor &g_top_w_f32,
                                 int n_experts, int k, float routed_scaling,

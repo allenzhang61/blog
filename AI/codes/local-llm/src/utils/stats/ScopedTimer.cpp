@@ -4,8 +4,10 @@
 
 #include "utils/stats/ScopedTimer.h"
 
-ScopedGpuTimer::ScopedGpuTimer(const char *name, cudaStream_t stream, size_t bytes)
-    : name_(name), stream_(stream), bytes_(bytes) {
+#include "backend/cuda/common.h"
+
+ScopedGpuTimer::ScopedGpuTimer(const char *name, size_t bytes)
+    : name_(name), stream_(get_current_cuda_stream()), bytes_(bytes) {
     if (name_ == nullptr || !Profiler::instance().capturing()) {
         return; // 关闭 / 非采样步 / 匿名段时不借 event，零开销。
     }

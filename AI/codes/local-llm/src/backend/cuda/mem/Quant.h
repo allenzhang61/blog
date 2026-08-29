@@ -24,7 +24,7 @@ int64_t num_elements(const StorageTensor &s_tensor);
 // 按 GGML 类型码把常驻量化权重反量化到 device f16。
 // ggml_type：0=F32, 6=Q5_0, 8=Q8_0, 12=Q4_K, 14=Q6_K。
 CudaWeight dequantize_to_f16(const CudaWeight &quant, uint16_t *d_out_f16,
-                             int64_t num_elements, int ggml_type, void *stream = nullptr);
+                             int64_t num_elements, int ggml_type);
 
 } // namespace Quant
 

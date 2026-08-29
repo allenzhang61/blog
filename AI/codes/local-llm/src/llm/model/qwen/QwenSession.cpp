@@ -69,14 +69,11 @@ QwenSession::QwenSession(const QwenConfig &config, std::vector<int> h_input_i32,
     }
 
     // decode 单步 pos 常驻 device：每步在 graph 外把 host pos 拷进来，kernel 从此读取。
-    d_pos_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "decode pos device buffer"));
+    d_pos_ = GPUTensor(
+        CudaWeight(sizeof(int), CUDA_R_32I, false, "decode pos device buffer"), {1});
     // decode 单步 token id 常驻 device：embedding 从此读、argmax 往此写，构成 device 闭环。
-    d_token_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "decode token device buffer"));
-}
-
-QwenSession::~QwenSession() {
-    cuda_free_device(d_pos_);
-    cuda_free_device(d_token_);
+    d_token_ = GPUTensor(
+        CudaWeight(sizeof(int), CUDA_R_32I, false, "decode token device buffer"), {1});
 }
 
 size_t QwenSession::kv_state_bytes() const {

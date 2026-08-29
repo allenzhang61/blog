@@ -35,6 +35,10 @@ void SharedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
         TensorTool::silu_mul(g_gate_f32, g_up_f32, g_act_f32);
     }
 
+    if (TensorTool::quant_gemv_add(*lw_.s_ffn_down_shexp, g_act_f32, g_moe_f32, "ds.gemm.sdown_add")) {
+        return;
+    }
+
     GPUTensor g_ffn_out_f32 = GPUTensor(
         s, scratch_key::kFfnOut, {input_size, hidden_size}, DType::F32);
     TensorTool::gemm(*lw_.s_ffn_down_shexp, g_act_f32, g_ffn_out_f32, s, scratch_key::kActLowp, "ds.gemm.sdown");

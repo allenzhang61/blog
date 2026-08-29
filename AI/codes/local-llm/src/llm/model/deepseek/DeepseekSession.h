@@ -5,8 +5,9 @@
 #ifndef LOCAL_LLM_DEEPSEEK_SESSION_H
 #define LOCAL_LLM_DEEPSEEK_SESSION_H
 
-#include "backend/cuda/mem/SessionBase.h"
 #include "backend/cuda/graph/CudaGraph.h"
+#include "backend/cuda/mem/CudaWeight.h"
+#include "backend/cuda/mem/SessionBase.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "tensor/StorageTensor.h"
 #include "tensor/GPUTensor.h"
@@ -19,6 +20,8 @@
 // 避免每步每层重新投影全历史 latent KV。
 struct LatentKVCache {
     GPUTensor g_cache_f32;
+    CudaWeight latent_q8_1_cache;
+    size_t latent_q8_1_row_bytes = 0;
     GPUTensor g_kv_b_cache_f32;
     int seq_len = 0;
 };
@@ -28,13 +31,13 @@ struct LatentKVCache {
 class DeepseekSession : public SessionBase {
 public:
     DeepseekSession(const DeepseekConfig &config, std::vector<int> h_input_i32, int max_output_tokens);
-    ~DeepseekSession() override;
+    ~DeepseekSession() override = default;
 
     // decode 单步 token id 常驻 device：embedding 从此读取输入 token，
     // greedy argmax 将下一 token 写回此处，避免每步回传整行 logits。
-    int *d_token() const { return d_token_; }
+    const GPUTensor &d_token() const { return d_token_; }
     // decode 单步 pos 常驻 device，graph replay 内 kernel 从这里读取真实位置。
-    int *d_pos() const { return d_pos_; }
+    const GPUTensor &d_pos() const { return d_pos_; }
 
     std::vector<LatentKVCache> kv_caches;
     GPUTensor g_inv_freq_f32;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）
@@ -47,8 +50,8 @@ public:
     size_t kv_state_bytes() const override;
 
 private:
-    int *d_token_ = nullptr;
-    int *d_pos_ = nullptr;
+    GPUTensor d_token_;
+    GPUTensor d_pos_;
 };
 
 #endif // LOCAL_LLM_DEEPSEEK_SESSION_H

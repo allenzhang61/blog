@@ -51,6 +51,10 @@ void cuda_memcpy2d_d2d(void *dst, size_t dpitch, const void *src, size_t spitch,
                what);
 }
 
+void cuda_memset_async(void *dst, int value, size_t bytes, const std::string &what) {
+    check_cuda(cudaMemsetAsync(dst, value, bytes, get_current_cuda_stream()), what);
+}
+
 void *cuda_malloc_device(size_t bytes, const std::string &what) {
     void *ptr = nullptr;
     check_cuda(cudaMalloc(&ptr, bytes), what);

@@ -43,24 +43,24 @@ int64_t num_elements(const StorageTensor &s_tensor) {
 }
 
 CudaWeight dequantize_to_f16(const CudaWeight &quant, uint16_t *d_out_f16,
-                             int64_t num_elements, int ggml_type, void *stream) {
+                             int64_t num_elements, int ggml_type) {
     const uint8_t *src = static_cast<const uint8_t *>(quant.ptr);
     switch (ggml_type) {
         case 0: // F32
             launch_f32_to_f16_copy(reinterpret_cast<const float *>(src), d_out_f16,
-                                   num_elements, stream);
+                                   num_elements);
             break;
         case 6: // Q5_0
-            launch_dequantize_q50_to_f16(src, d_out_f16, num_elements, stream);
+            launch_dequantize_q50_to_f16(src, d_out_f16, num_elements);
             break;
         case 8: // Q8_0
-            launch_dequantize_q80_to_f16(src, d_out_f16, num_elements, stream);
+            launch_dequantize_q80_to_f16(src, d_out_f16, num_elements);
             break;
         case 12: // Q4_K
-            launch_dequantize_q4k_to_f16(src, d_out_f16, num_elements, stream);
+            launch_dequantize_q4k_to_f16(src, d_out_f16, num_elements);
             break;
         case 14: // Q6_K
-            launch_dequantize_q6k_to_f16(src, d_out_f16, num_elements, stream);
+            launch_dequantize_q6k_to_f16(src, d_out_f16, num_elements);
             break;
         default:
             throw std::runtime_error("dequantize_to_f16: 不支持的 GGML 类型码 " +
