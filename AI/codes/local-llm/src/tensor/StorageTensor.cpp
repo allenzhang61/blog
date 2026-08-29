@@ -27,6 +27,19 @@ StorageTensor StorageTensor::slice(size_t byte_offset, std::vector<int64_t> slic
     s_view.shape = std::move(slice_shape);
     s_view.nbytes = slice_bytes;
     s_view.data_ = data_ + byte_offset;
+    if (storage_name_.empty()) {
+        s_view.storage_name_ = name;
+        s_view.storage_shape_ = shape;
+        s_view.storage_data_ = data_;
+        s_view.storage_nbytes_ = nbytes;
+        s_view.storage_byte_offset_ = byte_offset;
+    } else {
+        s_view.storage_name_ = storage_name_;
+        s_view.storage_shape_ = storage_shape_;
+        s_view.storage_data_ = storage_data_;
+        s_view.storage_nbytes_ = storage_nbytes_;
+        s_view.storage_byte_offset_ = storage_byte_offset_ + byte_offset;
+    }
     return s_view;
 }
 

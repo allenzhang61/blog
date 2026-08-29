@@ -132,6 +132,8 @@ add_executable(local_llm src/main.cpp
         src/utils/stats/ScopedTimer.h
         src/utils/stats/MemoryReporter.cpp
         src/utils/stats/MemoryReporter.h
+        src/utils/stats/CudaAllocTracker.cpp
+        src/utils/stats/CudaAllocTracker.h
         src/utils/stats/DeviceMonitor.cpp
         src/utils/stats/DeviceMonitor.h
         src/utils/stats/WeightLoadTracker.cpp
@@ -210,6 +212,8 @@ if(LOCAL_LLM_BUILD_TESTS)
             src/backend/cuda/ops/launch.cu
             src/utils/stats/Profiler.cpp
             src/utils/stats/Profiler.h
+            src/utils/stats/CudaAllocTracker.cpp
+            src/utils/stats/CudaAllocTracker.h
             src/utils/stats/ScopedTimer.cpp
             src/utils/stats/ScopedTimer.h
     )

@@ -66,6 +66,43 @@ void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes
 }
 
 template <int QUANT_TYPE>
+void launch_quant_matmul_typed(const uint8_t *weight, size_t row_bytes, const float *x,
+                               float *y, int out_dim, int in_dim, int m,
+                               bool f16_operands, cudaStream_t stream) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int total = m * out_dim;
+    const int blocks = (total + warps_per_block - 1) / warps_per_block;
+    if (f16_operands) {
+        quant_matmul_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, stream>>>(
+            weight, row_bytes, x, y, out_dim, in_dim, m);
+    } else {
+        quant_matmul_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, stream>>>(
+            weight, row_bytes, x, y, out_dim, in_dim, m);
+    }
+}
+
+void launch_quant_matmul(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
+                         float *y, int out_dim, int in_dim, int m, bool f16_operands, void *stream) {
+    const cudaStream_t s = as_stream(stream);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_matmul_typed<12>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
+            break;
+        case DType::Q6_K:
+            launch_quant_matmul_typed<14>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
+            break;
+        case DType::Q5_0:
+            launch_quant_matmul_typed<6>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
+            break;
+        case DType::Q8_0:
+            launch_quant_matmul_typed<8>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands, s);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
 void launch_quant_swiglu_typed(const uint8_t *gate_weight, const uint8_t *up_weight,
                                size_t gate_row_bytes, size_t up_row_bytes,
                                const float *x, float *act, int ffn_dim, int in_dim,

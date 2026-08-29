@@ -6,6 +6,8 @@
 
 #include <stdexcept>
 
+#include "utils/stats/CudaAllocTracker.h"
+
 namespace {
 // 进程级当前流。decode 时切到非阻塞流以支持 CUDA Graph capture；默认 0 号流。
 cudaStream_t g_current_stream = nullptr;
@@ -49,11 +51,13 @@ void cuda_memcpy2d_d2d(void *dst, size_t dpitch, const void *src, size_t spitch,
 void *cuda_malloc_device(size_t bytes, const std::string &what) {
     void *ptr = nullptr;
     check_cuda(cudaMalloc(&ptr, bytes), what);
+    record_cuda_alloc(ptr, bytes, classify_cuda_alloc(what), what);
     return ptr;
 }
 
 void cuda_free_device(void *ptr) {
     if (ptr) {
+        record_cuda_free(ptr);
         cudaFree(ptr);
     }
 }

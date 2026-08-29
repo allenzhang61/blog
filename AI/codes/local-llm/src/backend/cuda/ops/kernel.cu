@@ -1186,6 +1186,46 @@ template __global__ void quant_gemv_kernel<14, true>(const uint8_t *, size_t, co
 template __global__ void quant_gemv_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 template __global__ void quant_gemv_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
 
+// Prefill 专用量化 MATMUL：每个 warp 负责一个输出元素 y[row,out]。
+// grid 覆盖 m*out_dim，避免 quant_gemv_kernel 在 token 维串行导致 prefill 并行度不足。
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void quant_matmul_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
+                                    float *y, int out_dim, int in_dim, int m) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = m * out_dim;
+    if (warp_id >= total) return;
+    const int row = warp_id / out_dim;
+    const int out = warp_id - row * out_dim;
+    const uint8_t *row_base = weight + static_cast<size_t>(out) * row_bytes;
+    const float *xr = x + static_cast<size_t>(row) * in_dim;
+
+    float acc = 0.0f;
+    for (int k = lane; k < in_dim; k += 32) {
+        float w;
+        if (QUANT_TYPE == 12) w = q4k_at(row_base, k);
+        else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
+        else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
+        else w = q80_at(row_base, k);
+        w = quant_gemv_operand<F16_OPERANDS>(w);
+        const float xv = quant_gemv_operand<F16_OPERANDS>(xr[k]);
+        acc = fmaf(w, xv, acc);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        acc += __shfl_down_sync(0xffffffff, acc, offset);
+    }
+    if (lane == 0) y[static_cast<size_t>(row) * out_dim + out] = acc;
+}
+
+template __global__ void quant_matmul_kernel<12, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<14, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<6, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<8, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<12, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<14, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+
 // MoE decode 专用：同一输入下 gate/up 两个 projection 融合，并直接写 act=SiLU(gate)*up。
 // 每个 warp 负责一个 FFN 输出元素，避免 egate/eup/silu_mul 三次小 kernel launch。
 template <int QUANT_TYPE, bool F16_OPERANDS>
@@ -1588,9 +1628,17 @@ __global__ void moe_router_topk_kernel(const float *router_logits, int *top_idx,
 
     // softmax over all experts（数值稳定）
     float maxv = -INFINITY;
-    for (int e = 0; e < n_experts; ++e) maxv = fmaxf(maxv, logits[e]);
+    for (int e = 0; e < n_experts; ++e) {
+        const float v = isfinite(logits[e]) ? logits[e] : -INFINITY;
+        maxv = fmaxf(maxv, v);
+    }
     float denom = 0.0f;
-    for (int e = 0; e < n_experts; ++e) denom += __expf(logits[e] - maxv);
+    if (isfinite(maxv)) {
+        for (int e = 0; e < n_experts; ++e) {
+            const float v = isfinite(logits[e]) ? logits[e] : -INFINITY;
+            denom += __expf(v - maxv);
+        }
+    }
 
     // top-k 选择（在 softmax 概率上选，等价于在 logits 上选）。
     // V2-Lite: norm_topk_prob=false，不对被选权重再归一化，只乘 routed_scaling_factor(=1.0)。
@@ -1603,13 +1651,19 @@ __global__ void moe_router_topk_kernel(const float *router_logits, int *top_idx,
         int best_e = -1;
         for (int e = 0; e < n_experts; ++e) {
             if (used[e]) continue;
-            if (logits[e] > best) {
-                best = logits[e];
+            const float v = isfinite(logits[e]) ? logits[e] : -INFINITY;
+            if (v > best) {
+                best = v;
                 best_e = e;
             }
         }
+        if (best_e < 0) {
+            best_e = r < n_experts ? r : 0;
+        }
         used[best_e] = true;
-        const float prob = __expf(logits[best_e] - maxv) / denom;
+        const float prob = (denom > 0.0f && isfinite(best))
+                               ? __expf(best - maxv) / denom
+                               : 0.0f;
         idx_out[r] = best_e;
         w_out[r] = prob * routed_scaling;
     }

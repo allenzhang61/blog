@@ -19,7 +19,7 @@ CudaWeight::CudaWeight(size_t bytes, cudaDataType_t type, bool zero, const std::
     if (type == CUDA_R_16BF) dtype = DType::BF16;
     else if (type == CUDA_R_16F) dtype = DType::F16;
     else dtype = DType::F32;
-    check_cuda(cudaMalloc(&ptr, bytes), "cudaMalloc " + what + " 失败");
+    ptr = cuda_malloc_device(bytes, "cudaMalloc " + what + " 失败");
     if (zero) {
         check_cuda(cudaMemset(ptr, 0, bytes), "cudaMemset " + what + " 失败");
     }
@@ -92,7 +92,7 @@ CudaWeight CudaWeight::try_dequant() const {
 
 void CudaWeight::reset() {
     if (ptr && owns_) {
-        cudaFree(ptr);
+        cuda_free_device(ptr);
     }
     ptr = nullptr;
     bytes = 0;

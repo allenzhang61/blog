@@ -19,9 +19,23 @@
 #include "backend/cuda/mem/CudaWeightPool.h"
 #include "utils/stats/DeviceMonitor.h"
 #include "utils/stats/MemoryReporter.h"
+#include "utils/stats/MemoryUsageProvider.h"
 #include "utils/stats/Profiler.h"
 #include "utils/stats/ScopedTimer.h"
 #include "utils/stats/WeightLoadTracker.h"
+
+namespace {
+class EmptyMemoryUsageProvider final : public MemoryUsageProvider {
+public:
+    size_t kv_state_bytes() const override { return 0; }
+    size_t scratch_bytes() const override { return 0; }
+};
+
+bool env_flag_enabled(const char *key) {
+    const char *env = std::getenv(key);
+    return env != nullptr && std::atoi(env) > 0;
+}
+} // namespace
 
 int main(int argc, char **argv) {
     Args args(argc, argv);
@@ -66,17 +80,34 @@ int main(int argc, char **argv) {
     DeviceMonitor device_monitor(0);
     // 显存分层时间线：prefill / 每个 decode step 采一条，看清 KV cache 增长曲线。
     MemoryReporter mem_reporter;
+    EmptyMemoryUsageProvider empty_memory_usage;
+    const bool profile_memory_stages = args.profile && env_flag_enabled("LOCAL_LLM_PROFILE_MEMORY_STAGES");
+    if (profile_memory_stages) {
+        mem_reporter.sample(pool, empty_memory_usage, "after_model_init");
+    }
 
     // warmup：正式计时前跑一遍完整前向，触发权重惰性上传、CUDA context / cuBLAS
     // 初始化与 kernel 首次启动，避免首步冷启动污染稳态计时。
     // warmup 使用独立 session，作用域结束释放，因此与正式跑天然隔离。
     {
         std::unique_ptr<SessionBase> warmup_session(model->create_session(text));
+        if (profile_memory_stages) {
+            mem_reporter.sample(pool, model->memory_usage(*warmup_session), "warmup_session_created");
+        }
         int wnext = model->prefill(*warmup_session);
+        if (profile_memory_stages) {
+            mem_reporter.sample(pool, model->memory_usage(*warmup_session), "warmup_prefill");
+        }
         for (int i = 0; i < 4 && wnext != eos; ++i) {
             warmup_session->append_output(wnext);
             wnext = model->decode(*warmup_session);
+            if (profile_memory_stages) {
+                mem_reporter.sample(pool, model->memory_usage(*warmup_session), "warmup_decode");
+            }
         }
+    }
+    if (profile_memory_stages) {
+        mem_reporter.sample(pool, empty_memory_usage, "after_warmup_session_destroyed");
     }
     // warmup 已把权重全部搬入显存并触发首启，清零聚合与时间线，只统计稳态。
     Profiler::instance().reset();
@@ -86,6 +117,9 @@ int main(int argc, char **argv) {
     }
 
     std::unique_ptr<SessionBase> session(model->create_session(text));
+    if (profile_memory_stages) {
+        mem_reporter.sample(pool, model->memory_usage(*session), "session_created");
+    }
     const int64_t input_size = session->h_input_i32_.numel();
 
     // prefill：喂入整段输入 token，跑完各层，返回首个生成 token。

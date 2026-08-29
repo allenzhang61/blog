@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -56,6 +57,7 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
     auto &s = session.cuda_scratch;
     const int64_t hidden_size = config_.hidden_size;
     const int64_t ffn = config_.expert_ffn;
+    const int n_exp = config_.expert_count;
     const int k = config_.expert_used;
     const int *expert_ids = route.c_expert_ids_i32.data<int>();
     // decode：top_w 留在 device（route.decode_device），加权累加从 device 读权重，省掉每层 top_w 的回读同步。
@@ -72,6 +74,13 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
         for (int r = 0; r < k; ++r) {
             const size_t route_idx = static_cast<size_t>(input_index) * k + r;
             const int e = expert_ids[route_idx];
+            if (e < 0 || e >= n_exp) {
+                throw std::runtime_error("DeepSeek MoE router 返回非法 expert id: layer=" +
+                                         std::to_string(lw_.layer_index) +
+                                         " input=" + std::to_string(input_index) +
+                                         " route=" + std::to_string(r) +
+                                         " expert=" + std::to_string(e));
+            }
             if (!TensorTool::quant_swiglu(s_gate_experts_[e], s_up_experts_[e],
                                           g_tok_in_f32, g_act_f32, "ds.gemm.e_swiglu")) {
                 auto g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, ffn}, DType::F32);

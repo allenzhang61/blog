@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "utils/stats/CudaAllocTracker.h"
 #include "utils/stats/StatsReport.h"
 
 class CudaWeightPool;
@@ -40,6 +41,8 @@ public:
         size_t weight_bytes = 0;   // 持久权重（CudaWeightPool::cached_bytes）
         size_t kv_cache_bytes = 0; // 跨 token 状态：KV cache + recurrent / conv state
         size_t scratch_bytes = 0;  // 前向临时激活峰值
+        size_t dequant_cache_bytes = 0; // F16 dequant cache（若启用）
+        CudaAllocSnapshot alloc;   // 项目内 cudaMalloc/free 追踪
 
         // 设备侧总量（来自 cudaMemGetInfo）。
         size_t device_total_bytes = 0; // 显存总量

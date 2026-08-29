@@ -241,8 +241,10 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 | 删除 weight-pool 自动清空和人工上限后 | — | — | `CudaWeightPool` 只受真实显存限制；若量化常驻 + dequant/runtime 超过 12GB，则直接 `cudaMalloc` OOM |
 | 阶段 1：DeepSeek decode 全量量化直通（显式实验） | **~34.6–35.6 t/s** | **~9.5x** | 短问答可跑通；全量 `ds.gemm.*` decode 跳过 `try_dequant()`，但输出数值基线已改变，长 story 会提前 EOS 或受真实 OOM 限制 |
 | 阶段 2：MoE fused gate/up/SiLU（显式实验） | **~36.8–37.8 t/s** | **~10.1x** | 在阶段 1 基础上打开 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1`，decode 的 routed/shared experts 用 fused `gate+up+SiLU` quant kernel；`edown/sdown` 仍走阶段 1 quant GEMV |
+| 阶段 3：prefill quant matmul（显式实验） | **~34.0 t/s** | **~9.3x** | 新增 `m > 1` 的 `launch_quant_matmul`，prefill 阶段不再强依赖 `try_dequant()`；但 France prompt 输出分叉为无关英文续写，质量未通过 |
+| Packed expert GPU 常驻 | **~48.8–49.5 t/s** | **~13.5x** | MoE packed expert tensor 整块上传，`.eX` expert 只做 GPU pointer view；weight allocation 从几千个降到 GGUF tensor 级别，128 token story 不再 OOM |
 
-> 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；默认 `ctest` 中基础 CUDA 与 Qwen 测试通过，但 DeepSeek exact-output 仍存在英文/中文事实回答分叉，不能把 quant-direct 路径作为默认正确性路径。
+> 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；阶段 3 能跑通但 prefill quant-direct 会改变首 token 轨迹，France prompt 分叉为无关英文续写。默认 `ctest` 中基础 CUDA 与 Qwen 测试通过，但 DeepSeek exact-output 仍存在英文/中文事实回答分叉，不能把 quant-direct 路径作为默认正确性路径。
 
 与 llama.cpp 最新等条件 `232.33 t/s` 相比仍有巨大差距。当前真正可行的后续方向不再是盲目扩大全量量化直通，而是按 exact-output 测试逐项推进：
 
@@ -279,14 +281,36 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 - 命中：profile 中 `ds.gemm.e_swiglu` 2496 次、`ds.gemm.s_swiglu` 52 次；对应的 decode routed/shared gate/up/SiLU 已由 fused kernel 接管。
 - 显存：延迟分配 fallback-only gate/up scratch 后，采样峰值 `device used ≈ 9008 MiB`，`CudaWeightPool` 驻留峰值 `≈ 7050 MiB`，H2D 上传总量 `≈ 7050 MiB`，与阶段 1 基本同量级。
 
+阶段 3 初测：
+
+- 实现：新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1`，仅在 `ds.gemm.* && m > 1` 时跳过 `try_dequant()`；新增 `launch_quant_matmul` / `quant_matmul_kernel`，每个 warp 负责一个 `(token,row)` 输出元素，避免旧 `quant_gemv_kernel` 在 token 维串行。
+- 覆盖：prefill 中的 MLA、dense FFN、router、shared experts 等 `m > 1` GEMM 可走 quant matmul；routed experts 当前代码仍逐 token 调用，`m == 1` 时依赖阶段 1 decode quant-direct 开关。
+- 单测：新增 `LaunchQuantMatmulTest.ComputesQ80MultipleRows`，构造 Q8_0 权重并验证 `m=3` 多行输出；211 上该测试通过。
+- 命令：同时打开 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT=1`、`LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1`、`LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1`，France prompt，`--max-output-tokens 16 --profile --profile-sample-every 4`。
+- 结果：程序可跑完，实际 decode 16 tokens，stdout 吞吐约 `34.0 t/s`；但输出分叉为 `The 2018-2019 school year was a...`，说明 prefill quant-direct 当前只能作为性能/显存实验，不满足质量 smoke。
+- 显存：采样峰值 `device used ≈ 10930 MiB`，`CudaWeightPool` 驻留峰值 `≈ 8666 MiB`；没有 F16 dequant 大缓存依赖，但 prefill 会访问更多量化权重，量化常驻峰值高于阶段 1/2 短跑。
+- 旧 OOM：在 packed expert GPU 常驻前，128 token story prompt 仍会 OOM；不带 profile 时阶段 2 在 `blk.17.ffn_up_exps.weight.e31` OOM，阶段 3 在 `blk.10.ffn_gate_exps.weight.e48` OOM。后续 profile 证明瓶颈不是 KV/scratch，而是每个 expert 单独 `cudaMalloc` 带来的 allocator/page 开销。
+- 测试：211 上 `local_llm` / `local_llm_tests` 构建通过；`ctest` 为 5/6，通过新增 quant matmul 单测和 Qwen，DeepSeek exact-output 仍按已知问题失败。
+
+Packed expert GPU 常驻：
+
+- 定位：新增 `CudaAllocTracker` 后，DeepSeek 阶段 2 短跑的 `weight_allocs` 约 `3569`，`untracked device used` 约 `2.0 GiB`；Qwen 同口径只有 `426` 个 weight allocation、`untracked` 约 `378 MiB`。
+- 验证：独立脚本按 GGUF packed tensor 整块 `cudaMalloc` 时，量化权重 `9866.98 MiB` 可放下，allocator overhead 约 `235 MiB`；模拟把 expert tensor 按 64 份拆开时，`allocs=4925`、overhead 约 `2406 MiB` 并 OOM。
+- 实现：`StorageTensor::slice` 记录底层 storage name/data/shape/nbytes/byte offset；`CudaWeightPool::cached_weight()` 遇到 slice 时先上传 packed base tensor，再缓存无所有权的 `base.ptr + offset` view，view 不增加 `cached_bytes()`，也不产生 H2D。
+- 防护：`moe_router_topk_kernel` 对 NaN/Inf logits 做 sanitize，避免输出 `-1` expert；`RoutedExperts` 对 host 回读 expert id 做边界检查，避免非法 id 变成越界访问。
+- 结果：阶段 2 France prompt 输出 `The capital of France is Paris.`，decode 7 tokens，stdout 吞吐约 `48.8 t/s`；`weight_allocs` 降到 `377`，`untracked` 降到约 `500 MiB`。
+- 长跑：128 token story prompt 不带 profile 可跑完，stdout 吞吐约 `49.5 t/s`，不再 OOM；带 profile 也可跑完，峰值 `CudaWeightPool` 驻留约 `9880 MiB`，`tracked_alloc` 约 `9942 MiB`，末值 `device used` 约 `10438 MiB`，`untracked` 约 `496 MiB`。
+- 限制：quant-direct 输出仍会发散，例如 story 中出现重复 `!`/中英混杂；这解决的是显存/allocator OOM 和吞吐，不代表阶段 4 默认切换条件已满足。
+
 ### 已落地成果小结
 
-- **正确性**：DeepSeek-V2-Lite 输出已与 llama.cpp 完全对齐（修复 RoPE 类型 + attn softmax mscale²）。
-- **测试护栏**：Qwen 保留长输出 exact-output；DeepSeek 改为稳定事实型 exact-output，同时用 trace 工具分析长文本 greedy 分叉。
-- **量化直通策略**：DeepSeek `ds.gemm.*` 默认 safe dequant+cuBLAS；`edown/sdown/egate/eup` 通过 `LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS` 显式打开，全量直通、F16 operands、Q8_1 activation 直通均保留为实验开关。
+- **正确性**：DeepSeek-V2-Lite 的 RoPE 类型与 attn softmax mscale² 已修复，但 greedy exact-output 仍会因微小数值差异出现 token 分叉，不能只靠单条事实问答判定默认正确性。
+- **测试护栏**：Qwen 保留长输出 exact-output；DeepSeek exact-output 当前仍不稳定，继续依赖 smoke/profile/trace 组合定位分叉点。
+- **量化直通策略**：DeepSeek `ds.gemm.*` 默认 safe dequant+cuBLAS；decode 全量直通、MoE fused SwiGLU、prefill quant matmul、F16 operands、Q8_1 activation 直通均保留为显式实验开关。
 - **decode 尾部优化**：DeepSeek greedy decode 复用 Qwen 的 device embedding + GPU argmax，避免每步把完整 logits 回传 host，仅回传一个 token id，为后续 CUDA Graph 铺路。
 - **host 热路径瘦身**：Routed experts 在构造期预缓存每个 expert 的 `StorageTensor` view，decode 时按 route id 直接取数组元素，避免每 token 反复 slice 和拼接名字。
-- **性能**：当前 correctness-safe 默认 story prompt tg 约 **4.0 t/s**；显式 `edown/sdown` 可到 **4.85–5.06 t/s**，但不作为默认。剩余差距仍主要来自 MoE host 编排、expert id 回读、权重池/反量化缓存抖动和每层大量小 kernel launch。
+- **显存定位**：DeepSeek MoE packed expert tensor 不能按 expert 拆成几千个 GPU allocation；packed base 常驻 + expert pointer view 后，`untracked` 从约 **2.0 GiB** 降到约 **500 MiB**，128 token story OOM 消失。
+- **性能**：当前 correctness-safe 默认 story prompt tg 约 **4.0 t/s**；阶段 1/2 短问答实验可到 **~35–38 t/s**，packed expert GPU 常驻后阶段 2 路径约 **49 t/s**；阶段 3 已消除 prefill safe dequant 依赖但质量未过 smoke，均不作为默认。剩余差距仍主要来自 MoE host 编排、expert id 回读和每层大量小 kernel launch。
 - **失败实验**：尝试把 6 个 expert 的 `edown + accumulate` 合成单个 device-indexed 量化 kernel，但 exact-output 发生偏移且吞吐降到约 **2.9 t/s**。根因是单 warp 串行处理 6 个 expert 降低并行度，同时累加路径的细微数值差异仍会改变 greedy token，因此已回退。
 - **已移除实验**：weight-pool LRU 曾减少权重重复上传，但 128 token 连续运行仍出现 segfault；当前 `CudaWeightPool` 已去掉 LRU 能力和人工容量上限，默认依赖足够 GPU 内存，显存不足时由 `cudaMalloc` 直接报 OOM，不再整体清空。
 

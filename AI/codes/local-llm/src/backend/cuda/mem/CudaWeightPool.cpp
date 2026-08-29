@@ -6,6 +6,7 @@
 
 #include "../common.h"
 #include "backend/cuda/mem/Quant.h"
+#include "utils/stats/CudaAllocTracker.h"
 #include "utils/stats/WeightLoadTracker.h"
 
 #include <chrono>
@@ -39,11 +40,13 @@ void CudaWeightPool::cuda_malloc_timed(void **ptr, size_t bytes, const std::stri
     out_ms = 0.0;
     if (!timed) {
         check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc s_weight 失败 " + what);
+        record_cuda_alloc(*ptr, bytes, CudaAllocKind::Weight, "s_weight " + what);
         return;
     }
     const auto t0 = std::chrono::steady_clock::now();
     check_cuda(cudaMalloc(ptr, bytes), "cudaMalloc s_weight 失败 " + what);
     const auto t1 = std::chrono::steady_clock::now();
+    record_cuda_alloc(*ptr, bytes, CudaAllocKind::Weight, "s_weight " + what);
     out_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
@@ -115,6 +118,23 @@ CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight) {
     auto found = items_.find(s_weight.name);
     if (found != items_.end()) {
         return &found->second;
+    }
+
+    if (s_weight.is_storage_slice()) {
+        StorageTensor storage(s_weight.storage_data(), s_weight.storage_shape(),
+                              s_weight.dtype, s_weight.storage_nbytes());
+        storage.name = s_weight.storage_name();
+        CudaWeight *base = cached_weight(storage);
+        auto view = CudaWeight::make_view(
+            static_cast<uint8_t *>(base->ptr) + s_weight.storage_byte_offset(),
+            s_weight.nbytes,
+            cuda_type_for(s_weight),
+            s_weight.dtype,
+            Quant::num_elements(s_weight),
+            s_weight.name);
+        auto [it, inserted] = items_.emplace(s_weight.name, std::move(view));
+        (void) inserted;
+        return &it->second;
     }
 
     size_t bytes = s_weight.nbytes;

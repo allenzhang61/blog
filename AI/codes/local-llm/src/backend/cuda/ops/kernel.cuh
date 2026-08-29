@@ -36,6 +36,11 @@ void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
 void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
                        float *y, int out_dim, int in_dim, int m, bool f16_operands, void *stream);
 
+// 量化直算 MATMUL：每个 warp 负责一个 (token,row) 输出元素，面向 prefill m>1。
+// 相比 launch_quant_gemv 的 token 维串行循环，这里按 m*out_dim 并行，避免 prefill 仍依赖 F16 dequant cache。
+void launch_quant_matmul(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
+                         float *y, int out_dim, int in_dim, int m, bool f16_operands, void *stream);
+
 // llama.cpp-style 实验路径：先把 activation 动态量化成 Q8_1（每 32 个元素 36 字节），
 // 再用量化权重与 Q8_1 activation 做 decode GEMV。当前只面向 m==1 的 decode 热路径。
 size_t q8_1_row_bytes(int in_dim);
