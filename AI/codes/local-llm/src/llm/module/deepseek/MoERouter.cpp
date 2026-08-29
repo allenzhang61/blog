@@ -7,6 +7,7 @@
 #include "backend/cuda/mem/CudaScratch.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
+#include "llm/model/deepseek/DeepseekTrace.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
 #include "tensor/CPUScratch.h"
 #include "tensor/GPUTensor.h"
@@ -31,12 +32,14 @@ MoERoute MoERouter::forward(DeepseekSession &session, const GPUTensor &g_normed_
     // lw_.s_ffn_gate_inp->to_gpu(true);
     TensorTool::gemm(*lw_.s_ffn_gate_inp, g_normed_f32, g_router_logits_f32, s, scratch_key::kFfnInLowp,
                      "ds.gemm.router");
+    deepseek_trace::tensor(session, g_router_logits_f32, "router_logits", session.trace_pos, session.trace_layer);
 
     const std::vector<int64_t> route_shape = {input_size, k};
     auto g_top_idx_i32 = GPUTensor(s, scratch_key::kTopIdx, route_shape, DType::I32);
     auto g_top_w_f32 = GPUTensor(s, scratch_key::kTopW, route_shape, DType::F32);
     TensorTool::moe_router_topk(g_router_logits_f32, g_top_idx_i32, g_top_w_f32,
                                 static_cast<int>(n_exp), static_cast<int>(k), config_.routed_scaling);
+    deepseek_trace::topk(session, g_top_idx_i32, g_top_w_f32, "router_topk", session.trace_pos, session.trace_layer);
 
     MoERoute route;
     route.c_expert_ids_i32 = g_top_idx_i32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeExpertIds, "ds.moe.idx");

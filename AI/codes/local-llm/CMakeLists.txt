@@ -104,6 +104,8 @@ add_executable(local_llm src/main.cpp
         src/llm/model/deepseek/DeepseekConfig.h
         src/llm/model/deepseek/DeepseekSession.cpp
         src/llm/model/deepseek/DeepseekSession.h
+        src/llm/model/deepseek/DeepseekTrace.cpp
+        src/llm/model/deepseek/DeepseekTrace.h
         src/llm/model/deepseek/DeepseekWeights.cpp
         src/llm/model/deepseek/DeepseekWeights.h
         src/format/gguf/GGUFTokenizer.cpp

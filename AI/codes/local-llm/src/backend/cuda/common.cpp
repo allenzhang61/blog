@@ -43,8 +43,11 @@ void cuda_memcpy_d2h(void *dst, const void *src, size_t bytes, const std::string
 
 void cuda_memcpy2d_d2d(void *dst, size_t dpitch, const void *src, size_t spitch,
                        size_t width_bytes, size_t height, const std::string &what) {
-    check_cuda(cudaMemcpy2D(dst, dpitch, src, spitch, width_bytes, height,
-                            cudaMemcpyDeviceToDevice),
+    // Enqueue on the current compute stream so the copy is ordered with preceding
+    // KV-cache writes and following attention/GEMM kernels in non-blocking mode.
+    cudaStream_t s = get_current_cuda_stream();
+    check_cuda(cudaMemcpy2DAsync(dst, dpitch, src, spitch, width_bytes, height,
+                                 cudaMemcpyDeviceToDevice, s),
                what);
 }
 

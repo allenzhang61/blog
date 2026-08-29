@@ -8,14 +8,13 @@
 #include "backend/cuda/mem/CudaScratch.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "llm/model/deepseek/DeepseekSession.h"
+#include "llm/model/deepseek/DeepseekTrace.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
 #include "llm/module/common/RMSNorm.h"
 #include "tensor/GPUTensor.h"
 #include "tensor/TensorTool.h"
 
 #include <cstdint>
-
-#include <cuda_runtime.h>
 
 MLA::MLA(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config), lw_(weights) {
@@ -39,6 +38,7 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
     auto g_normed_f32 = GPUTensor(scratch, scratch_key::kNormed, {input_size, hidden_size}, DType::F32);
     RMSNorm::forward(*lw_.s_attn_norm, g_hidden_f32, g_normed_f32,
                      config_.rms_norm_eps, /*one_plus=*/false);
+    deepseek_trace::tensor(session, g_normed_f32, "attn_normed", session.trace_pos, session.trace_layer);
 
     auto g_q_f32 = GPUTensor(scratch, scratch_key::kQ,
                                   {
@@ -48,11 +48,13 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
                                   }, DType::F32);
     TensorTool::gemm(*lw_.s_attn_q, g_normed_f32, g_q_f32, scratch, scratch_key::kNormedLowp, "ds.gemm.d_attn_q");
     TensorTool::mla_rope_q(g_q_f32, input_size, n_heads, qk_nope, qk_rope, start_pos, g_inv_freq_f32);
+    deepseek_trace::tensor(session, g_q_f32, "attn_q_rope", session.trace_pos, session.trace_layer);
 
     GPUTensor g_kv_a_f32 = GPUTensor(
         scratch, scratch_key::kKvA,
         {input_size, static_cast<int64_t>(kv_total)}, DType::F32);
     TensorTool::gemm(*lw_.s_attn_kv_a_mqa, g_normed_f32, g_kv_a_f32, scratch, scratch_key::kNormedLowp, "ds.gemm.kv_a");
+    deepseek_trace::tensor(session, g_kv_a_f32, "kv_a", session.trace_pos, session.trace_layer);
 
     GPUTensor &g_kv_cache_f32 = session.kv_caches[layer].g_cache_f32;
     TensorTool::mla_kv_a(g_kv_a_f32, *lw_.s_attn_kv_a_norm, g_kv_cache_f32, input_size, kv_lora, qk_rope,
@@ -73,8 +75,10 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
         cuda_memcpy2d_d2d(g_latent_f32.data(), kv_lora * sizeof(float), g_kv_cache_f32.data(),
                           kv_total * sizeof(float), kv_lora * sizeof(float), static_cast<size_t>(seq),
                           "ds.gather.latent");
+        deepseek_trace::tensor(session, g_latent_f32, "kv_latent", session.trace_pos, session.trace_layer);
         TensorTool::gemm(*lw_.s_attn_kv_b, g_latent_f32, g_kv_b_out_f32, scratch, scratch_key::kLatentLowp,
                          "ds.gemm.kv_b");
+        deepseek_trace::tensor(session, g_kv_b_out_f32, "kv_b_out", session.trace_pos, session.trace_layer);
     }
 
     GPUTensor g_attn_f32 = GPUTensor(
@@ -82,9 +86,11 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
         {input_size, static_cast<int64_t>(n_heads * v_head)}, DType::F32);
     TensorTool::mla_attend(g_q_f32, g_kv_b_out_f32, g_kv_cache_f32, g_attn_f32, input_size, n_heads, qk_nope, qk_rope,
                            v_head, kv_lora, start_pos, session.attn_softmax_scale);
+    deepseek_trace::tensor(session, g_attn_f32, "attn_ctx", session.trace_pos, session.trace_layer);
 
     GPUTensor g_attn_out_f32 = GPUTensor(scratch, scratch_key::kAttnOut, {input_size, hidden_size}, DType::F32);
     TensorTool::gemm(*lw_.s_attn_output, g_attn_f32, g_attn_out_f32, scratch, scratch_key::kAttnLowp,
                      "ds.gemm.d_attn_output");
+    deepseek_trace::tensor(session, g_attn_out_f32, "attn_out", session.trace_pos, session.trace_layer);
     TensorTool::add(g_hidden_f32, g_attn_out_f32, g_hidden_f32);
 }

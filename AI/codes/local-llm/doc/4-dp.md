@@ -241,10 +241,10 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 | 删除 weight-pool 自动清空和人工上限后 | — | — | `CudaWeightPool` 只受真实显存限制；若量化常驻 + dequant/runtime 超过 12GB，则直接 `cudaMalloc` OOM |
 | 阶段 1：DeepSeek decode 全量量化直通（显式实验） | **~34.6–35.6 t/s** | **~9.5x** | 短问答可跑通；全量 `ds.gemm.*` decode 跳过 `try_dequant()`，但输出数值基线已改变，长 story 会提前 EOS 或受真实 OOM 限制 |
 | 阶段 2：MoE fused gate/up/SiLU（显式实验） | **~36.8–37.8 t/s** | **~10.1x** | 在阶段 1 基础上打开 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1`，decode 的 routed/shared experts 用 fused `gate+up+SiLU` quant kernel；`edown/sdown` 仍走阶段 1 quant GEMV |
-| 阶段 3：prefill quant matmul（显式实验） | **~34.0 t/s** | **~9.3x** | 新增 `m > 1` 的 `launch_quant_matmul`，prefill 阶段不再强依赖 `try_dequant()`；但 France prompt 输出分叉为无关英文续写，质量未通过 |
+| 阶段 3：prefill quant matmul（显式实验） | **~40–41 t/s** | **~11x** | 对齐 llama.cpp 的核心数据流：prefill 先把 activation 动态量化成 Q8_1，再用 Q8_1 activation + quant weight 做 matmul；修复 MLA latent gather 跨流 D2D copy 后，128-token story 可无 trace 稳定续写 |
 | Packed expert GPU 常驻 | **~48.8–49.5 t/s** | **~13.5x** | MoE packed expert tensor 整块上传，`.eX` expert 只做 GPU pointer view；weight allocation 从几千个降到 GGUF tensor 级别，128 token story 不再 OOM |
 
-> 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；阶段 3 能跑通但 prefill quant-direct 会改变首 token 轨迹，France prompt 分叉为无关英文续写。默认 `ctest` 中基础 CUDA 与 Qwen 测试通过，但 DeepSeek exact-output 仍存在英文/中文事实回答分叉，不能把 quant-direct 路径作为默认正确性路径。
+> 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；阶段 3 改为 llama.cpp-style Q8_1 activation 后短问答能生成“巴黎/法国首都巴黎”一类语义正确回答；修复 MLA latent gather 的 stream 顺序后，story 长文 smoke 可无 trace 连贯续写。但 DeepSeek 仍不能通过英文 exact-output，事实回答表述/语言仍会分叉，不能把 quant-direct 路径作为默认正确性路径。
 
 与 llama.cpp 最新等条件 `232.33 t/s` 相比仍有巨大差距。当前真正可行的后续方向不再是盲目扩大全量量化直通，而是按 exact-output 测试逐项推进：
 
@@ -283,14 +283,22 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 
 阶段 3 初测：
 
-- 实现：新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1`，仅在 `ds.gemm.* && m > 1` 时跳过 `try_dequant()`；新增 `launch_quant_matmul` / `quant_matmul_kernel`，每个 warp 负责一个 `(token,row)` 输出元素，避免旧 `quant_gemv_kernel` 在 token 维串行。
+- 实现：新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1`，仅在 `ds.gemm.* && m > 1` 时跳过 `try_dequant()`；初版 `launch_quant_matmul` 是 float activation + on-the-fly weight dequant，每个 warp 负责一个 `(token,row)` 输出元素。
+- llama.cpp 对齐修正：llama.cpp 的 CUDA MMQ 不是 float activation 逐元素直乘，而是先把 activation 动态量化成 Q8_1，再用 quant weight × Q8_1 activation 做 block dot / tiled MMQ。local-llm 已新增 `launch_quant_matmul_q8_1`，阶段 3 现在先 `launch_quantize_q8_1`，再走 Q8_1 prefill matmul；旧 float `launch_quant_matmul` 保留为 fallback/单测路径。
 - 覆盖：prefill 中的 MLA、dense FFN、router、shared experts 等 `m > 1` GEMM 可走 quant matmul；routed experts 当前代码仍逐 token 调用，`m == 1` 时依赖阶段 1 decode quant-direct 开关。
-- 单测：新增 `LaunchQuantMatmulTest.ComputesQ80MultipleRows`，构造 Q8_0 权重并验证 `m=3` 多行输出；211 上该测试通过。
-- 命令：同时打开 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT=1`、`LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1`、`LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1`，France prompt，`--max-output-tokens 16 --profile --profile-sample-every 4`。
-- 结果：程序可跑完，实际 decode 16 tokens，stdout 吞吐约 `34.0 t/s`；但输出分叉为 `The 2018-2019 school year was a...`，说明 prefill quant-direct 当前只能作为性能/显存实验，不满足质量 smoke。
-- 显存：采样峰值 `device used ≈ 10930 MiB`，`CudaWeightPool` 驻留峰值 `≈ 8666 MiB`；没有 F16 dequant 大缓存依赖，但 prefill 会访问更多量化权重，量化常驻峰值高于阶段 1/2 短跑。
+- 单测：新增 `LaunchQuantMatmulTest.ComputesQ80MultipleRows` 和 `LaunchQuantMatmulQ81Test.ComputesQ80MultipleRows`，分别验证 float activation matmul 与 Q8_1 activation matmul；211 上两者均通过。
+- 命令：推荐使用 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET=1`，等价于对 DeepSeek `ds.gemm.*` 自动打开 decode quant-direct、decode Q8_1 activation、prefill Q8_1 quant matmul 和 MoE fused SwiGLU；仍可用 `LOCAL_LLM_DEEPSEEK_DECODE_QUANT_DIRECT_EXCLUDE_OPS` / `LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS` 把单个 op 回退 safe path。
+- 结果：程序可跑完，实际 decode 16 tokens，stdout 吞吐约 `41.3 t/s`；France prompt 输出 `巴黎，法国的首都是巴黎...` 或同义事实回答，不再是无关英文续写，但仍不等于 exact-output 期望 `The capital of France is Paris.`。
+- 显存：packed expert 修复后，阶段 3 France prompt 末值 `weight_allocs=377`，`CudaWeightPool` 驻留约 `9880 MiB`，`device used≈10382 MiB`；没有 F16 dequant 大缓存依赖。
+- 长跑：packed expert 修复后 128 token story prompt 可跑完且不 OOM；在修复 MLA latent gather 的 stream 顺序问题后，无 trace quant-direct 也可稳定续写英文 story，stdout 吞吐约 `21.2 t/s`。
+- 质量 preset：新增脚本 `scripts/deepseek_quant_quality_ablate.sh`。preset 单独运行可避免 OOM/segfault 和多数低层乱码，但仍会跑题；64-token story 常见输出变为中文新闻/英文续写，而不是 robot painting story。
+- Ablation：单独回退 `ds.gemm.router`、`ds.gemm.edown`、`ds.gemm.sdown`、`ds.gemm.d_attn_output`、`ds.gemm.kv_b` 都没有稳定恢复 prompt 语义；`decode Q8_1` 能明显缓解空行/`!` 循环，但无法解决语义跑偏。
+- 逐层对拍：新增 `LOCAL_LLM_DEEPSEEK_TRACE=1`、`LOCAL_LLM_DEEPSEEK_TRACE_TAG`、`LOCAL_LLM_DEEPSEEK_TRACE_POS`、`LOCAL_LLM_DEEPSEEK_TRACE_ROW`，并输出 `embedding/attn_normed/attn_q_rope/kv_a/kv_latent/kv_b_out/attn_ctx/attn_out/mla/moe_normed/router_logits/router_topk/moe_out/moe_post_add/mlp/final_norm` 的统计摘要；`scripts/deepseek_trace_compare.py` 可比较两份 trace。France prompt 的 pos=14 对拍显示 safe1/safe2 完全一致，只开 prefill Q8_1 时第一次 top-k 分叉在 layer7，preset 全开时第一次 top-k 分叉在 layer9；将 prefill 所有 `ds.gemm.*` 回 safe 后可恢复一致，说明当前阶段3 prefill Q8_1 仍是语义漂移的主要风险源，保留为显式实验路径。
+- llama.cpp 对拍：在 llama.cpp 中新增 env-gated DeepSeek trace（`LLAMA_DEEPSEEK_TRACE`、`LLAMA_DEEPSEEK_TRACE_POS`、`LLAMA_DEEPSEEK_TRACE_STAGES`、`LLAMA_DEEPSEEK_TRACE_LAYER`、`LLAMA_DEEPSEEK_TRACE_ROW`），用 `llama-simple` 跑同一 raw prompt `法国的首都是` 时 token 数为 4、trace pos=3，生成 `巴黎`。local safe 的 `mlp` 与 llama.cpp 的 `l_out` 高层输出整体接近，后半层相对 RMS 多在约 1% 或更低；MoE 语义映射应使用 `ffn_norm -> moe_normed`、`ffn_moe_logits -> router_logits`、`ffn_out -> moe_out`（因为 `ffn_out = ffn_moe_out + ffn_shexp`）、`l_out -> mlp`。router top-k 对比显示 local safe 与 llama.cpp 不是 bit-level 对齐，26 个 MoE 层中 9 层 top-k 集合不一致、23 层顺序不一致；local quant-direct 与 llama.cpp 统计相近（10 层集合不一致、24 层顺序不一致），没有证明 quant-direct 比 safe 明显更偏离 llama.cpp。
+- Q8_1 `sum` 假设：曾按 llama.cpp CUDA `quantize_q8_1` 的 raw `sum(x)` 语义试改 local activation header，但 France pos=3 safe/quant 对拍明显变差，top-k 分叉从 6 层增至 8 层，并在 attention/MLA 后半层引入更大统计差异；该实验已回退，当前 local 仍保留 `d * sum(qs)` 语义。说明 local 当前 Q4_K/Q8_1 dot/min compensation 与 llama.cpp MMQ 不能只改 header 字段，若要继续对齐需要整体复核 dot kernel 的 `xsum` 约定。
+- Stream 修复：story prompt 曾出现“无 trace quant-direct 输出中文重复，但 `LOCAL_LLM_DEEPSEEK_TRACE=1` 或 `CUDA_LAUNCH_BLOCKING=1` 正常”的现象。定位后发现 MLA 的 `ds.gather.latent` 使用同步 `cudaMemcpy2D`，没有排入当前 non-blocking compute stream，可能在 KV-cache 写入 kernel 完成前从默认流读取旧数据；改为 `cudaMemcpy2DAsync(..., get_current_cuda_stream())` 后，16-token 与 128-token story 在无 trace 下均恢复正常。`MoE::forward` 的 `g_moe_out` 清零也改为当前流上的 `cudaMemsetAsync`，避免后续 routed/shared expert 累加与默认流清零存在类似顺序隐患。
 - 旧 OOM：在 packed expert GPU 常驻前，128 token story prompt 仍会 OOM；不带 profile 时阶段 2 在 `blk.17.ffn_up_exps.weight.e31` OOM，阶段 3 在 `blk.10.ffn_gate_exps.weight.e48` OOM。后续 profile 证明瓶颈不是 KV/scratch，而是每个 expert 单独 `cudaMalloc` 带来的 allocator/page 开销。
-- 测试：211 上 `local_llm` / `local_llm_tests` 构建通过；`ctest` 为 5/6，通过新增 quant matmul 单测和 Qwen，DeepSeek exact-output 仍按已知问题失败。
+- 测试：211 上 `local_llm` / `local_llm_tests` 构建通过；`ctest` 为 7/7；DeepSeek 128-token story smoke 在 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET=1 LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1` 下可跑完并输出连贯英文故事。
 
 Packed expert GPU 常驻：
 
@@ -310,7 +318,7 @@ Packed expert GPU 常驻：
 - **decode 尾部优化**：DeepSeek greedy decode 复用 Qwen 的 device embedding + GPU argmax，避免每步把完整 logits 回传 host，仅回传一个 token id，为后续 CUDA Graph 铺路。
 - **host 热路径瘦身**：Routed experts 在构造期预缓存每个 expert 的 `StorageTensor` view，decode 时按 route id 直接取数组元素，避免每 token 反复 slice 和拼接名字。
 - **显存定位**：DeepSeek MoE packed expert tensor 不能按 expert 拆成几千个 GPU allocation；packed base 常驻 + expert pointer view 后，`untracked` 从约 **2.0 GiB** 降到约 **500 MiB**，128 token story OOM 消失。
-- **性能**：当前 correctness-safe 默认 story prompt tg 约 **4.0 t/s**；阶段 1/2 短问答实验可到 **~35–38 t/s**，packed expert GPU 常驻后阶段 2 路径约 **49 t/s**；阶段 3 已消除 prefill safe dequant 依赖但质量未过 smoke，均不作为默认。剩余差距仍主要来自 MoE host 编排、expert id 回读和每层大量小 kernel launch。
+- **性能**：当前 correctness-safe 默认 story prompt tg 约 **4.0 t/s**；阶段 1/2 短问答实验可到 **~35–38 t/s**，packed expert GPU 常驻后阶段 2 路径约 **49 t/s**；阶段 3 已消除 prefill safe dequant 依赖，修复 stream 顺序后 128-token story smoke 可连贯输出但仍非 exact-output，暂不作为默认。剩余差距仍主要来自 MoE host 编排、expert id 回读和每层大量小 kernel launch。
 - **失败实验**：尝试把 6 个 expert 的 `edown + accumulate` 合成单个 device-indexed 量化 kernel，但 exact-output 发生偏移且吞吐降到约 **2.9 t/s**。根因是单 warp 串行处理 6 个 expert 降低并行度，同时累加路径的细微数值差异仍会改变 greedy token，因此已回退。
 - **已移除实验**：weight-pool LRU 曾减少权重重复上传，但 128 token 连续运行仍出现 segfault；当前 `CudaWeightPool` 已去掉 LRU 能力和人工容量上限，默认依赖足够 GPU 内存，显存不足时由 `cudaMalloc` 直接报 OOM，不再整体清空。
 

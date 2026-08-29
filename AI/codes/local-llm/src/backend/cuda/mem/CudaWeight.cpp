@@ -21,7 +21,8 @@ CudaWeight::CudaWeight(size_t bytes, cudaDataType_t type, bool zero, const std::
     else dtype = DType::F32;
     ptr = cuda_malloc_device(bytes, "cudaMalloc " + what + " 失败");
     if (zero) {
-        check_cuda(cudaMemset(ptr, 0, bytes), "cudaMemset " + what + " 失败");
+        check_cuda(cudaMemsetAsync(ptr, 0, bytes, get_current_cuda_stream()),
+                   "cudaMemset " + what + " 失败");
     }
 }
 

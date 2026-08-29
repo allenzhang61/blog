@@ -199,3 +199,62 @@ TEST(LaunchQuantMatmulTest, ComputesQ80MultipleRows) {
         EXPECT_NEAR(expected1, out[static_cast<size_t>(row) * out_dim + 1], 1e-5f);
     }
 }
+
+TEST(LaunchQuantMatmulQ81Test, ComputesQ80MultipleRows) {
+    skip_if_no_cuda_device();
+
+    constexpr int in_dim = 32;
+    constexpr int out_dim = 2;
+    constexpr int m = 2;
+    constexpr size_t row_bytes = 34;
+    std::vector<uint8_t> weight(row_bytes * out_dim, 0);
+    for (int row = 0; row < out_dim; ++row) {
+        std::vector<uint8_t> row_bytes_host;
+        append_u16_le(row_bytes_host, 0x3c00); // f16(1.0)
+        for (int k = 0; k < in_dim; ++k) {
+            const int8_t q = static_cast<int8_t>(row == 0 ? 1 : (k % 2 == 0 ? 2 : -1));
+            row_bytes_host.push_back(static_cast<uint8_t>(q));
+        }
+        std::copy(row_bytes_host.begin(), row_bytes_host.end(), weight.begin() + row * row_bytes);
+    }
+
+    std::vector<float> x(static_cast<size_t>(m) * in_dim, 0.0f);
+    x[0] = 127.0f;
+    x[in_dim] = -127.0f;
+    for (int k = 1; k < in_dim; ++k) {
+        x[k] = static_cast<float>(k);
+        x[static_cast<size_t>(in_dim) + k] = static_cast<float>(-k);
+    }
+    std::vector<float> out(static_cast<size_t>(m) * out_dim, 0.0f);
+
+    DeviceArray<uint8_t> d_weight(weight.size());
+    DeviceArray<float> d_x(x.size());
+    DeviceArray<uint8_t> d_x_q8_1(static_cast<size_t>(m) * q8_1_row_bytes(in_dim));
+    DeviceArray<float> d_out(out.size());
+    ASSERT_EQ(cudaSuccess, d_weight.status());
+    ASSERT_EQ(cudaSuccess, d_x.status());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.status());
+    ASSERT_EQ(cudaSuccess, d_out.status());
+    ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
+    ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
+
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quant_matmul_q8_1(DType::Q8_0, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
+                             out_dim, in_dim, m, nullptr);
+
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    ASSERT_EQ(cudaSuccess, d_out.copy_to(out));
+
+    for (int row = 0; row < m; ++row) {
+        float expected0 = 0.0f;
+        float expected1 = 0.0f;
+        for (int k = 0; k < in_dim; ++k) {
+            const float xv = x[static_cast<size_t>(row) * in_dim + k];
+            expected0 += xv;
+            expected1 += xv * (k % 2 == 0 ? 2.0f : -1.0f);
+        }
+        EXPECT_NEAR(expected0, out[static_cast<size_t>(row) * out_dim + 0], 1e-5f);
+        EXPECT_NEAR(expected1, out[static_cast<size_t>(row) * out_dim + 1], 1e-5f);
+    }
+}

@@ -63,9 +63,10 @@ void CudaWeightPool::memcpy_h2d_timed(void *dst, const void *src, size_t bytes,
     cudaEvent_t stop = nullptr;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
+    cudaStream_t stream = get_current_cuda_stream();
+    cudaEventRecord(start, stream);
     cuda_memcpy_h2d(dst, src, bytes, "cudaMemcpy s_weight 失败 " + what);
-    cudaEventRecord(stop);
+    cudaEventRecord(stop, stream);
     cudaEventSynchronize(stop);
     float ms = 0.0f;
     cudaEventElapsedTime(&ms, start, stop);
@@ -114,13 +115,13 @@ CudaWeightPool::~CudaWeightPool() {
     }
 }
 
-CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight) {
+CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight, bool use_storage_view) {
     auto found = items_.find(s_weight.name);
     if (found != items_.end()) {
         return &found->second;
     }
 
-    if (s_weight.is_storage_slice()) {
+    if (use_storage_view && s_weight.is_storage_slice()) {
         StorageTensor storage(s_weight.storage_data(), s_weight.storage_shape(),
                               s_weight.dtype, s_weight.storage_nbytes());
         storage.name = s_weight.storage_name();

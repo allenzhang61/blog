@@ -41,7 +41,7 @@ public:
     // 获取 device 权重缓存；首次访问时从 mmap host 权重上传到 GPU。
     // BF16/F16/F32 权重可直接用于 GEMM；量化权重以 CUDA_R_8I 标记原始字节，
     // 使用前需由 Quant 反量化或由 quant-direct kernel 直接读取。
-    CudaWeight *cached_weight(const StorageTensor &s_weight);
+    CudaWeight *cached_weight(const StorageTensor &s_weight, bool use_storage_view = true);
     // 只查询已经上传的 device 权重缓存；miss 时返回 nullptr，不触发上传。
     CudaWeight *find_cached_weight(const StorageTensor &s_weight);
 

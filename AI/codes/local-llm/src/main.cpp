@@ -98,7 +98,8 @@ int main(int argc, char **argv) {
         if (profile_memory_stages) {
             mem_reporter.sample(pool, model->memory_usage(*warmup_session), "warmup_prefill");
         }
-        for (int i = 0; i < 4 && wnext != eos; ++i) {
+        const int warmup_decode_steps = args.max_output_tokens < 4 ? args.max_output_tokens : 4;
+        for (int i = 0; i < warmup_decode_steps && wnext != eos; ++i) {
             warmup_session->append_output(wnext);
             wnext = model->decode(*warmup_session);
             if (profile_memory_stages) {

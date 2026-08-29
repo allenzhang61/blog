@@ -42,12 +42,15 @@ void launch_quant_matmul(DType quant_type, const uint8_t *weight, size_t row_byt
                          float *y, int out_dim, int in_dim, int m, bool f16_operands, void *stream);
 
 // llama.cpp-style 实验路径：先把 activation 动态量化成 Q8_1（每 32 个元素 36 字节），
-// 再用量化权重与 Q8_1 activation 做 decode GEMV。当前只面向 m==1 的 decode 热路径。
+// 再用量化权重与 Q8_1 activation 做 GEMV/MMQ。
 size_t q8_1_row_bytes(int in_dim);
 void launch_quantize_q8_1(const float *x, uint8_t *x_q8_1, int in_dim, int m, void *stream);
 void launch_quant_gemv_q8_1(DType quant_type, const uint8_t *weight, size_t row_bytes,
                             const uint8_t *x_q8_1, float *y,
                             int out_dim, int in_dim, void *stream);
+void launch_quant_matmul_q8_1(DType quant_type, const uint8_t *weight, size_t row_bytes,
+                              const uint8_t *x_q8_1, float *y,
+                              int out_dim, int in_dim, int m, void *stream);
 
 // DeepSeek MoE decode 专用：同时计算 gate/up 两个量化 GEMV，并直接写出
 // SiLU(gate) * up，减少 egate + eup + silu_mul 三次 launch 和中间张量写回。

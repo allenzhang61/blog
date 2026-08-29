@@ -187,6 +187,41 @@ void launch_quant_gemv_q8_1(DType quant_type, const uint8_t *weight, size_t row_
     }
 }
 
+template <int QUANT_TYPE>
+void launch_quant_matmul_q8_1_typed(const uint8_t *weight, size_t row_bytes,
+                                    const uint8_t *x_q8_1, float *y,
+                                    int out_dim, int in_dim, int m,
+                                    cudaStream_t stream) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int blocks_per_row = static_cast<int>(q8_1_row_bytes(in_dim) / 36);
+    const int total = m * out_dim;
+    const int blocks = (total + warps_per_block - 1) / warps_per_block;
+    quant_matmul_q8_1_kernel<QUANT_TYPE><<<blocks, kBlock, 0, stream>>>(
+        weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, blocks_per_row);
+}
+
+void launch_quant_matmul_q8_1(DType quant_type, const uint8_t *weight, size_t row_bytes,
+                              const uint8_t *x_q8_1, float *y,
+                              int out_dim, int in_dim, int m, void *stream) {
+    const cudaStream_t s = as_stream(stream);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_matmul_q8_1_typed<12>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, s);
+            break;
+        case DType::Q6_K:
+            launch_quant_matmul_q8_1_typed<14>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, s);
+            break;
+        case DType::Q5_0:
+            launch_quant_matmul_q8_1_typed<6>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, s);
+            break;
+        case DType::Q8_0:
+            launch_quant_matmul_q8_1_typed<8>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, s);
+            break;
+        default:
+            break;
+    }
+}
+
 void launch_quant_embedding(DType quant_type, const int *input, float *output, const uint8_t *table,
                             size_t row_bytes, int hidden_size, int input_size, void *stream) {
     cudaStream_t s = as_stream(stream);

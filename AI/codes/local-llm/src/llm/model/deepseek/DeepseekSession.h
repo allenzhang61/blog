@@ -33,6 +33,8 @@ public:
     std::vector<LatentKVCache> kv_caches;
     GPUTensor g_inv_freq_f32;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）
     float attn_softmax_scale = 0; // = mscale^2 / sqrt(qk_head)
+    int trace_pos = -1;
+    int trace_layer = -1;
 
     size_t kv_state_bytes() const override;
 

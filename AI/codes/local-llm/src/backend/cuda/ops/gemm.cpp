@@ -23,27 +23,28 @@ void gemm_main(cublasHandle_t handle, const void *d_weight,
     if (weight_type != x_type) {
         throw std::runtime_error("gemm_weight: g_weight.type 与 x_type 不一致");
     }
+    cudaStream_t stream = get_current_cuda_stream();
 
     // M=1（decode 单 token）且权重为 bf16：走手写 GEMV，避免 cuBLAS 在 M=1 选
     // tensor-core GEMM tile 造成的算力浪费。in_dim 需为偶数（Qwen 全部满足）。
     if (input_size == 1 && weight_type == CUDA_R_16BF && (in_dim & 1) == 0) {
-        ScopedGpuTimer timer(name && name[0] ? name : nullptr, nullptr, weight_bytes);
+        ScopedGpuTimer timer(name && name[0] ? name : nullptr, stream, weight_bytes);
         launch_bf16_gemv(static_cast<const uint16_t *>(d_weight),
                          static_cast<const uint16_t *>(d_x), d_y,
-                         out_dim, in_dim, get_current_cuda_stream());
+                         out_dim, in_dim, stream);
         return;
     }
 
     // name 非空时埋点：以权重 bytes 作为访存字节，供 Profiler 算有效带宽。
     // ScopedGpuTimer 在 Profiler 关闭或 name 为空时零开销。name 为字面量指针，不拷贝。
-    ScopedGpuTimer timer(name && name[0] ? name : nullptr, nullptr, weight_bytes);
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, stream, weight_bytes);
 
     // 纯 w*x=y，不累加
     const float alpha = 1.0f;
     const float beta = 0.0f;
 
     // 绑定当前流：decode 阶段为非阻塞流，使 cuBLAS 调用可纳入 stream capture（CUDA Graph）。
-    check_cublas(cublasSetStream(handle, get_current_cuda_stream()), "cublasSetStream 失败");
+    check_cublas(cublasSetStream(handle, stream), "cublasSetStream 失败");
 
     // 列主序视角：W 存为 [in_dim, out_dim]（lda=in_dim），OP_T 得 [out_dim, in_dim]；
     // X 为 [in_dim, tokens]（ldb=in_dim）；Y 为 [out_dim, tokens]（ldc=out_dim）。
