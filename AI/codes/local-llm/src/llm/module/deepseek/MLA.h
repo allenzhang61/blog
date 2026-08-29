@@ -19,7 +19,8 @@ public:
     MLA(const DeepseekLayerWeights &weights, const DeepseekConfig &config);
 
     // g_hidden：输入/原位更新的隐状态 [input_size, hidden_size]，input_size 由 shape 推出。
-    void forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int start_pos);
+    void forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int start_pos,
+                 bool use_device_pos = false);
 
 private:
     const DeepseekConfig &config_;

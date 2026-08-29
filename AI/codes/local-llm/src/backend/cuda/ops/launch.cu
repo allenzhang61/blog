@@ -651,11 +651,27 @@ void launch_mla_kv_a(const float *kv_a, const float *kv_a_norm_weight, float *ou
         kv_a, kv_a_norm_weight, output_kv_cache, input_size, kv_lora, qk_rope, start_pos, inv_freq, eps);
 }
 
+void launch_mla_kv_a_device_pos(const float *kv_a, const float *kv_a_norm_weight, float *output_kv_cache,
+                                int input_size, int kv_lora, int qk_rope, const int *d_pos,
+                                const float *inv_freq, float eps, void *stream) {
+    ScopedGpuTimer timer("mla_kv_a", as_stream(stream));
+    size_t smem = (static_cast<size_t>(kBlock) + kv_lora + qk_rope) * sizeof(float);
+    mla_kv_a_device_pos_kernel<<<input_size, kBlock, smem, as_stream(stream)>>>(
+        kv_a, kv_a_norm_weight, output_kv_cache, input_size, kv_lora, qk_rope, d_pos, inv_freq, eps);
+}
+
 void launch_mla_rope_q(float *q, int input_size, int n_heads, int qk_nope, int qk_rope,
                        int start_pos, const float *inv_freq, void *stream) {
     ScopedGpuTimer timer("mla_rope_q", as_stream(stream));
     mla_rope_q_kernel<<<input_size * n_heads, kBlock, 0, as_stream(stream)>>>(
         q, input_size, n_heads, qk_nope, qk_rope, start_pos, inv_freq);
+}
+
+void launch_mla_rope_q_device_pos(float *q, int input_size, int n_heads, int qk_nope, int qk_rope,
+                                  const int *d_pos, const float *inv_freq, void *stream) {
+    ScopedGpuTimer timer("mla_rope_q", as_stream(stream));
+    mla_rope_q_device_pos_kernel<<<input_size * n_heads, kBlock, 0, as_stream(stream)>>>(
+        q, input_size, n_heads, qk_nope, qk_rope, d_pos, inv_freq);
 }
 
 void launch_mla_attend_batch(const float *q, const float *kv_b_out, const float *kv_cache, float *attn,
@@ -667,6 +683,29 @@ void launch_mla_attend_batch(const float *q, const float *kv_b_out, const float 
     mla_attend_batch_kernel<<<input_size * n_heads, kBlock, smem, as_stream(stream)>>>(
         q, kv_b_out, kv_cache, attn, input_size, n_heads, qk_nope, qk_rope, v_head, kv_lora,
         start_pos, softmax_scale);
+}
+
+void launch_mla_attend_batch_device_pos(const float *q, const float *kv_b_out, const float *kv_cache,
+                                        float *attn, int input_size, int n_heads, int qk_nope, int qk_rope,
+                                        int v_head, int kv_lora, const int *d_pos, int max_seq_len,
+                                        float softmax_scale, void *stream) {
+    ScopedGpuTimer timer("mla_attend_batch", as_stream(stream));
+    size_t smem = (static_cast<size_t>(max_seq_len) + kBlock) * sizeof(float);
+    mla_attend_batch_device_pos_kernel<<<input_size * n_heads, kBlock, smem, as_stream(stream)>>>(
+        q, kv_b_out, kv_cache, attn, input_size, n_heads, qk_nope, qk_rope, v_head, kv_lora,
+        d_pos, softmax_scale);
+}
+
+void launch_mla_gather_latent_device_pos(const float *kv_cache, float *latent, int kv_lora, int qk_rope,
+                                         const int *d_pos, void *stream) {
+    mla_gather_latent_device_pos_kernel<<<grid_for(kv_lora), kBlock, 0, as_stream(stream)>>>(
+        kv_cache, latent, kv_lora, qk_rope, d_pos);
+}
+
+void launch_mla_store_kv_b_device_pos(const float *kv_b_new, float *kv_b_cache, int kvb_out,
+                                      const int *d_pos, void *stream) {
+    mla_store_kv_b_device_pos_kernel<<<grid_for(kvb_out), kBlock, 0, as_stream(stream)>>>(
+        kv_b_new, kv_b_cache, kvb_out, d_pos);
 }
 
 // ---- MoE ----

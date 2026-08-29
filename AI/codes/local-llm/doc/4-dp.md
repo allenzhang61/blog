@@ -248,8 +248,9 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 | decode device-indexed MoE（quant-direct 模式） | **~53.7–54.5 t/s** | **~14.7x** | quant-direct 模式下 decode `top_idx/top_w` 留在 device；routed experts 用 `ds.gemm.e_indexed_moe` 两段 kernel 处理 6 个 route，减少 host route 回读和 per-expert launch |
 | MLA `kv_b` expanded cache（quant-direct 模式） | **~57.4–57.7 t/s** | **~15.7x** | 每层新增 `[max_seq_len, n_heads*(qk_nope+v_head)]` F32 cache；prefill 写入整段，decode 只投影当前 token 的 normalized latent，避免每步重算全历史 `kv_b`；12/12 单测通过 |
 | routed down route-parallel（quant-direct 模式） | **~60.0–60.2 t/s** | **~16.4x** | `quant_down_q8_1_indexed_accum` 从一 warp 串行遍历 6 个 route 改为一 warp 处理一个 `(route, hidden)`，用 `atomicAdd` 累加；ncu 单 kernel 约 `125us -> 65us`，12/12 单测通过 |
+| DeepSeek CUDA Graph decode（quant-direct 模式） | **~61.2–61.5 t/s** | **~16.8x** | decode 增加 `d_pos`、固定 graph 内 token/pos/scratch/cache 指针；MLA 的 RoPE/KV 写入/attention 从 device pos 读实际位置；默认 safe dequant 路径因 dequant pool LRU 同步仍走 eager |
 
-> 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；阶段 3 改为 llama.cpp-style Q8_1 activation 后短问答能生成“巴黎/法国首都巴黎”一类语义正确回答；修复 MLA latent gather 的 stream 顺序后，story 长文 smoke 可无 trace 连贯续写。但 DeepSeek 仍不能通过英文 exact-output，事实回答表述/语言仍会分叉，不能把 quant-direct 路径作为默认正确性路径。
+> 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；阶段 3 改为 llama.cpp-style Q8_1 activation 后短问答能生成“巴黎/法国首都巴黎”一类语义正确回答；修复 MLA latent gather 的 stream 顺序后，story 长文 smoke 可无 trace 连贯续写。但 DeepSeek 仍不能通过英文 exact-output，事实回答表述/语言仍会分叉，不能把 quant-direct 路径作为默认正确性路径。CUDA Graph 当前只在 quant-direct decode 启用，profile 采样步和默认 safe dequant 路径仍走 eager。
 
 与 llama.cpp 最新等条件 `232.33 t/s` 相比仍有巨大差距。当前真正可行的后续方向不再是盲目扩大全量量化直通，而是按 exact-output 测试逐项推进：
 

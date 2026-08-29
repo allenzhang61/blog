@@ -2143,6 +2143,45 @@ __global__ void mla_kv_a_kernel(const float *kv_a, const float *kv_a_norm_weight
     }
 }
 
+__global__ void mla_kv_a_device_pos_kernel(const float *kv_a, const float *kv_a_norm_weight,
+                                           float *output_kv_cache, int input_size, int kv_lora, int qk_rope,
+                                           const int *d_pos, const float *inv_freq, float eps) {
+    extern __shared__ float shared[];
+    float *partial = shared;
+    float *cache_row = partial + blockDim.x;
+    const int tid = threadIdx.x;
+    const int input_index = blockIdx.x;
+    if (input_index >= input_size) return;
+    const int pos = d_pos[0] + input_index;
+    const int total = kv_lora + qk_rope;
+    const float *kv_a_row = kv_a + static_cast<size_t>(input_index) * total;
+
+    float ss = 0.0f;
+    for (int d = tid; d < kv_lora; d += blockDim.x) {
+        const float v = kv_a_row[d];
+        ss += v * v;
+    }
+    partial[tid] = ss;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+        if (tid < s) partial[tid] += partial[tid + s];
+        __syncthreads();
+    }
+    const float scale = rsqrtf(partial[0] / static_cast<float>(kv_lora) + eps);
+    for (int d = tid; d < kv_lora; d += blockDim.x) {
+        cache_row[d] = kv_a_row[d] * scale * kv_a_norm_weight[d];
+    }
+    for (int d = tid; d < qk_rope; d += blockDim.x) {
+        cache_row[kv_lora + d] = kv_a_row[kv_lora + d];
+    }
+    __syncthreads();
+    mla_rope_inplace(cache_row + kv_lora, qk_rope, pos, inv_freq);
+    __syncthreads();
+    for (int d = tid; d < total; d += blockDim.x) {
+        output_kv_cache[static_cast<size_t>(pos) * total + d] = cache_row[d];
+    }
+}
+
 // q 的 rope 段旋转：q 布局 [input_size, n_heads, qk_nope + qk_rope]，只旋转后 qk_rope 维。
 // 每 block 处理一个 (tok, head)；单 token decode 是 input_size=1 的特例。
 __global__ void mla_rope_q_kernel(float *q, int input_size, int n_heads, int qk_nope,
@@ -2157,6 +2196,19 @@ __global__ void mla_rope_q_kernel(float *q, int input_size, int n_heads, int qk_
                 + head_index * (qk_nope + qk_rope)
                 + qk_nope; //跳过前一半的 qk_nope，只看后一半的 qk_rope
     mla_rope_inplace(qh, qk_rope, start_pos + input_index, inv_freq);
+}
+
+__global__ void mla_rope_q_device_pos_kernel(float *q, int input_size, int n_heads, int qk_nope,
+                                             int qk_rope, const int *d_pos, const float *inv_freq) {
+    const int block_index = blockIdx.x;
+    const int input_index = block_index / n_heads;
+    const int head_index = block_index - input_index * n_heads;
+    if (input_index >= input_size) return;
+    float *qh = q
+                + static_cast<size_t>(input_index) * n_heads * (qk_nope + qk_rope)
+                + head_index * (qk_nope + qk_rope)
+                + qk_nope;
+    mla_rope_inplace(qh, qk_rope, d_pos[0] + input_index, inv_freq);
 }
 
 // MLA attend：每 block 处理一个 (tok, head)，pos 为该 token 绝对位置。
@@ -2238,6 +2290,40 @@ __global__ void mla_attend_batch_kernel(const float *q, const float *kv_b_out, c
     const size_t out_off = (static_cast<size_t>(tok) * n_heads + h) * v_head;
     mla_attend_head(q, kv_b_out, kv_cache, attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
                     pos, softmax_scale, q_off, out_off, scores, partial);
+}
+
+__global__ void mla_attend_batch_device_pos_kernel(const float *q, const float *kv_b_out,
+                                                   const float *kv_cache, float *attn, int tokens,
+                                                   int n_heads, int qk_nope, int qk_rope, int v_head,
+                                                   int kv_lora, const int *d_pos, float softmax_scale) {
+    extern __shared__ float shared[];
+    const int block = blockIdx.x;
+    const int tok = block / n_heads;
+    const int h = block - tok * n_heads;
+    if (tok >= tokens) return;
+    const int pos = d_pos[0] + tok;
+    float *scores = shared;
+    float *partial = scores + pos + 1;
+    const int qk_head = qk_nope + qk_rope;
+    const size_t q_off = (static_cast<size_t>(tok) * n_heads + h) * qk_head;
+    const size_t out_off = (static_cast<size_t>(tok) * n_heads + h) * v_head;
+    mla_attend_head(q, kv_b_out, kv_cache, attn, n_heads, qk_nope, qk_rope, v_head, kv_lora,
+                    pos, softmax_scale, q_off, out_off, scores, partial);
+}
+
+__global__ void mla_gather_latent_device_pos_kernel(const float *kv_cache, float *latent,
+                                                    int kv_lora, int qk_rope, const int *d_pos) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= kv_lora) return;
+    const int total = kv_lora + qk_rope;
+    latent[i] = kv_cache[static_cast<size_t>(d_pos[0]) * total + i];
+}
+
+__global__ void mla_store_kv_b_device_pos_kernel(const float *kv_b_new, float *kv_b_cache,
+                                                 int kvb_out, const int *d_pos) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= kvb_out) return;
+    kv_b_cache[static_cast<size_t>(d_pos[0]) * kvb_out + i] = kv_b_new[i];
 }
 
 // ================= MoE 路由 =================

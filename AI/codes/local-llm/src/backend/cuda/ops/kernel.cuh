@@ -220,10 +220,15 @@ void launch_f32_to_bf16_copy(const float *src, uint16_t *out, int64_t num_elemen
 void launch_mla_kv_a(const float *kv_a, const float *kv_a_norm_weight,
                      float *output_kv_cache, int input_size, int kv_lora, int qk_rope,
                      int start_pos, const float *inv_freq, float eps, void *stream);
+void launch_mla_kv_a_device_pos(const float *kv_a, const float *kv_a_norm_weight,
+                                float *output_kv_cache, int input_size, int kv_lora, int qk_rope,
+                                const int *d_pos, const float *inv_freq, float eps, void *stream);
 
 // (2) 对 q 的每个 token、每个 head 的 rope 段做 RoPE（nope 段不动）。q 原位更新。
 void launch_mla_rope_q(float *q, int input_size, int n_heads, int qk_nope, int qk_rope,
                        int start_pos, const float *inv_freq, void *stream);
+void launch_mla_rope_q_device_pos(float *q, int input_size, int n_heads, int qk_nope, int qk_rope,
+                                  const int *d_pos, const float *inv_freq, void *stream);
 
 // (3) attend：kv_b_out 为已由 kv_b 投影解出的 per-(pos,head) k_nope||v，布局
 //     [seq, n_heads*(qk_nope+v_head)]；k_rope 从 kv_cache 的 k_rope 段取（所有 head 共享）。
@@ -233,6 +238,14 @@ void launch_mla_attend_batch(const float *q, const float *kv_b_out, const float 
                              float *attn, int input_size, int n_heads, int qk_nope, int qk_rope,
                              int v_head, int kv_lora, int start_pos,
                              float softmax_scale, void *stream);
+void launch_mla_attend_batch_device_pos(const float *q, const float *kv_b_out, const float *kv_cache,
+                                        float *attn, int input_size, int n_heads, int qk_nope, int qk_rope,
+                                        int v_head, int kv_lora, const int *d_pos, int max_seq_len,
+                                        float softmax_scale, void *stream);
+void launch_mla_gather_latent_device_pos(const float *kv_cache, float *latent, int kv_lora, int qk_rope,
+                                         const int *d_pos, void *stream);
+void launch_mla_store_kv_b_device_pos(const float *kv_b_new, float *kv_b_cache, int kvb_out,
+                                      const int *d_pos, void *stream);
 
 // ================= MoE（DeepSeekMoE 路由）=================
 // router_logits[tokens, n_experts] -> 每 token 选 top-k，对被选专家的 gate 值做 softmax

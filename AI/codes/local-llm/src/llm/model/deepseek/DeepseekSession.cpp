@@ -96,10 +96,12 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, std::vector<int> 
     g_inv_freq_f32 = CPUTensor(h_inv_freq_f32.data(), {half}, DType::F32)
                      .to_gpu(cuda_scratch, scratch_key::kInvFreq, "deepseek.inv_freq h2d");
     d_token_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "deepseek decode token device buffer"));
+    d_pos_ = static_cast<int *>(cuda_malloc_device(sizeof(int), "deepseek decode pos device buffer"));
 }
 
 DeepseekSession::~DeepseekSession() {
     cuda_free_device(d_token_);
+    cuda_free_device(d_pos_);
 }
 
 size_t DeepseekSession::kv_state_bytes() const {

@@ -6,6 +6,7 @@
 #define LOCAL_LLM_DEEPSEEK_SESSION_H
 
 #include "backend/cuda/mem/SessionBase.h"
+#include "backend/cuda/graph/CudaGraph.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
 #include "tensor/StorageTensor.h"
 #include "tensor/GPUTensor.h"
@@ -32,17 +33,22 @@ public:
     // decode 单步 token id 常驻 device：embedding 从此读取输入 token，
     // greedy argmax 将下一 token 写回此处，避免每步回传整行 logits。
     int *d_token() const { return d_token_; }
+    // decode 单步 pos 常驻 device，graph replay 内 kernel 从这里读取真实位置。
+    int *d_pos() const { return d_pos_; }
 
     std::vector<LatentKVCache> kv_caches;
     GPUTensor g_inv_freq_f32;         // [rope_dim/2] float，YARN 校正后的频率（scratch device view）
     float attn_softmax_scale = 0; // = mscale^2 / sqrt(qk_head)
     int trace_pos = -1;
     int trace_layer = -1;
+    CudaGraph decode_graph;
+    int decode_greedy_steps = 0;
 
     size_t kv_state_bytes() const override;
 
 private:
     int *d_token_ = nullptr;
+    int *d_pos_ = nullptr;
 };
 
 #endif // LOCAL_LLM_DEEPSEEK_SESSION_H

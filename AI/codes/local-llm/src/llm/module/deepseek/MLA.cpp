@@ -20,7 +20,7 @@ MLA::MLA(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config), lw_(weights) {
 }
 
-void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int start_pos) {
+void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int start_pos, bool use_device_pos) {
     const int64_t input_size = g_hidden_f32.rows();
     auto &scratch = session.cuda_scratch;
     const int layer = lw_.layer_index;
@@ -47,7 +47,12 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
                                       static_cast<int64_t>(qk_nope + qk_rope) //(qk_head)
                                   }, DType::F32);
     TensorTool::gemm(*lw_.s_attn_q, g_normed_f32, g_q_f32, scratch, scratch_key::kNormedLowp, "ds.gemm.d_attn_q");
-    TensorTool::mla_rope_q(g_q_f32, input_size, n_heads, qk_nope, qk_rope, start_pos, g_inv_freq_f32);
+    if (use_device_pos) {
+        TensorTool::mla_rope_q_device_pos(g_q_f32, input_size, n_heads, qk_nope, qk_rope,
+                                          session.d_pos(), g_inv_freq_f32);
+    } else {
+        TensorTool::mla_rope_q(g_q_f32, input_size, n_heads, qk_nope, qk_rope, start_pos, g_inv_freq_f32);
+    }
     deepseek_trace::tensor(session, g_q_f32, "attn_q_rope", session.trace_pos, session.trace_layer);
 
     GPUTensor g_kv_a_f32 = GPUTensor(
@@ -57,25 +62,43 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
     deepseek_trace::tensor(session, g_kv_a_f32, "kv_a", session.trace_pos, session.trace_layer);
 
     GPUTensor &g_kv_cache_f32 = session.kv_caches[layer].g_cache_f32;
-    TensorTool::mla_kv_a(g_kv_a_f32, *lw_.s_attn_kv_a_norm, g_kv_cache_f32, input_size, kv_lora, qk_rope,
-                         start_pos, g_inv_freq_f32, config_.rms_norm_eps);
+    if (use_device_pos) {
+        TensorTool::mla_kv_a_device_pos(g_kv_a_f32, *lw_.s_attn_kv_a_norm, g_kv_cache_f32, input_size,
+                                        kv_lora, qk_rope, session.d_pos(), g_inv_freq_f32,
+                                        config_.rms_norm_eps);
+    } else {
+        TensorTool::mla_kv_a(g_kv_a_f32, *lw_.s_attn_kv_a_norm, g_kv_cache_f32, input_size, kv_lora, qk_rope,
+                             start_pos, g_inv_freq_f32, config_.rms_norm_eps);
+    }
     session.kv_caches[layer].seq_len = start_pos + static_cast<int>(input_size);
 
-    const int64_t seq = start_pos + input_size;
     GPUTensor &g_kv_b_cache_f32 = session.kv_caches[layer].g_kv_b_cache_f32;
     {
-        const size_t kvb_row_bytes = static_cast<size_t>(kvb_out) * sizeof(float);
-        GPUTensor g_kv_b_new_f32 = GPUTensor(
-            g_kv_b_cache_f32, static_cast<size_t>(start_pos) * kvb_row_bytes,
-            {input_size, static_cast<int64_t>(kvb_out)});
-
         GPUTensor g_latent_f32;
-        if (input_size == 1) {
+        GPUTensor g_kv_b_new_f32;
+        if (use_device_pos) {
+            g_latent_f32 = GPUTensor(
+                scratch, scratch_key::kAttn,
+                {1, static_cast<int64_t>(kv_lora)}, DType::F32);
+            TensorTool::mla_gather_latent_device_pos(g_kv_cache_f32, g_latent_f32, kv_lora, qk_rope,
+                                                     session.d_pos());
+            g_kv_b_new_f32 = GPUTensor(
+                scratch, scratch_key::kKvBOut,
+                {1, static_cast<int64_t>(kvb_out)}, DType::F32);
+        } else if (input_size == 1) {
+            const size_t kvb_row_bytes = static_cast<size_t>(kvb_out) * sizeof(float);
+            g_kv_b_new_f32 = GPUTensor(
+                g_kv_b_cache_f32, static_cast<size_t>(start_pos) * kvb_row_bytes,
+                {input_size, static_cast<int64_t>(kvb_out)});
             // decode: kv_b 必须使用 mla_kv_a 写入 cache 后的 normalized latent。
             g_latent_f32 = GPUTensor(
                 g_kv_cache_f32, static_cast<size_t>(start_pos) * kv_total * sizeof(float),
                 {1, static_cast<int64_t>(kv_lora)});
         } else {
+            const size_t kvb_row_bytes = static_cast<size_t>(kvb_out) * sizeof(float);
+            g_kv_b_new_f32 = GPUTensor(
+                g_kv_b_cache_f32, static_cast<size_t>(start_pos) * kvb_row_bytes,
+                {input_size, static_cast<int64_t>(kvb_out)});
             // prefill/batch: kv_lora 与 qk_rope 交错存入 kv_a，先压紧本批 token 的 latent 段。
             g_latent_f32 = GPUTensor(
                 scratch, scratch_key::kAttn,
@@ -88,14 +111,23 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
         deepseek_trace::tensor(session, g_latent_f32, "kv_latent", session.trace_pos, session.trace_layer);
         TensorTool::gemm(*lw_.s_attn_kv_b, g_latent_f32, g_kv_b_new_f32, scratch, scratch_key::kLatentLowp,
                          "ds.gemm.kv_b");
+        if (use_device_pos) {
+            TensorTool::mla_store_kv_b_device_pos(g_kv_b_new_f32, g_kv_b_cache_f32, kvb_out, session.d_pos());
+        }
         deepseek_trace::tensor(session, g_kv_b_new_f32, "kv_b_out", session.trace_pos, session.trace_layer);
     }
 
     GPUTensor g_attn_f32 = GPUTensor(
         scratch, scratch_key::kAttn,
         {input_size, static_cast<int64_t>(n_heads * v_head)}, DType::F32);
-    TensorTool::mla_attend(g_q_f32, g_kv_b_cache_f32, g_kv_cache_f32, g_attn_f32, input_size, n_heads, qk_nope, qk_rope,
-                           v_head, kv_lora, start_pos, session.attn_softmax_scale);
+    if (use_device_pos) {
+        TensorTool::mla_attend_device_pos(g_q_f32, g_kv_b_cache_f32, g_kv_cache_f32, g_attn_f32, input_size,
+                                          n_heads, qk_nope, qk_rope, v_head, kv_lora, session.d_pos(),
+                                          static_cast<int>(session.max_seq_len_), session.attn_softmax_scale);
+    } else {
+        TensorTool::mla_attend(g_q_f32, g_kv_b_cache_f32, g_kv_cache_f32, g_attn_f32, input_size, n_heads,
+                               qk_nope, qk_rope, v_head, kv_lora, start_pos, session.attn_softmax_scale);
+    }
     deepseek_trace::tensor(session, g_attn_f32, "attn_ctx", session.trace_pos, session.trace_layer);
 
     GPUTensor g_attn_out_f32 = GPUTensor(scratch, scratch_key::kAttnOut, {input_size, hidden_size}, DType::F32);

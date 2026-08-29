@@ -631,11 +631,27 @@ void TensorTool::mla_kv_a(const GPUTensor &g_kv_a_f32, const StorageTensor &s_kv
                     start_pos, g_inv_freq_f32.data<float>(), eps, stream);
 }
 
+void TensorTool::mla_kv_a_device_pos(const GPUTensor &g_kv_a_f32, const StorageTensor &s_kv_a_norm_weight,
+                                     const GPUTensor &g_kv_cache_f32, int64_t input_size, int kv_lora, int qk_rope,
+                                     const int *d_pos, const GPUTensor &g_inv_freq_f32, float eps, void *stream) {
+    GPUTensor g_kv_a_norm_weight_f32 = s_kv_a_norm_weight.to_gpu(true);
+    launch_mla_kv_a_device_pos(g_kv_a_f32.data<float>(), g_kv_a_norm_weight_f32.data<float>(),
+                               g_kv_cache_f32.data<float>(), static_cast<int>(input_size), kv_lora, qk_rope,
+                               d_pos, g_inv_freq_f32.data<float>(), eps, stream);
+}
+
 void TensorTool::mla_rope_q(const GPUTensor &g_q_f32, int64_t input_size, int n_heads, int qk_nope,
                             int qk_rope, int start_pos, const GPUTensor &g_inv_freq_f32,
                             void *stream) {
     launch_mla_rope_q(g_q_f32.data<float>(), static_cast<int>(input_size), n_heads, qk_nope,
                       qk_rope, start_pos, g_inv_freq_f32.data<float>(), stream);
+}
+
+void TensorTool::mla_rope_q_device_pos(const GPUTensor &g_q_f32, int64_t input_size, int n_heads, int qk_nope,
+                                       int qk_rope, const int *d_pos, const GPUTensor &g_inv_freq_f32,
+                                       void *stream) {
+    launch_mla_rope_q_device_pos(g_q_f32.data<float>(), static_cast<int>(input_size), n_heads, qk_nope,
+                                 qk_rope, d_pos, g_inv_freq_f32.data<float>(), stream);
 }
 
 void TensorTool::mla_attend(const GPUTensor &g_q_f32, const GPUTensor &g_kv_b_out_f32,
@@ -647,6 +663,29 @@ void TensorTool::mla_attend(const GPUTensor &g_q_f32, const GPUTensor &g_kv_b_ou
                             static_cast<int>(input_size), n_heads, qk_nope,
                             qk_rope, v_head, kv_lora, start_pos,
                             softmax_scale, stream);
+}
+
+void TensorTool::mla_attend_device_pos(const GPUTensor &g_q_f32, const GPUTensor &g_kv_b_out_f32,
+                                       const GPUTensor &g_kv_cache_f32, const GPUTensor &g_attn_f32,
+                                       int64_t input_size, int n_heads, int qk_nope, int qk_rope,
+                                       int v_head, int kv_lora, const int *d_pos, int max_seq_len,
+                                       float softmax_scale, void *stream) {
+    launch_mla_attend_batch_device_pos(g_q_f32.data<float>(), g_kv_b_out_f32.data<float>(),
+                                       g_kv_cache_f32.data<float>(), g_attn_f32.data<float>(),
+                                       static_cast<int>(input_size), n_heads, qk_nope, qk_rope,
+                                       v_head, kv_lora, d_pos, max_seq_len, softmax_scale, stream);
+}
+
+void TensorTool::mla_gather_latent_device_pos(const GPUTensor &g_kv_cache_f32, const GPUTensor &g_latent_f32,
+                                              int kv_lora, int qk_rope, const int *d_pos, void *stream) {
+    launch_mla_gather_latent_device_pos(g_kv_cache_f32.data<float>(), g_latent_f32.data<float>(),
+                                        kv_lora, qk_rope, d_pos, stream);
+}
+
+void TensorTool::mla_store_kv_b_device_pos(const GPUTensor &g_kv_b_new_f32, const GPUTensor &g_kv_b_cache_f32,
+                                           int kvb_out, const int *d_pos, void *stream) {
+    launch_mla_store_kv_b_device_pos(g_kv_b_new_f32.data<float>(), g_kv_b_cache_f32.data<float>(),
+                                     kvb_out, d_pos, stream);
 }
 
 void TensorTool::moe_router_topk(const GPUTensor &g_router_logits_f32, const GPUTensor &g_top_idx_i32,

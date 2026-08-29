@@ -40,6 +40,8 @@ public:
 
 private:
     int forward_session(DeepseekSession &session, const CPUTensor &c_input_i32, int start_pos);
+    void eager_decode_greedy_device(DeepseekSession &session, int pos);
+    void record_decode_graph(DeepseekSession &session);
 
     std::unique_ptr<MF> mf_;
     DeepseekConfig config_;

@@ -13,15 +13,29 @@
 #include <utility>
 
 #include "backend/cuda/common.h"
+#include "backend/cuda/graph/CudaGraph.h"
 #include "backend/cuda/mem/CudaScratch.h"
 #include "llm/model/deepseek/DeepseekTrace.h"
 #include "tensor/GPUTensor.h"
 #include "tensor/TensorTool.h"
+#include "utils/stats/Profiler.h"
 #include "utils/stats/ScopedTimer.h"
 
 namespace {
     bool deepseek_device_argmax_disabled() {
         const char *env = std::getenv("LOCAL_LLM_DISABLE_DEEPSEEK_DEVICE_ARGMAX");
+        return env != nullptr && std::atoi(env) > 0;
+    }
+
+    bool deepseek_quant_direct_enabled() {
+        const char *direct = std::getenv("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
+        const char *preset = std::getenv("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET");
+        return (direct != nullptr && std::atoi(direct) > 0) ||
+               (preset != nullptr && std::atoi(preset) > 0);
+    }
+
+    bool deepseek_cuda_graph_disabled() {
+        const char *env = std::getenv("LOCAL_LLM_DISABLE_DEEPSEEK_CUDA_GRAPH");
         return env != nullptr && std::atoi(env) > 0;
     }
 } // namespace
@@ -102,6 +116,42 @@ int DeepseekModel::decode(SessionBase &session) {
     check_cuda(cudaMemcpyAsync(deepseek_session.d_token(), &prev_token_id, sizeof(int),
                                cudaMemcpyHostToDevice, stream),
                "deepseek decode token H2D 失败");
+    check_cuda(cudaMemcpyAsync(deepseek_session.d_pos(), &pos, sizeof(int),
+                               cudaMemcpyHostToDevice, stream),
+               "deepseek decode pos H2D 失败");
+
+    const bool graph_enabled = deepseek_quant_direct_enabled() && !deepseek_cuda_graph_disabled();
+    const bool profile_this_step = Profiler::instance().capturing();
+    if (!graph_enabled) {
+        eager_decode_greedy_device(deepseek_session, pos);
+        int next_token = 0;
+        cuda_memcpy_d2h(&next_token, deepseek_session.d_token(), sizeof(int), "deepseek decode token D2H 失败");
+        return next_token;
+    }
+
+    if (deepseek_session.decode_greedy_steps == 0 || profile_this_step) {
+        eager_decode_greedy_device(deepseek_session, pos);
+        if (!profile_this_step) {
+            mark_cuda_graph_stale(deepseek_session.decode_graph);
+        }
+    } else {
+        if (!deepseek_session.decode_graph.ready()) {
+            record_decode_graph(deepseek_session);
+        }
+        launch_cuda_graph(deepseek_session.decode_graph, stream, "deepseek decode graph launch 失败");
+    }
+    ++deepseek_session.decode_greedy_steps;
+    for (auto &kv : deepseek_session.kv_caches) {
+        kv.seq_len = pos + 1;
+    }
+
+    int next_token = 0;
+    cuda_memcpy_d2h(&next_token, deepseek_session.d_token(), sizeof(int), "deepseek decode token D2H 失败");
+    return next_token;
+}
+
+void DeepseekModel::eager_decode_greedy_device(DeepseekSession &deepseek_session, int pos) {
+    cudaStream_t stream = get_current_cuda_stream();
 
     auto &scratch = deepseek_session.cuda_scratch;
     const int64_t hidden_size = config_.hidden_size;
@@ -115,7 +165,7 @@ int DeepseekModel::decode(SessionBase &session) {
         deepseek_session.trace_layer = i;
         {
             ScopedCpuTimer t("ds.decode.mla_forward");
-            mla_layers_[i].forward(deepseek_session, g_hidden_f32, pos);
+            mla_layers_[i].forward(deepseek_session, g_hidden_f32, pos, /*use_device_pos=*/true);
         }
         deepseek_trace::tensor(deepseek_session, g_hidden_f32, "mla", pos, i);
         {
@@ -144,9 +194,33 @@ int DeepseekModel::decode(SessionBase &session) {
         deepseek_session.trace_layer = -1;
     }
 
-    int next_token = 0;
-    cuda_memcpy_d2h(&next_token, deepseek_session.d_token(), sizeof(int), "deepseek decode token D2H 失败");
-    return next_token;
+}
+
+void DeepseekModel::record_decode_graph(DeepseekSession &deepseek_session) {
+    cudaStream_t stream = get_current_cuda_stream();
+    auto &scratch = deepseek_session.cuda_scratch;
+    const int64_t hidden_size = config_.hidden_size;
+
+    destroy_cuda_graph(deepseek_session.decode_graph);
+    begin_thread_local_cuda_graph_capture(stream, "deepseek decode graph begin capture 失败");
+
+    const auto g_hidden_f32 = GPUTensor(scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
+    const auto g_input_i32 = GPUTensor(deepseek_session.d_token(), {1}, DType::I32, "deepseek.decode.token");
+    TensorTool::embedding_lookup(*weights_.s_token_embd, g_input_i32, g_hidden_f32, stream);
+
+    for (int i = 0; i < config_.num_layers; ++i) {
+        mla_layers_[i].forward(deepseek_session, g_hidden_f32, /*start_pos=*/0, /*use_device_pos=*/true);
+        mlp_layers_[i].forward(deepseek_session, g_hidden_f32);
+    }
+
+    const auto g_normed_f32 = GPUTensor(scratch, scratch_key::kNormed, {1, hidden_size}, DType::F32);
+    RMSNorm::forward(*weights_.s_output_norm, g_hidden_f32, g_normed_f32,
+                     config_.rms_norm_eps, /*one_plus=*/false);
+    lm_head_.forward_argmax_device(*weights_.s_output, deepseek_session, g_normed_f32,
+                                   deepseek_session.d_token(), stream);
+
+    end_cuda_graph_capture_and_instantiate(stream, deepseek_session.decode_graph,
+                                           "deepseek decode graph capture/instantiate 失败");
 }
 
 std::string DeepseekModel::output(const SessionBase &session) const {
