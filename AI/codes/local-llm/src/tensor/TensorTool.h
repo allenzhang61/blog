@@ -34,6 +34,11 @@ public:
     static bool quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
                              const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
                              const char *name = "");
+    static bool moe_routed_decode_indexed(const StorageTensor &s_gate_exps, const StorageTensor &s_up_exps,
+                                          const StorageTensor &s_down_exps, const GPUTensor &g_input_f32,
+                                          const int *d_expert_ids, const float *d_weights,
+                                          const GPUTensor &g_out_f32, CudaScratch &scratch,
+                                          int n_experts, int k, const char *name = "");
     // s_table: embedding s_table [vocab, g_hidden]，g_input 为 GPU token id。
     static void embedding_lookup(const StorageTensor &s_table, const GPUTensor &g_input_i32,
                                  const GPUTensor &g_hidden_f32, void *stream = nullptr);

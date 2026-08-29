@@ -14,6 +14,7 @@
 #include "utils/stats/ScopedTimer.h"
 
 #include <cstdlib>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -70,8 +71,9 @@ namespace {
         return op_name.rfind("ds.gemm.", 0) == 0;
     }
 
-    bool should_use_deepseek_q8_1_quant_direct_preset() {
-        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET");
+    bool should_use_deepseek_quant_direct() {
+        return env_flag_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT") ||
+               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET");
     }
 
     bool should_use_safe_dequant_gemm(const char *name) {
@@ -85,7 +87,7 @@ namespace {
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
         if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT") &&
-            !should_use_deepseek_q8_1_quant_direct_preset()) return false;
+            !should_use_deepseek_quant_direct()) return false;
         if (env_list_contains("LOCAL_LLM_DEEPSEEK_DECODE_QUANT_DIRECT_EXCLUDE_OPS", op_name)) return false;
         return true;
     }
@@ -94,7 +96,8 @@ namespace {
         if (m <= 1) return false;
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
-        if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT")) return false;
+        if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT") &&
+            !should_use_deepseek_quant_direct()) return false;
         if (env_list_contains("LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS", op_name)) return false;
         return true;
     }
@@ -117,14 +120,45 @@ namespace {
     bool should_use_q8_1_quant_gemv(const char *name) {
         if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_QUANT_GEMV_Q8_1")) return true;
         const std::string op_name = name ? name : "";
-        return should_use_deepseek_q8_1_quant_direct_preset() && is_deepseek_gemm_op(op_name);
+        return should_use_deepseek_quant_direct() &&
+               (is_deepseek_gemm_op(op_name) || op_name == "lm_head");
+    }
+
+    bool should_use_deepseek_prefill_q8_1_raw_sum(const char *name) {
+        if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_Q8_1_RAW_SUM")) return false;
+        const std::string op_name = name ? name : "";
+        return is_deepseek_gemm_op(op_name);
+    }
+
+    bool should_use_deepseek_prefill_tiled_mmq(const char *name, DType dtype) {
+        if (dtype != DType::Q4_K && dtype != DType::Q6_K) return false;
+        const std::string op_name = name ? name : "";
+        if (!is_deepseek_gemm_op(op_name)) return false;
+        return should_use_deepseek_quant_direct() ||
+               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_TILED_MMQ");
     }
 
     bool should_use_moe_fused_swiglu(const char *name) {
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
         return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU") ||
-               should_use_deepseek_q8_1_quant_direct_preset();
+               should_use_deepseek_quant_direct();
+    }
+
+    bool should_use_device_indexed_moe() {
+        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE") ||
+               should_use_deepseek_quant_direct();
+    }
+
+    bool debug_device_indexed_moe() {
+        return env_flag_enabled("LOCAL_LLM_DEBUG_DEVICE_INDEXED_MOE");
+    }
+
+    bool device_indexed_moe_reject(const char *reason) {
+        if (debug_device_indexed_moe()) {
+            std::cerr << "[device-indexed-moe] fallback: " << reason << std::endl;
+        }
+        return false;
     }
 
 } // namespace
@@ -166,12 +200,22 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
         const bool f16_operands = should_use_f16_quant_gemv_operands(name);
         if (m > 1) {
             if (should_force_deepseek_prefill_quant_matmul(name, m)) {
-                const size_t q8_bytes = static_cast<size_t>(m) * q8_1_row_bytes(in_dim);
+                const bool use_tiled_mmq = should_use_deepseek_prefill_tiled_mmq(name, s_weight.dtype);
+                const size_t q8_bytes = static_cast<size_t>(m) *
+                                        (use_tiled_mmq ? q8_1_mmq_row_bytes(in_dim) : q8_1_row_bytes(in_dim));
                 uint8_t *d_input_q8_1 = scratch.ensure<uint8_t>(lowp_key + ".prefill.q8_1", q8_bytes);
-                launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, m, stream);
-                launch_quant_matmul_q8_1(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
-                                         row_bytes, d_input_q8_1, g_output_f32.data<float>(),
-                                         out_dim, in_dim, m, stream);
+                const bool raw_sum = use_tiled_mmq || should_use_deepseek_prefill_q8_1_raw_sum(name);
+                if (use_tiled_mmq) {
+                    launch_quantize_q8_1_mmq(g_input_f32.data<float>(), d_input_q8_1, in_dim, m, stream, raw_sum);
+                    launch_quant_matmul_q8_1_mmq(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+                                                 row_bytes, d_input_q8_1, g_output_f32.data<float>(),
+                                                 out_dim, in_dim, m, stream);
+                } else {
+                    launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, m, stream, raw_sum);
+                    launch_quant_matmul_q8_1(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+                                             row_bytes, d_input_q8_1, g_output_f32.data<float>(),
+                                             out_dim, in_dim, m, stream);
+                }
                 return;
             }
             launch_quant_matmul(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
@@ -283,6 +327,79 @@ bool TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageT
                         gate_row_bytes, up_row_bytes,
                         g_input_f32.data<float>(), g_act_f32.data<float>(),
                         ffn_dim, in_dim, f16_operands, stream);
+    return true;
+}
+
+bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, const StorageTensor &s_up_exps,
+                                           const StorageTensor &s_down_exps, const GPUTensor &g_input_f32,
+                                           const int *d_expert_ids, const float *d_weights,
+                                           const GPUTensor &g_out_f32, CudaScratch &scratch,
+                                           int n_experts, int k, const char *name) {
+    if (!should_use_device_indexed_moe()) return device_indexed_moe_reject("disabled");
+    if (g_input_f32.rows() != 1 || g_input_f32.dtype != DType::F32 || g_out_f32.dtype != DType::F32) {
+        return device_indexed_moe_reject("not decode F32 input/output");
+    }
+    if (d_expert_ids == nullptr || d_weights == nullptr) return device_indexed_moe_reject("null route device pointers");
+    if (!Quant::is_quantized_dtype(s_gate_exps.dtype) || s_gate_exps.dtype != s_up_exps.dtype) {
+        return device_indexed_moe_reject("gate/up dtype mismatch or not quantized");
+    }
+    if (s_down_exps.dtype != DType::Q4_K && s_down_exps.dtype != DType::Q6_K &&
+        s_down_exps.dtype != DType::Q5_0 && s_down_exps.dtype != DType::Q8_0) {
+        return device_indexed_moe_reject((std::string("down dtype unsupported: ") +
+                                          dtype_name(s_down_exps.dtype)).c_str());
+    }
+    if (s_gate_exps.dtype != DType::Q4_K && s_gate_exps.dtype != DType::Q6_K) {
+        return device_indexed_moe_reject("gate/up dtype unsupported");
+    }
+    if (s_gate_exps.shape.size() != 3 || s_up_exps.shape.size() != 3 || s_down_exps.shape.size() != 3) {
+        return device_indexed_moe_reject("expert tensor rank is not 3");
+    }
+    if (s_gate_exps.shape[0] != n_experts || s_up_exps.shape[0] != n_experts || s_down_exps.shape[0] != n_experts) {
+        return device_indexed_moe_reject("expert tensor n_experts mismatch");
+    }
+    if (s_gate_exps.shape != s_up_exps.shape) return device_indexed_moe_reject("gate/up shape mismatch");
+
+    const int ffn_dim = static_cast<int>(s_gate_exps.shape[1]);
+    const int in_dim = static_cast<int>(s_gate_exps.shape[2]);
+    const int hidden_size = static_cast<int>(s_down_exps.shape[1]);
+    if (s_down_exps.shape[2] != ffn_dim || g_input_f32.cols() != in_dim || g_out_f32.cols() != hidden_size) {
+        return device_indexed_moe_reject("expert tensor dimensions mismatch");
+    }
+
+    const CudaWeight *gate_q = global_cuda_weight_pool().cached_weight(s_gate_exps);
+    const CudaWeight *up_q = global_cuda_weight_pool().cached_weight(s_up_exps);
+    const CudaWeight *down_q = global_cuda_weight_pool().cached_weight(s_down_exps);
+    if (gate_q == nullptr || up_q == nullptr || down_q == nullptr) {
+        throw std::runtime_error("TensorTool::moe_routed_decode_indexed 量化 expert 权重超过 CudaWeightPool 上限");
+    }
+
+    const size_t gate_expert_bytes = s_gate_exps.nbytes / static_cast<size_t>(n_experts);
+    const size_t up_expert_bytes = s_up_exps.nbytes / static_cast<size_t>(n_experts);
+    const size_t down_expert_bytes = s_down_exps.nbytes / static_cast<size_t>(n_experts);
+    const size_t gate_row_bytes = gate_expert_bytes / static_cast<size_t>(ffn_dim);
+    const size_t up_row_bytes = up_expert_bytes / static_cast<size_t>(ffn_dim);
+    const size_t down_row_bytes = down_expert_bytes / static_cast<size_t>(hidden_size);
+
+    void *stream = get_current_cuda_stream();
+    ScopedGpuTimer timer(name && name[0] ? name : "ds.gemm.e_indexed_moe",
+                         static_cast<cudaStream_t>(stream), gate_q->bytes + up_q->bytes + down_q->bytes);
+    auto g_act_f32 = GPUTensor(scratch, scratch_key::kAct, {k, ffn_dim}, DType::F32);
+    launch_quant_swiglu_indexed(s_gate_exps.dtype,
+                                static_cast<const uint8_t *>(gate_q->ptr),
+                                static_cast<const uint8_t *>(up_q->ptr),
+                                gate_expert_bytes, up_expert_bytes,
+                                gate_row_bytes, up_row_bytes, g_input_f32.data<float>(),
+                                d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim,
+                                should_use_f16_quant_gemv_operands(name), stream);
+
+    const size_t q8_bytes = static_cast<size_t>(k) * q8_1_row_bytes(ffn_dim);
+    uint8_t *d_act_q8_1 = scratch.ensure<uint8_t>(std::string(scratch_key::kActLowp) + ".indexed.q8_1", q8_bytes);
+    launch_quantize_q8_1(g_act_f32.data<float>(), d_act_q8_1, ffn_dim, k, stream);
+    launch_quant_down_q8_1_indexed_accum(s_down_exps.dtype,
+                                         static_cast<const uint8_t *>(down_q->ptr),
+                                         down_expert_bytes, down_row_bytes, d_act_q8_1,
+                                         d_expert_ids, d_weights, g_out_f32.data<float>(),
+                                         k, hidden_size, ffn_dim, stream);
     return true;
 }
 

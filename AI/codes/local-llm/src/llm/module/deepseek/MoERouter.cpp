@@ -15,8 +15,22 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 #include <cuda_runtime.h>
+
+namespace {
+    bool env_flag_enabled(const char *key) {
+        const char *env = std::getenv(key);
+        return env != nullptr && std::atoi(env) > 0;
+    }
+
+    bool should_use_device_indexed_moe() {
+        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE") ||
+               env_flag_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT") ||
+               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET");
+    }
+} // namespace
 
 MoERouter::MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config), lw_(weights) {
@@ -42,14 +56,20 @@ MoERoute MoERouter::forward(DeepseekSession &session, const GPUTensor &g_normed_
     deepseek_trace::topk(session, g_top_idx_i32, g_top_w_f32, "router_topk", session.trace_pos, session.trace_layer);
 
     MoERoute route;
-    route.c_expert_ids_i32 = g_top_idx_i32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeExpertIds, "ds.moe.idx");
+    route.d_expert_ids_i32 = g_top_idx_i32.data<int>();
     if (input_size == 1) {
-        // decode：top_w 不回读 host，保留 device 指针供加权累加 kernel 直接读取；
-        // 只回读了 k 个 int 索引（上面那次，host 侧按专家反量化权重切片需要），
-        // 省掉每层一次 top_w 的 device 同步回读。
+        if (should_use_device_indexed_moe()) {
+            route.d_weights_f32 = g_top_w_f32.data<float>();
+            route.decode_device = true;
+            route.decode_device_indexed = true;
+            return route;
+        }
+        route.c_expert_ids_i32 = g_top_idx_i32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeExpertIds, "ds.moe.idx");
+        // decode：top_w 不回读 host，保留 device 指针供加权累加 kernel 直接读取。
         route.d_weights_f32 = g_top_w_f32.data<float>();
         route.decode_device = true;
     } else {
+        route.c_expert_ids_i32 = g_top_idx_i32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeExpertIds, "ds.moe.idx");
         route.c_weights_f32 = g_top_w_f32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeWeights, "ds.moe.w");
     }
     return route;

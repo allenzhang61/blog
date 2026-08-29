@@ -144,15 +144,72 @@ void launch_quant_swiglu(DType quant_type, const uint8_t *gate_weight, const uin
     }
 }
 
+template <int QUANT_TYPE>
+void launch_quant_swiglu_indexed_typed(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                       size_t gate_expert_bytes, size_t up_expert_bytes,
+                                       size_t gate_row_bytes, size_t up_row_bytes, const float *x,
+                                       const int *expert_ids, float *act, int k, int ffn_dim,
+                                       int in_dim, bool f16_operands, cudaStream_t stream) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int total = k * ffn_dim;
+    const int blocks = (total + warps_per_block - 1) / warps_per_block;
+    if (f16_operands) {
+        quant_swiglu_indexed_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, stream>>>(
+            gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
+            x, expert_ids, act, k, ffn_dim, in_dim);
+    } else {
+        quant_swiglu_indexed_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, stream>>>(
+            gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
+            x, expert_ids, act, k, ffn_dim, in_dim);
+    }
+}
+
+void launch_quant_swiglu_indexed(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
+                                 size_t gate_expert_bytes, size_t up_expert_bytes,
+                                 size_t gate_row_bytes, size_t up_row_bytes, const float *x,
+                                 const int *expert_ids, float *act, int k, int ffn_dim,
+                                 int in_dim, bool f16_operands, void *stream) {
+    const cudaStream_t s = as_stream(stream);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_swiglu_indexed_typed<12>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
+                                                  gate_row_bytes, up_row_bytes, x, expert_ids, act,
+                                                  k, ffn_dim, in_dim, f16_operands, s);
+            break;
+        case DType::Q6_K:
+            launch_quant_swiglu_indexed_typed<14>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
+                                                  gate_row_bytes, up_row_bytes, x, expert_ids, act,
+                                                  k, ffn_dim, in_dim, f16_operands, s);
+            break;
+        default:
+            break;
+    }
+}
+
 size_t q8_1_row_bytes(int in_dim) {
     const int blocks_per_row = (in_dim + 31) / 32;
     return static_cast<size_t>(blocks_per_row) * 36;
 }
 
-void launch_quantize_q8_1(const float *x, uint8_t *x_q8_1, int in_dim, int m, void *stream) {
+size_t q8_1_mmq_row_bytes(int in_dim) {
+    const int groups_per_row = (in_dim + 127) / 128;
+    return static_cast<size_t>(groups_per_row) * 144;
+}
+
+void launch_quantize_q8_1(const float *x, uint8_t *x_q8_1, int in_dim, int m, void *stream,
+                          bool store_raw_sum) {
     const int blocks_per_row = (in_dim + 31) / 32;
     const int blocks = m * blocks_per_row;
-    quantize_q8_1_kernel<<<blocks, 32, 0, as_stream(stream)>>>(x, x_q8_1, in_dim, m, blocks_per_row);
+    quantize_q8_1_kernel<<<blocks, 32, 0, as_stream(stream)>>>(
+        x, x_q8_1, in_dim, m, blocks_per_row, store_raw_sum);
+}
+
+void launch_quantize_q8_1_mmq(const float *x, uint8_t *x_q8_1, int in_dim, int m, void *stream,
+                              bool store_raw_sum) {
+    const int groups_per_row = (in_dim + 127) / 128;
+    const int blocks = m * groups_per_row;
+    quantize_q8_1_mmq_kernel<<<blocks, 128, 0, as_stream(stream)>>>(
+        x, x_q8_1, in_dim, m, groups_per_row, store_raw_sum);
 }
 
 template <int QUANT_TYPE>
@@ -188,6 +245,52 @@ void launch_quant_gemv_q8_1(DType quant_type, const uint8_t *weight, size_t row_
 }
 
 template <int QUANT_TYPE>
+void launch_quant_down_q8_1_indexed_accum_typed(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                size_t down_row_bytes, const uint8_t *act_q8_1,
+                                                const int *expert_ids, const float *route_weights,
+                                                float *out, int k, int hidden_size, int ffn_dim,
+                                                int blocks_per_row, cudaStream_t stream) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int blocks = (hidden_size + warps_per_block - 1) / warps_per_block;
+    quant_down_q8_1_indexed_accum_kernel<QUANT_TYPE><<<blocks, kBlock, 0, stream>>>(
+        down_weight, down_expert_bytes, down_row_bytes, act_q8_1, expert_ids, route_weights,
+        out, k, hidden_size, ffn_dim, blocks_per_row);
+}
+
+void launch_quant_down_q8_1_indexed_accum(DType quant_type, const uint8_t *down_weight,
+                                          size_t down_expert_bytes, size_t down_row_bytes,
+                                          const uint8_t *act_q8_1, const int *expert_ids,
+                                          const float *route_weights, float *out,
+                                          int k, int hidden_size, int ffn_dim, void *stream) {
+    const cudaStream_t s = as_stream(stream);
+    const int blocks_per_row = static_cast<int>(q8_1_row_bytes(ffn_dim) / 36);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_down_q8_1_indexed_accum_typed<12>(down_weight, down_expert_bytes, down_row_bytes,
+                                                           act_q8_1, expert_ids, route_weights, out,
+                                                           k, hidden_size, ffn_dim, blocks_per_row, s);
+            break;
+        case DType::Q6_K:
+            launch_quant_down_q8_1_indexed_accum_typed<14>(down_weight, down_expert_bytes, down_row_bytes,
+                                                           act_q8_1, expert_ids, route_weights, out,
+                                                           k, hidden_size, ffn_dim, blocks_per_row, s);
+            break;
+        case DType::Q5_0:
+            launch_quant_down_q8_1_indexed_accum_typed<6>(down_weight, down_expert_bytes, down_row_bytes,
+                                                          act_q8_1, expert_ids, route_weights, out,
+                                                          k, hidden_size, ffn_dim, blocks_per_row, s);
+            break;
+        case DType::Q8_0:
+            launch_quant_down_q8_1_indexed_accum_typed<8>(down_weight, down_expert_bytes, down_row_bytes,
+                                                          act_q8_1, expert_ids, route_weights, out,
+                                                          k, hidden_size, ffn_dim, blocks_per_row, s);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
 void launch_quant_matmul_q8_1_typed(const uint8_t *weight, size_t row_bytes,
                                     const uint8_t *x_q8_1, float *y,
                                     int out_dim, int in_dim, int m,
@@ -216,6 +319,36 @@ void launch_quant_matmul_q8_1(DType quant_type, const uint8_t *weight, size_t ro
             break;
         case DType::Q8_0:
             launch_quant_matmul_q8_1_typed<8>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, s);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
+void launch_quant_matmul_q8_1_mmq_typed(const uint8_t *weight, size_t row_bytes,
+                                        const uint8_t *x_q8_1, float *y,
+                                        int out_dim, int in_dim, int m,
+                                        cudaStream_t stream) {
+    constexpr int out_tile = 128;
+    constexpr int row_tile = 8;
+    const int groups_per_row = static_cast<int>(q8_1_mmq_row_bytes(in_dim) / 144);
+    const dim3 grid((out_dim + out_tile - 1) / out_tile, (m + row_tile - 1) / row_tile);
+    const dim3 block(32, row_tile);
+    quant_matmul_q8_1_mmq_kernel<QUANT_TYPE><<<grid, block, 0, stream>>>(
+        weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, groups_per_row);
+}
+
+void launch_quant_matmul_q8_1_mmq(DType quant_type, const uint8_t *weight, size_t row_bytes,
+                                  const uint8_t *x_q8_1, float *y,
+                                  int out_dim, int in_dim, int m, void *stream) {
+    const cudaStream_t s = as_stream(stream);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_matmul_q8_1_mmq_typed<12>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, s);
+            break;
+        case DType::Q6_K:
+            launch_quant_matmul_q8_1_mmq_typed<14>(weight, row_bytes, x_q8_1, y, out_dim, in_dim, m, s);
             break;
         default:
             break;

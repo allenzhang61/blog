@@ -16,7 +16,7 @@ run_case() {
   echo "===== ${name} ====="
   env \
     PROMPT="${prompt}" \
-    LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET=1 \
+    LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1 \
     LOCAL_LLM_CUDA_DEQUANT_POOL_GB="${LOCAL_LLM_CUDA_DEQUANT_POOL_GB:-0.05}" \
     "$@" \
     "${BIN}" --model deepseek --model-dir "${MODEL_DIR}" --max-output-tokens "${MAX_OUTPUT_TOKENS}" \

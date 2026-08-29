@@ -16,10 +16,13 @@ struct DeepseekLayerWeights;
 struct MoERoute {
     CPUTensor c_expert_ids_i32;
     CPUTensor c_weights_f32;
+    // decode device-indexed MoE 路径：top_idx/top_w 都保留在 device，expert 选择在 CUDA kernel 内完成。
+    const int *d_expert_ids_i32 = nullptr;
     // decode（input_size==1）路径：top_w 不回读到 host，直接保留 device 指针供加权累加 kernel 使用。
     // prefill 路径下为 nullptr（沿用 c_weights_f32）。
     const float *d_weights_f32 = nullptr;
     bool decode_device = false;
+    bool decode_device_indexed = false;
 };
 
 class MoERouter : public Module {

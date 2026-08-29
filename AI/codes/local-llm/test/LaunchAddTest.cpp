@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -22,6 +23,45 @@ void skip_if_no_cuda_device() {
 void append_u16_le(std::vector<uint8_t> &bytes, uint16_t v) {
     bytes.push_back(static_cast<uint8_t>(v & 0xff));
     bytes.push_back(static_cast<uint8_t>(v >> 8));
+}
+
+void write_u16_le(std::vector<uint8_t> &bytes, size_t offset, uint16_t v) {
+    bytes[offset] = static_cast<uint8_t>(v & 0xff);
+    bytes[offset + 1] = static_cast<uint8_t>(v >> 8);
+}
+
+uint16_t read_u16_le(const std::vector<uint8_t> &bytes, size_t offset) {
+    return static_cast<uint16_t>(bytes[offset]) |
+           static_cast<uint16_t>(static_cast<uint16_t>(bytes[offset + 1]) << 8);
+}
+
+float half_to_float(uint16_t h) {
+    const uint32_t sign = static_cast<uint32_t>(h & 0x8000) << 16;
+    uint32_t exp = (h >> 10) & 0x1f;
+    uint32_t mant = h & 0x03ff;
+
+    uint32_t out;
+    if (exp == 0) {
+        if (mant == 0) {
+            out = sign;
+        } else {
+            exp = 1;
+            while ((mant & 0x0400) == 0) {
+                mant <<= 1;
+                --exp;
+            }
+            mant &= 0x03ff;
+            out = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1f) {
+        out = sign | 0x7f800000 | (mant << 13);
+    } else {
+        out = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+    }
+
+    float value;
+    std::memcpy(&value, &out, sizeof(value));
+    return value;
 }
 
 template <typename T>
@@ -257,4 +297,222 @@ TEST(LaunchQuantMatmulQ81Test, ComputesQ80MultipleRows) {
         EXPECT_NEAR(expected0, out[static_cast<size_t>(row) * out_dim + 0], 1e-5f);
         EXPECT_NEAR(expected1, out[static_cast<size_t>(row) * out_dim + 1], 1e-5f);
     }
+}
+
+TEST(LaunchQuantizeQ81Test, SupportsRawAndQuantizedBlockSums) {
+    skip_if_no_cuda_device();
+
+    constexpr int in_dim = 32;
+    constexpr int m = 1;
+    std::vector<float> x(in_dim, 0.01f);
+    x[0] = 1.0f;
+
+    DeviceArray<float> d_x(x.size());
+    DeviceArray<uint8_t> d_x_q8_1(q8_1_row_bytes(in_dim));
+    ASSERT_EQ(cudaSuccess, d_x.status());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.status());
+    ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
+
+    std::vector<uint8_t> encoded(q8_1_row_bytes(in_dim), 0);
+
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr, false);
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.copy_to(encoded));
+    const float quantized_sum = half_to_float(read_u16_le(encoded, 2));
+
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr, true);
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.copy_to(encoded));
+    const float raw_sum = half_to_float(read_u16_le(encoded, 2));
+
+    EXPECT_NEAR(158.0f / 127.0f, quantized_sum, 1e-3f);
+    EXPECT_NEAR(1.31f, raw_sum, 1e-3f);
+}
+
+TEST(LaunchQuantMatmulQ81Test, ComputesQ4KScaleAndMinCompensation) {
+    skip_if_no_cuda_device();
+
+    constexpr int in_dim = 256;
+    constexpr int out_dim = 1;
+    constexpr int m = 1;
+    constexpr size_t row_bytes = 144;
+
+    std::vector<uint8_t> weight(row_bytes, 0);
+    write_u16_le(weight, 0, 0x3c00); // d = f16(1.0)
+    write_u16_le(weight, 2, 0x3800); // dmin = f16(0.5)
+    weight[4 + 0] = 3;             // sub-block 0 scale
+    weight[4 + 4] = 2;             // sub-block 0 min
+    for (int k = 0; k < 32; ++k) {
+        weight[16 + k] = 0x05;     // sub-block 0 q=5, sub-block 1 q=0
+    }
+
+    std::vector<float> x(in_dim, 0.0f);
+    x[0] = 127.0f;
+    for (int k = 1; k < 32; ++k) {
+        x[k] = 1.0f;
+    }
+    std::vector<float> out(out_dim, 0.0f);
+
+    DeviceArray<uint8_t> d_weight(weight.size());
+    DeviceArray<float> d_x(x.size());
+    DeviceArray<uint8_t> d_x_q8_1(q8_1_row_bytes(in_dim));
+    DeviceArray<float> d_out(out.size());
+    ASSERT_EQ(cudaSuccess, d_weight.status());
+    ASSERT_EQ(cudaSuccess, d_x.status());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.status());
+    ASSERT_EQ(cudaSuccess, d_out.status());
+    ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
+    ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
+
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quant_matmul_q8_1(DType::Q4_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
+                             out_dim, in_dim, m, nullptr);
+
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    ASSERT_EQ(cudaSuccess, d_out.copy_to(out));
+
+    // For sub-block 0, dequantized Q4_K weight is 1.0*3*5 - 0.5*2 = 14.
+    EXPECT_NEAR(14.0f * 158.0f, out[0], 1e-3f);
+}
+
+TEST(LaunchQuantMatmulQ81Test, ComputesQ6KScaleGroups) {
+    skip_if_no_cuda_device();
+
+    constexpr int in_dim = 256;
+    constexpr int out_dim = 1;
+    constexpr int m = 1;
+    constexpr size_t row_bytes = 210;
+
+    std::vector<uint8_t> weight(row_bytes, 0);
+    for (int k = 0; k < 32; ++k) {
+        weight[k] = 0x03;          // low 4 bits of q + 32, for group 0
+        weight[128 + k] = 0x02;    // high 2 bits of q + 32, for group 0
+    }
+    weight[192 + 0] = 2;           // scale for lanes 0..15
+    weight[192 + 1] = 2;           // scale for lanes 16..31
+    write_u16_le(weight, 208, 0x3c00); // d = f16(1.0)
+
+    std::vector<float> x(in_dim, 0.0f);
+    x[0] = 127.0f;
+    for (int k = 1; k < 32; ++k) {
+        x[k] = 1.0f;
+    }
+    std::vector<float> out(out_dim, 0.0f);
+
+    DeviceArray<uint8_t> d_weight(weight.size());
+    DeviceArray<float> d_x(x.size());
+    DeviceArray<uint8_t> d_x_q8_1(q8_1_row_bytes(in_dim));
+    DeviceArray<float> d_out(out.size());
+    ASSERT_EQ(cudaSuccess, d_weight.status());
+    ASSERT_EQ(cudaSuccess, d_x.status());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.status());
+    ASSERT_EQ(cudaSuccess, d_out.status());
+    ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
+    ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
+
+    launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quant_matmul_q8_1(DType::Q6_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
+                             out_dim, in_dim, m, nullptr);
+
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    ASSERT_EQ(cudaSuccess, d_out.copy_to(out));
+
+    // Stored q is 35, so dequantized Q6_K value is 1.0*2*(35 - 32) = 6.
+    EXPECT_NEAR(6.0f * 158.0f, out[0], 1e-3f);
+}
+
+TEST(LaunchQuantMatmulQ81MmqTest, ComputesQ4KScaleAndMinCompensation) {
+    skip_if_no_cuda_device();
+
+    constexpr int in_dim = 256;
+    constexpr int out_dim = 1;
+    constexpr int m = 1;
+    constexpr size_t row_bytes = 144;
+
+    std::vector<uint8_t> weight(row_bytes, 0);
+    write_u16_le(weight, 0, 0x3c00);
+    write_u16_le(weight, 2, 0x3800);
+    weight[4 + 0] = 3;
+    weight[4 + 4] = 2;
+    for (int k = 0; k < 32; ++k) {
+        weight[16 + k] = 0x05;
+    }
+
+    std::vector<float> x(in_dim, 0.0f);
+    x[0] = 127.0f;
+    for (int k = 1; k < 32; ++k) {
+        x[k] = 1.0f;
+    }
+    std::vector<float> out(out_dim, 0.0f);
+
+    DeviceArray<uint8_t> d_weight(weight.size());
+    DeviceArray<float> d_x(x.size());
+    DeviceArray<uint8_t> d_x_q8_1(q8_1_mmq_row_bytes(in_dim));
+    DeviceArray<float> d_out(out.size());
+    ASSERT_EQ(cudaSuccess, d_weight.status());
+    ASSERT_EQ(cudaSuccess, d_x.status());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.status());
+    ASSERT_EQ(cudaSuccess, d_out.status());
+    ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
+    ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
+
+    launch_quantize_q8_1_mmq(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quant_matmul_q8_1_mmq(DType::Q4_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
+                                 out_dim, in_dim, m, nullptr);
+
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    ASSERT_EQ(cudaSuccess, d_out.copy_to(out));
+
+    EXPECT_NEAR(14.0f * 158.0f, out[0], 1e-3f);
+}
+
+TEST(LaunchQuantMatmulQ81MmqTest, ComputesQ6KScaleGroups) {
+    skip_if_no_cuda_device();
+
+    constexpr int in_dim = 256;
+    constexpr int out_dim = 1;
+    constexpr int m = 1;
+    constexpr size_t row_bytes = 210;
+
+    std::vector<uint8_t> weight(row_bytes, 0);
+    for (int k = 0; k < 32; ++k) {
+        weight[k] = 0x03;
+        weight[128 + k] = 0x02;
+    }
+    weight[192 + 0] = 2;
+    weight[192 + 1] = 2;
+    write_u16_le(weight, 208, 0x3c00);
+
+    std::vector<float> x(in_dim, 0.0f);
+    x[0] = 127.0f;
+    for (int k = 1; k < 32; ++k) {
+        x[k] = 1.0f;
+    }
+    std::vector<float> out(out_dim, 0.0f);
+
+    DeviceArray<uint8_t> d_weight(weight.size());
+    DeviceArray<float> d_x(x.size());
+    DeviceArray<uint8_t> d_x_q8_1(q8_1_mmq_row_bytes(in_dim));
+    DeviceArray<float> d_out(out.size());
+    ASSERT_EQ(cudaSuccess, d_weight.status());
+    ASSERT_EQ(cudaSuccess, d_x.status());
+    ASSERT_EQ(cudaSuccess, d_x_q8_1.status());
+    ASSERT_EQ(cudaSuccess, d_out.status());
+    ASSERT_EQ(cudaSuccess, d_weight.copy_from(weight));
+    ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
+
+    launch_quantize_q8_1_mmq(d_x.get(), d_x_q8_1.get(), in_dim, m, nullptr);
+    launch_quant_matmul_q8_1_mmq(DType::Q6_K, d_weight.get(), row_bytes, d_x_q8_1.get(), d_out.get(),
+                                 out_dim, in_dim, m, nullptr);
+
+    ASSERT_EQ(cudaSuccess, cudaGetLastError());
+    ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
+    ASSERT_EQ(cudaSuccess, d_out.copy_to(out));
+
+    EXPECT_NEAR(6.0f * 158.0f, out[0], 1e-3f);
 }

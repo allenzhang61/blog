@@ -38,13 +38,30 @@ template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                     size_t gate_row_bytes, size_t up_row_bytes,
                                     const float *x, float *act, int ffn_dim, int in_dim);
-__global__ void quantize_q8_1_kernel(const float *x, uint8_t *x_q8_1, int in_dim, int m, int blocks_per_row);
+template <int QUANT_TYPE, bool F16_OPERANDS>
+__global__ void quant_swiglu_indexed_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                            size_t gate_expert_bytes, size_t up_expert_bytes,
+                                            size_t gate_row_bytes, size_t up_row_bytes, const float *x,
+                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim);
+__global__ void quantize_q8_1_kernel(const float *x, uint8_t *x_q8_1, int in_dim, int m, int blocks_per_row,
+                                     bool store_raw_sum);
+__global__ void quantize_q8_1_mmq_kernel(const float *x, uint8_t *x_q8_1, int in_dim, int m, int groups_per_row,
+                                         bool store_raw_sum);
 template <int QUANT_TYPE>
 __global__ void quant_gemv_q8_1_kernel(const uint8_t *weight, size_t row_bytes, const uint8_t *x_q8_1,
                                        float *y, int out_dim, int in_dim, int blocks_per_row);
 template <int QUANT_TYPE>
 __global__ void quant_matmul_q8_1_kernel(const uint8_t *weight, size_t row_bytes, const uint8_t *x_q8_1,
                                          float *y, int out_dim, int in_dim, int m, int blocks_per_row);
+template <int QUANT_TYPE>
+__global__ void quant_matmul_q8_1_mmq_kernel(const uint8_t *weight, size_t row_bytes, const uint8_t *x_q8_1,
+                                             float *y, int out_dim, int in_dim, int m, int groups_per_row);
+template <int QUANT_TYPE>
+__global__ void quant_down_q8_1_indexed_accum_kernel(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                     size_t down_row_bytes, const uint8_t *act_q8_1,
+                                                     const int *expert_ids, const float *route_weights,
+                                                     float *out, int k, int hidden_size, int ffn_dim,
+                                                     int blocks_per_row);
 // 量化直算 Embedding：按 token id 只反量化命中行到 f32，避免整表展开成 F16。
 template <int QUANT_TYPE>
 __global__ void quant_embedding_kernel(const int *input, float *output, const uint8_t *table,

@@ -59,6 +59,15 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
     const int64_t ffn = config_.expert_ffn;
     const int n_exp = config_.expert_count;
     const int k = config_.expert_used;
+    if (route.decode_device_indexed &&
+        TensorTool::moe_routed_decode_indexed(*lw_.s_ffn_gate_exps, *lw_.s_ffn_up_exps, *lw_.s_ffn_down_exps,
+                                              g_normed_f32, route.d_expert_ids_i32, route.d_weights_f32,
+                                              g_moe_f32, s, n_exp, k, "ds.gemm.e_indexed_moe")) {
+        return;
+    }
+    if (route.decode_device_indexed) {
+        throw std::runtime_error("DeepSeek MoE device-indexed route 未被 quant-direct 接管，拒绝回退到未填充的 host route");
+    }
     const int *expert_ids = route.c_expert_ids_i32.data<int>();
     // decode：top_w 留在 device（route.decode_device），加权累加从 device 读权重，省掉每层 top_w 的回读同步。
     const bool decode_device = (input_size == 1 && route.decode_device);
