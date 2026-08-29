@@ -62,29 +62,39 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
     session.kv_caches[layer].seq_len = start_pos + static_cast<int>(input_size);
 
     const int64_t seq = start_pos + input_size;
-    GPUTensor g_kv_b_out_f32 = GPUTensor(scratch, scratch_key::kKvBOut,
-                                         {
-                                             seq,
-                                             static_cast<int64_t>(n_heads * (qk_nope + v_head)) //kvb_out
-                                         },
-                                         DType::F32);
+    GPUTensor &g_kv_b_cache_f32 = session.kv_caches[layer].g_kv_b_cache_f32;
     {
-        GPUTensor g_latent_f32 = GPUTensor(
-            scratch, scratch_key::kAttn,
-            {seq, static_cast<int64_t>(kv_lora)}, DType::F32);
-        cuda_memcpy2d_d2d(g_latent_f32.data(), kv_lora * sizeof(float), g_kv_cache_f32.data(),
-                          kv_total * sizeof(float), kv_lora * sizeof(float), static_cast<size_t>(seq),
-                          "ds.gather.latent");
+        const size_t kvb_row_bytes = static_cast<size_t>(kvb_out) * sizeof(float);
+        GPUTensor g_kv_b_new_f32 = GPUTensor(
+            g_kv_b_cache_f32, static_cast<size_t>(start_pos) * kvb_row_bytes,
+            {input_size, static_cast<int64_t>(kvb_out)});
+
+        GPUTensor g_latent_f32;
+        if (input_size == 1) {
+            // decode: kv_b 必须使用 mla_kv_a 写入 cache 后的 normalized latent。
+            g_latent_f32 = GPUTensor(
+                g_kv_cache_f32, static_cast<size_t>(start_pos) * kv_total * sizeof(float),
+                {1, static_cast<int64_t>(kv_lora)});
+        } else {
+            // prefill/batch: kv_lora 与 qk_rope 交错存入 kv_a，先压紧本批 token 的 latent 段。
+            g_latent_f32 = GPUTensor(
+                scratch, scratch_key::kAttn,
+                {input_size, static_cast<int64_t>(kv_lora)}, DType::F32);
+            const float *src = g_kv_cache_f32.data<float>() + static_cast<size_t>(start_pos) * kv_total;
+            cuda_memcpy2d_d2d(g_latent_f32.data(), kv_lora * sizeof(float), src,
+                              kv_total * sizeof(float), kv_lora * sizeof(float), static_cast<size_t>(input_size),
+                              "ds.gather.latent.new");
+        }
         deepseek_trace::tensor(session, g_latent_f32, "kv_latent", session.trace_pos, session.trace_layer);
-        TensorTool::gemm(*lw_.s_attn_kv_b, g_latent_f32, g_kv_b_out_f32, scratch, scratch_key::kLatentLowp,
+        TensorTool::gemm(*lw_.s_attn_kv_b, g_latent_f32, g_kv_b_new_f32, scratch, scratch_key::kLatentLowp,
                          "ds.gemm.kv_b");
-        deepseek_trace::tensor(session, g_kv_b_out_f32, "kv_b_out", session.trace_pos, session.trace_layer);
+        deepseek_trace::tensor(session, g_kv_b_new_f32, "kv_b_out", session.trace_pos, session.trace_layer);
     }
 
     GPUTensor g_attn_f32 = GPUTensor(
         scratch, scratch_key::kAttn,
         {input_size, static_cast<int64_t>(n_heads * v_head)}, DType::F32);
-    TensorTool::mla_attend(g_q_f32, g_kv_b_out_f32, g_kv_cache_f32, g_attn_f32, input_size, n_heads, qk_nope, qk_rope,
+    TensorTool::mla_attend(g_q_f32, g_kv_b_cache_f32, g_kv_cache_f32, g_attn_f32, input_size, n_heads, qk_nope, qk_rope,
                            v_head, kv_lora, start_pos, session.attn_softmax_scale);
     deepseek_trace::tensor(session, g_attn_f32, "attn_ctx", session.trace_pos, session.trace_layer);
 

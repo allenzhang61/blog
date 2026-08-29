@@ -14,8 +14,11 @@
 #include <vector>
 
 // 每层 latent KV cache：布局 [max_seq_len, kv_lora + qk_rope]，float。
+// expanded KV-B cache 保存 kv_b(latent) 后的 K_nope/V，decode 时只更新新 token，
+// 避免每步每层重新投影全历史 latent KV。
 struct LatentKVCache {
     GPUTensor g_cache_f32;
+    GPUTensor g_kv_b_cache_f32;
     int seq_len = 0;
 };
 

@@ -29,14 +29,20 @@ DeepseekSession::DeepseekSession(const DeepseekConfig &config, std::vector<int> 
     std::copy(h_input_i32.begin(), h_input_i32.end(), h_input_i32_.data<int>());
     max_seq_len_ = static_cast<size_t>(h_input_i32_.numel()) + static_cast<size_t>(max_output_tokens);
 
-    // latent KV cache：每层 [max_seq_len, kv_lora + qk_rope] float。
+    // latent KV cache：每层 [max_seq_len, kv_lora + qk_rope] float；
+    // expanded KV-B cache：每层 [max_seq_len, n_heads * (qk_nope + v_head)] float。
     const int kv_total = config.kv_lora_rank + config.qk_rope_head_dim;
+    const int kvb_out = config.num_heads * (config.qk_nope_head_dim + config.v_head_dim);
     kv_caches.resize(config.num_layers);
     for (int i = 0; i < config.num_layers; ++i) {
-        const size_t bytes = static_cast<size_t>(max_seq_len_) * kv_total * sizeof(float);
+        const size_t latent_bytes = static_cast<size_t>(max_seq_len_) * kv_total * sizeof(float);
         kv_caches[i].g_cache_f32 = GPUTensor(
-            CudaWeight(bytes, CUDA_R_32F, false, "deepseek.kv_cache"),
+            CudaWeight(latent_bytes, CUDA_R_32F, false, "deepseek.kv_cache"),
             {static_cast<int64_t>(max_seq_len_), static_cast<int64_t>(kv_total)});
+        const size_t kvb_bytes = static_cast<size_t>(max_seq_len_) * kvb_out * sizeof(float);
+        kv_caches[i].g_kv_b_cache_f32 = GPUTensor(
+            CudaWeight(kvb_bytes, CUDA_R_32F, false, "deepseek.kv_b_cache"),
+            {static_cast<int64_t>(max_seq_len_), static_cast<int64_t>(kvb_out)});
         kv_caches[i].seq_len = 0;
     }
 
@@ -100,6 +106,7 @@ size_t DeepseekSession::kv_state_bytes() const {
     size_t total = 0;
     for (const auto &kv : kv_caches) {
         total += kv.g_cache_f32.nbytes;
+        total += kv.g_kv_b_cache_f32.nbytes;
     }
     return total;
 }
