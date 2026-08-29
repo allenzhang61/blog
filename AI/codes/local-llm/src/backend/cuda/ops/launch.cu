@@ -251,7 +251,8 @@ void launch_quant_down_q8_1_indexed_accum_typed(const uint8_t *down_weight, size
                                                 float *out, int k, int hidden_size, int ffn_dim,
                                                 int blocks_per_row, cudaStream_t stream) {
     constexpr int warps_per_block = kBlock / 32;
-    const int blocks = (hidden_size + warps_per_block - 1) / warps_per_block;
+    const int total = k * hidden_size;
+    const int blocks = (total + warps_per_block - 1) / warps_per_block;
     quant_down_q8_1_indexed_accum_kernel<QUANT_TYPE><<<blocks, kBlock, 0, stream>>>(
         down_weight, down_expert_bytes, down_row_bytes, act_q8_1, expert_ids, route_weights,
         out, k, hidden_size, ffn_dim, blocks_per_row);

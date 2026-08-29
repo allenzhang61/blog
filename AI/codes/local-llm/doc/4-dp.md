@@ -247,6 +247,7 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 | Packed expert GPU 常驻（默认） | **~48.8–49.5 t/s** | **~13.5x** | MoE packed expert tensor 整块上传，`.eX` expert 只做 GPU pointer view；weight allocation 从几千个降到 GGUF tensor 级别，128 token story 不再 OOM |
 | decode device-indexed MoE（quant-direct 模式） | **~53.7–54.5 t/s** | **~14.7x** | quant-direct 模式下 decode `top_idx/top_w` 留在 device；routed experts 用 `ds.gemm.e_indexed_moe` 两段 kernel 处理 6 个 route，减少 host route 回读和 per-expert launch |
 | MLA `kv_b` expanded cache（quant-direct 模式） | **~57.4–57.7 t/s** | **~15.7x** | 每层新增 `[max_seq_len, n_heads*(qk_nope+v_head)]` F32 cache；prefill 写入整段，decode 只投影当前 token 的 normalized latent，避免每步重算全历史 `kv_b`；12/12 单测通过 |
+| routed down route-parallel（quant-direct 模式） | **~60.0–60.2 t/s** | **~16.4x** | `quant_down_q8_1_indexed_accum` 从一 warp 串行遍历 6 个 route 改为一 warp 处理一个 `(route, hidden)`，用 `atomicAdd` 累加；ncu 单 kernel 约 `125us -> 65us`，12/12 单测通过 |
 
 > 正确性：阶段 1/2 的 France smoke 均可生成 `The capital of France is Paris.`；阶段 3 改为 llama.cpp-style Q8_1 activation 后短问答能生成“巴黎/法国首都巴黎”一类语义正确回答；修复 MLA latent gather 的 stream 顺序后，story 长文 smoke 可无 trace 连贯续写。但 DeepSeek 仍不能通过英文 exact-output，事实回答表述/语言仍会分叉，不能把 quant-direct 路径作为默认正确性路径。
 
