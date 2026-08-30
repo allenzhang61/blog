@@ -221,12 +221,9 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
                       dequant.bytes, name);
             return;
         }
-        const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, true);
-        if (q == nullptr) {
-            throw std::runtime_error("TensorTool::gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
-        }
-        const size_t row_bytes = q->bytes / static_cast<size_t>(out_dim);
-        ScopedGpuTimer timer(name && name[0] ? name : nullptr, q->bytes);
+        const GPUTensor g_weight_q = s_weight.to_gpu(false);
+        const size_t row_bytes = g_weight_q.nbytes / static_cast<size_t>(out_dim);
+        ScopedGpuTimer timer(name && name[0] ? name : nullptr, g_weight_q.nbytes);
         const bool f16_operands = should_use_f16_quant_gemv_operands(name);
         if (m > 1) {
             if (should_force_deepseek_prefill_quant_matmul(name, m)) {
@@ -237,18 +234,18 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
                 const bool raw_sum = use_tiled_mmq || should_use_deepseek_prefill_q8_1_raw_sum(name);
                 if (use_tiled_mmq) {
                     launch_quantize_q8_1_mmq(g_input_f32.data<float>(), d_input_q8_1, in_dim, m, raw_sum);
-                    launch_quant_matmul_q8_1_mmq(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+                    launch_quant_matmul_q8_1_mmq(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
                                                  row_bytes, d_input_q8_1, g_output_f32.data<float>(),
                                                  out_dim, in_dim, m);
                 } else {
                     launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, m, raw_sum);
-                    launch_quant_matmul_q8_1(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+                    launch_quant_matmul_q8_1(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
                                              row_bytes, d_input_q8_1, g_output_f32.data<float>(),
                                              out_dim, in_dim, m);
                 }
                 return;
             }
-            launch_quant_matmul(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+            launch_quant_matmul(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
                                 row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
                                 out_dim, in_dim, m, f16_operands);
             return;
@@ -257,12 +254,12 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
             const size_t q8_bytes = q8_1_row_bytes(in_dim);
             uint8_t *d_input_q8_1 = scratch.ensure<uint8_t>(lowp_key + ".q8_1", q8_bytes);
             launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, m);
-            launch_quant_gemv_q8_1(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+            launch_quant_gemv_q8_1(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
                                    row_bytes, d_input_q8_1, g_output_f32.data<float>(),
                                    out_dim, in_dim);
             return;
         }
-        launch_quant_gemv(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+        launch_quant_gemv(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
                           row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
                           out_dim, in_dim, m, f16_operands);
         return;
@@ -334,6 +331,7 @@ void TensorTool::gemm_lowp(const StorageTensor &s_weight, const void *d_input_lo
 bool TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
                               const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
                               const char *name) {
+    /*参数校验*/
     if (!should_use_moe_fused_swiglu(name)) return false;
     if (g_input_f32.rows() != 1 || g_input_f32.dtype != DType::F32 || g_act_f32.dtype != DType::F32) return false;
     if (!Quant::is_quantized_dtype(s_gate_weight.dtype) || s_gate_weight.dtype != s_up_weight.dtype) return false;
@@ -343,15 +341,15 @@ bool TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageT
     const int in_dim = static_cast<int>(s_gate_weight.shape[1]);
     if (g_input_f32.cols() != in_dim || g_act_f32.rows() != 1 || g_act_f32.cols() != ffn_dim) return false;
 
-    const CudaWeight *gate_q = global_cuda_weight_pool().cached_weight(s_gate_weight);
-    const CudaWeight *up_q = global_cuda_weight_pool().cached_weight(s_up_weight);
-    const size_t gate_row_bytes = gate_q->bytes / static_cast<size_t>(ffn_dim);
-    const size_t up_row_bytes = up_q->bytes / static_cast<size_t>(ffn_dim);
+    const GPUTensor g_gate_weight = s_gate_weight.to_gpu(false);
+    const GPUTensor g_up_weight = s_up_weight.to_gpu(false);
+    const size_t gate_row_bytes = g_gate_weight.nbytes / static_cast<size_t>(ffn_dim);
+    const size_t up_row_bytes = g_up_weight.nbytes / static_cast<size_t>(ffn_dim);
     const bool f16_operands = should_use_f16_quant_gemv_operands(name);
-    ScopedGpuTimer timer(name && name[0] ? name : nullptr, gate_q->bytes + up_q->bytes);
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, g_gate_weight.nbytes + g_up_weight.nbytes);
     launch_quant_swiglu(s_gate_weight.dtype,
-                        static_cast<const uint8_t *>(gate_q->ptr),
-                        static_cast<const uint8_t *>(up_q->ptr),
+                        static_cast<const uint8_t *>(g_gate_weight.data()),
+                        static_cast<const uint8_t *>(g_up_weight.data()),
                         gate_row_bytes, up_row_bytes,
                         g_input_f32.data<float>(), g_act_f32.data<float>(),
                         ffn_dim, in_dim, f16_operands, should_use_moe_fast_swiglu(name));
@@ -370,13 +368,10 @@ bool TensorTool::quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &
     const int in_dim = static_cast<int>(s_weight.shape[1]);
     if (g_input_f32.cols() != in_dim || g_output_f32.cols() != out_dim) return false;
 
-    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, true);
-    if (q == nullptr) {
-        throw std::runtime_error("TensorTool::quant_gemv_add 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
-    }
-    const size_t row_bytes = q->bytes / static_cast<size_t>(out_dim);
-    ScopedGpuTimer timer(name && name[0] ? name : nullptr, q->bytes);
-    launch_quant_gemv_add(s_weight.dtype, static_cast<const uint8_t *>(q->ptr), row_bytes,
+    const GPUTensor g_weight = s_weight.to_gpu(false);
+    const size_t row_bytes = g_weight.nbytes / static_cast<size_t>(out_dim);
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, g_weight.nbytes);
+    launch_quant_gemv_add(s_weight.dtype, static_cast<const uint8_t *>(g_weight.data()), row_bytes,
                           g_input_f32.data<float>(), g_output_f32.data<float>(),
                           out_dim, in_dim, should_use_f16_quant_gemv_operands(name));
     return true;
@@ -419,12 +414,9 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
         return device_indexed_moe_reject("expert tensor dimensions mismatch");
     }
 
-    const CudaWeight *gate_q = global_cuda_weight_pool().cached_weight(s_gate_exps);
-    const CudaWeight *up_q = global_cuda_weight_pool().cached_weight(s_up_exps);
-    const CudaWeight *down_q = global_cuda_weight_pool().cached_weight(s_down_exps);
-    if (gate_q == nullptr || up_q == nullptr || down_q == nullptr) {
-        throw std::runtime_error("TensorTool::moe_routed_decode_indexed 量化 expert 权重超过 CudaWeightPool 上限");
-    }
+    const GPUTensor g_gate_exps = s_gate_exps.to_gpu(false);
+    const GPUTensor g_up_exps = s_up_exps.to_gpu(false);
+    const GPUTensor g_down_exps = s_down_exps.to_gpu(false);
 
     const size_t gate_expert_bytes = s_gate_exps.nbytes / static_cast<size_t>(n_experts);
     const size_t up_expert_bytes = s_up_exps.nbytes / static_cast<size_t>(n_experts);
@@ -434,7 +426,7 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
     const size_t down_row_bytes = down_expert_bytes / static_cast<size_t>(hidden_size);
 
     ScopedGpuTimer timer(name && name[0] ? name : "ds.gemm.e_indexed_moe",
-                         gate_q->bytes + up_q->bytes + down_q->bytes);
+                         g_gate_exps.nbytes + g_up_exps.nbytes + g_down_exps.nbytes);
     auto g_act_f32 = GPUTensor(scratch, scratch_key::kAct, {k, ffn_dim}, DType::F32);
     if (should_use_moe_q8_1_swiglu(name)) {
         const size_t input_q8_bytes = q8_1_row_bytes(in_dim);
@@ -442,23 +434,23 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
             std::string(scratch_key::kInputQ8_1) + ".moe.indexed", input_q8_bytes);
         launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, 1);
         launch_quant_swiglu_indexed_q8_1(s_gate_exps.dtype,
-                                         static_cast<const uint8_t *>(gate_q->ptr),
-                                         static_cast<const uint8_t *>(up_q->ptr),
+                                         static_cast<const uint8_t *>(g_gate_exps.data()),
+                                         static_cast<const uint8_t *>(g_up_exps.data()),
                                          gate_expert_bytes, up_expert_bytes,
                                          gate_row_bytes, up_row_bytes, d_input_q8_1,
                                          d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim);
     } else if (should_use_moe_block_swiglu(name)) {
         launch_quant_swiglu_indexed_block(s_gate_exps.dtype,
-                                          static_cast<const uint8_t *>(gate_q->ptr),
-                                          static_cast<const uint8_t *>(up_q->ptr),
+                                          static_cast<const uint8_t *>(g_gate_exps.data()),
+                                          static_cast<const uint8_t *>(g_up_exps.data()),
                                           gate_expert_bytes, up_expert_bytes,
                                           gate_row_bytes, up_row_bytes, g_input_f32.data<float>(),
                                           d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim,
                                           should_use_moe_fast_swiglu(name));
     } else {
         launch_quant_swiglu_indexed(s_gate_exps.dtype,
-                                    static_cast<const uint8_t *>(gate_q->ptr),
-                                    static_cast<const uint8_t *>(up_q->ptr),
+                                    static_cast<const uint8_t *>(g_gate_exps.data()),
+                                    static_cast<const uint8_t *>(g_up_exps.data()),
                                     gate_expert_bytes, up_expert_bytes,
                                     gate_row_bytes, up_row_bytes, g_input_f32.data<float>(),
                                     d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim,
@@ -468,7 +460,7 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
 
     if (should_use_moe_f32_fused_down()) {
         launch_quant_down_f32_indexed_accum(s_down_exps.dtype,
-                                            static_cast<const uint8_t *>(down_q->ptr),
+                                            static_cast<const uint8_t *>(g_down_exps.data()),
                                             down_expert_bytes, down_row_bytes, g_act_f32.data<float>(),
                                             d_expert_ids, d_weights, g_out_f32.data<float>(),
                                             k, hidden_size, ffn_dim);
@@ -478,13 +470,13 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
         launch_quantize_q8_1(g_act_f32.data<float>(), d_act_q8_1, ffn_dim, k);
         if (should_use_moe_shared_q8_1_down()) {
             launch_quant_down_q8_1_indexed_accum_shared(s_down_exps.dtype,
-                                                        static_cast<const uint8_t *>(down_q->ptr),
+                                                        static_cast<const uint8_t *>(g_down_exps.data()),
                                                         down_expert_bytes, down_row_bytes, d_act_q8_1,
                                                         d_expert_ids, d_weights, g_out_f32.data<float>(),
                                                         k, hidden_size, ffn_dim);
         } else {
             launch_quant_down_q8_1_indexed_accum(s_down_exps.dtype,
-                                                 static_cast<const uint8_t *>(down_q->ptr),
+                                                 static_cast<const uint8_t *>(g_down_exps.data()),
                                                  down_expert_bytes, down_row_bytes, d_act_q8_1,
                                                  d_expert_ids, d_weights, g_out_f32.data<float>(),
                                                  k, hidden_size, ffn_dim);
@@ -498,14 +490,11 @@ void TensorTool::embedding_lookup(const StorageTensor &s_table, const GPUTensor 
     // 量化表（如 DeepSeek 的 Q4_K token_embd）直接走量化直算查表：量化常驻、按行反量化，
     // 不把整张 [vocab,hidden] 表展开成 F16（省近 0.4GB 显存 + 消除大 F16 lease）。
     if (Quant::is_quantized_dtype(s_table.dtype)) {
-        const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_table);
-        if (q == nullptr) {
-            throw std::runtime_error("TensorTool::embedding_lookup 量化表超过 CudaWeightPool 上限: " + s_table.name);
-        }
+        const GPUTensor g_table_q = s_table.to_gpu(false);
         const int vocab = static_cast<int>(s_table.shape[0]);
-        const size_t row_bytes = q->bytes / static_cast<size_t>(vocab);
+        const size_t row_bytes = g_table_q.nbytes / static_cast<size_t>(vocab);
         launch_quant_embedding(s_table.dtype, g_input_i32.data<int>(),
-                               g_hidden_f32.data<float>(), static_cast<const uint8_t *>(q->ptr),
+                               g_hidden_f32.data<float>(), static_cast<const uint8_t *>(g_table_q.data()),
                                row_bytes, static_cast<int>(s_table.shape[1]),
                                static_cast<int>(g_input_i32.numel()));
         return;
@@ -832,19 +821,17 @@ bool TensorTool::mla_absorb_components(const StorageTensor &s_kv_b_weight, const
         return false;
     }
 
-    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_kv_b_weight, true);
-    if (q == nullptr) {
-        throw std::runtime_error("TensorTool::mla_absorb_components 量化 kv_b 权重超过 CudaWeightPool 上限: " +
-                                 s_kv_b_weight.name);
-    }
-    const size_t row_bytes = q->bytes / static_cast<size_t>(kvb_out);
+    const GPUTensor g_kv_b_weight = s_kv_b_weight.to_gpu(false);
+    const size_t row_bytes = g_kv_b_weight.nbytes / static_cast<size_t>(kvb_out);
     const bool f16_operands = should_use_f16_quant_gemv_operands("ds.mla_absorb");
-    launch_mla_absorb_q_nope(s_kv_b_weight.dtype, g_q_f32.data<float>(), static_cast<const uint8_t *>(q->ptr),
+    launch_mla_absorb_q_nope(s_kv_b_weight.dtype, g_q_f32.data<float>(),
+                             static_cast<const uint8_t *>(g_kv_b_weight.data()),
                              row_bytes, g_q_abs_f32.data<float>(), n_heads, qk_nope, qk_rope, v_head, kv_lora,
                              f16_operands);
     const int blocks_per_row = static_cast<int>(q8_1_row_bytes(kv_lora) / 36);
     if (s_kv_b_weight.dtype == DType::Q4_K) {
-        launch_mla_absorb_q4_xsum_delta(g_q_f32.data<float>(), static_cast<const uint8_t *>(q->ptr),
+        launch_mla_absorb_q4_xsum_delta(g_q_f32.data<float>(),
+                                        static_cast<const uint8_t *>(g_kv_b_weight.data()),
                                         row_bytes, g_q_abs_xsum_delta_f32.data<float>(), n_heads,
                                         qk_nope, qk_rope, v_head, kv_lora, f16_operands);
     } else {
@@ -861,7 +848,7 @@ bool TensorTool::mla_absorb_components(const StorageTensor &s_kv_b_weight, const
                                          latent_q8_1_row_bytes, g_attn_xsum_delta_f32.data<float>(),
                                          g_attn_latent_f32.data<float>(), n_heads, kv_lora,
                                          d_pos, max_seq_len);
-    launch_mla_absorb_v(s_kv_b_weight.dtype, static_cast<const uint8_t *>(q->ptr), row_bytes,
+    launch_mla_absorb_v(s_kv_b_weight.dtype, static_cast<const uint8_t *>(g_kv_b_weight.data()), row_bytes,
                         g_attn_latent_f32.data<float>(), g_attn_xsum_delta_f32.data<float>(),
                         g_attn_f32.data<float>(),
                         n_heads, qk_nope, v_head, kv_lora, f16_operands);
@@ -912,12 +899,8 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
         return false;
     }
 
-    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_kv_b_weight, true);
-    if (q == nullptr) {
-        throw std::runtime_error("TensorTool::mla_absorb_decode_v_cache 量化 kv_b 权重超过 CudaWeightPool 上限: " +
-                                 s_kv_b_weight.name);
-    }
-    const size_t row_bytes = q->bytes / static_cast<size_t>(kvb_out);
+    const GPUTensor g_kv_b_weight = s_kv_b_weight.to_gpu(false);
+    const size_t row_bytes = g_kv_b_weight.nbytes / static_cast<size_t>(kvb_out);
     const bool f16_operands = should_use_f16_quant_gemv_operands("ds.mla_absorb");
     const int blocks_per_row = static_cast<int>(q8_1_row_bytes(kv_lora) / 36);
     auto g_q_abs_f32 = GPUTensor(scratch, "mla_absorb_q", {static_cast<int64_t>(n_heads), static_cast<int64_t>(kv_lora)},
@@ -929,11 +912,13 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
                                        {static_cast<int64_t>(n_heads), static_cast<int64_t>(max_seq_len)},
                                        DType::F32);
 
-    launch_mla_absorb_q_nope(s_kv_b_weight.dtype, g_q_f32.data<float>(), static_cast<const uint8_t *>(q->ptr),
+    launch_mla_absorb_q_nope(s_kv_b_weight.dtype, g_q_f32.data<float>(),
+                             static_cast<const uint8_t *>(g_kv_b_weight.data()),
                              row_bytes, g_q_abs_f32.data<float>(), n_heads, qk_nope, qk_rope, v_head, kv_lora,
                              f16_operands);
     if (s_kv_b_weight.dtype == DType::Q4_K) {
-        launch_mla_absorb_q4_xsum_delta(g_q_f32.data<float>(), static_cast<const uint8_t *>(q->ptr),
+        launch_mla_absorb_q4_xsum_delta(g_q_f32.data<float>(),
+                                        static_cast<const uint8_t *>(g_kv_b_weight.data()),
                                         row_bytes, g_q_abs_xsum_delta_f32.data<float>(), n_heads,
                                         qk_nope, qk_rope, v_head, kv_lora, f16_operands);
     } else {
@@ -946,7 +931,7 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
                                         g_q_abs_xsum_delta_f32.data<float>(), g_kv_cache_f32.data<float>(),
                                         g_attn_scores_f32.data<float>(), n_heads, qk_nope, qk_rope, kv_lora,
                                         d_pos, max_seq_len, softmax_scale);
-    launch_mla_project_v_device_pos(s_kv_b_weight.dtype, static_cast<const uint8_t *>(q->ptr), row_bytes,
+    launch_mla_project_v_device_pos(s_kv_b_weight.dtype, static_cast<const uint8_t *>(g_kv_b_weight.data()), row_bytes,
                                     latent_q8_1_cache, latent_q8_1_row_bytes, g_kv_b_cache_f32.data<float>(),
                                     n_heads, qk_nope, v_head, kv_lora, d_pos, f16_operands);
     launch_mla_absorb_context_v_device_pos(g_attn_scores_f32.data<float>(), g_kv_b_cache_f32.data<float>(),
@@ -957,15 +942,13 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
 
 void TensorTool::moe_router_topk(const GPUTensor &g_router_logits_f32, const GPUTensor &g_top_idx_i32,
                                  const GPUTensor &g_top_w_f32,
-                                 int n_experts, int k, float routed_scaling,
-                                 void *stream) {
+                                 int n_experts, int k, float routed_scaling) {
     launch_moe_router_topk(g_router_logits_f32.data<float>(), g_top_idx_i32.data<int>(), g_top_w_f32.data<float>(),
                            static_cast<int>(g_router_logits_f32.rows()), n_experts, k,
                            routed_scaling);
 }
 
-void TensorTool::moe_accumulate(const GPUTensor &g_expert_out_f32, float weight, const GPUTensor &g_out_f32,
-                                void *stream) {
+void TensorTool::moe_accumulate(const GPUTensor &g_expert_out_f32, float weight, const GPUTensor &g_out_f32) {
     launch_moe_accumulate(g_expert_out_f32.data<float>(), weight, g_out_f32.data<float>(),
                           static_cast<int>(g_out_f32.numel()));
 }

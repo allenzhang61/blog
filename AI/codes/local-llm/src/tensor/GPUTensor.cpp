@@ -19,7 +19,14 @@ void GPUTensor::init_from_weight(const CudaWeight &weight,
                                  std::vector<int64_t> shape) {
     this->shape = std::move(shape);
     this->dtype = weight.dtype;
-    this->nbytes = byte_size();
+    if (this->dtype == DType::F32 || this->dtype == DType::F16 ||
+        this->dtype == DType::BF16 || this->dtype == DType::I32) {
+        this->nbytes = byte_size();
+    } else {
+        // Quantized tensors are stored in block formats, so their physical byte
+        // size is not numel * dense_dtype_size(dtype).
+        this->nbytes = weight.bytes;
+    }
     if (this->nbytes > weight.bytes) {
         throw std::runtime_error("GPUTensor CudaWeight shape 超出 weight 范围: " + weight.name);
     }

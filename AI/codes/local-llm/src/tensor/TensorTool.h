@@ -182,10 +182,8 @@ public:
                                           CudaScratch &scratch, void *stream = nullptr);
 
     static void moe_router_topk(const GPUTensor &g_router_logits_f32, const GPUTensor &g_top_idx_i32, const GPUTensor &g_top_w_f32,
-                                int n_experts, int k, float routed_scaling,
-                                void *stream = nullptr);
-    static void moe_accumulate(const GPUTensor &g_expert_out_f32, float weight, const GPUTensor &g_out_f32,
-                               void *stream = nullptr);
+                                int n_experts, int k, float routed_scaling);
+    static void moe_accumulate(const GPUTensor &g_expert_out_f32, float weight, const GPUTensor &g_out_f32);
 
     // 加权累加，权重从 device 读（d_weight 指向 device 端单个 float）：decode 时 top_w 留在 device，
     // 免去每层把权重回读到 host 造成的同步。

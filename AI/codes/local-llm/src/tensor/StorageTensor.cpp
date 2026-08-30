@@ -44,14 +44,19 @@ StorageTensor StorageTensor::slice(size_t byte_offset, std::vector<int64_t> slic
 }
 
 GPUTensor StorageTensor::to_gpu(bool dequant) const {
-    if (!dequant) {
-        throw std::runtime_error("StorageTensor::to_gpu 暂不支持不反量化的 GPU 权重");
-    }
-
     CudaWeightPool &pool = global_cuda_weight_pool();
     CudaWeight *cached = pool.cached_weight(*this);
     if (cached == nullptr) {
         throw std::runtime_error("StorageTensor::to_gpu 权重超过 CudaWeightPool 上限: " + name);
+    }
+
+    if (!dequant) {
+        auto raw_weight = std::make_shared<CudaWeight>(
+            CudaWeight::make_view(cached->ptr, cached->bytes, cached->type,
+                                  cached->dtype, cached->num_elements, cached->name));
+        GPUTensor g_view(raw_weight, shape);
+        g_view.pool_ = &pool;
+        return g_view;
     }
 
     auto dequant_weight = std::make_shared<CudaWeight>(cached->try_dequant());
