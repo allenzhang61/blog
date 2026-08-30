@@ -41,7 +41,7 @@ namespace {
 
     bool use_deepseek_quant_direct() {
         const char *direct = std::getenv("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
-        return direct != nullptr && std::atoi(direct) > 0;
+        return direct == nullptr || std::atoi(direct) > 0;
     }
 
     bool kv_b_prefill_uses_q8_raw_sum(DType dtype, int64_t input_size) {

@@ -29,7 +29,7 @@ namespace {
 
     bool deepseek_quant_direct_enabled() {
         const char *env = std::getenv("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
-        return env != nullptr && std::atoi(env) > 0;
+        return env == nullptr || std::atoi(env) > 0;
     }
 
     bool deepseek_cuda_graph_disabled() {

@@ -51,12 +51,17 @@ namespace {
         return env != nullptr && std::atoi(env) > 0;
     }
 
+    bool env_flag_default_enabled(const char *key) {
+        const char *env = std::getenv(key);
+        return env == nullptr || std::atoi(env) > 0;
+    }
+
     bool is_deepseek_gemm_op(const std::string &op_name) {
         return op_name.rfind("ds.gemm.", 0) == 0;
     }
 
     bool should_use_deepseek_quant_direct() {
-        return env_flag_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
+        return env_flag_default_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
     }
 
     bool should_use_safe_dequant_gemm(const char *name, int m) {
@@ -99,8 +104,8 @@ namespace {
 //w*x=y
 void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                       CudaScratch &scratch, const std::string &lowp_key, const char *name) {
-    // DeepSeek 层内 GEMM 默认沿用已验证正确的 dequantize-to-F16 + cuBLAS；
-    // LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1 时，仅 decode GEMV 默认走 quant_direct_gemm。
+    // DeepSeek 层内 decode GEMV 默认走 quant_direct_gemm；显式
+    // LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=0 时回退到 dequantize-to-F16 + cuBLAS。
     if (Quant::is_quantized_dtype(s_weight.dtype)) {
         const int m = static_cast<int>(g_input_f32.rows());
         if (should_use_safe_dequant_gemm(name, m)) {
