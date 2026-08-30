@@ -119,6 +119,15 @@ void launch_quant_down_f32_indexed_accum(DType quant_type, const uint8_t *down_w
                                          const float *route_weights, float *out,
                                          int k, int hidden_size, int ffn_dim);
 
+// Correctness-first indexed routed down：输入 act 保持 F32，kernel 内按 route 顺序
+// 做 on-the-fly weight dequant + F32 dot，并累加到 out。避免 Q8_1 act 和 atomicAdd
+// 带来的数值漂移，同时让 expert_ids/route_weights 留在 device 侧。
+void launch_quant_down_f32_indexed_accum_ordered(DType quant_type, const uint8_t *down_weight,
+                                                 size_t down_expert_bytes, size_t down_row_bytes,
+                                                 const float *act, const int *expert_ids,
+                                                 const float *route_weights, float *out,
+                                                 int k, int hidden_size, int ffn_dim);
+
 // SwiGLU 门控：out = SiLU(gate) * up，n 个元素。
 void launch_silu_mul(const float *gate, const float *up, float *out, int n);
 

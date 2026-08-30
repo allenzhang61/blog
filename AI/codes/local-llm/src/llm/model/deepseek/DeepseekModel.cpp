@@ -27,6 +27,15 @@ namespace {
         return env != nullptr && std::atoi(env) > 0;
     }
 
+    bool deepseek_quant_direct_enabled() {
+        const char *env = std::getenv("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
+        return env != nullptr && std::atoi(env) > 0;
+    }
+
+    bool deepseek_cuda_graph_disabled() {
+        const char *env = std::getenv("LOCAL_LLM_DISABLE_DEEPSEEK_CUDA_GRAPH");
+        return env != nullptr && std::atoi(env) > 0;
+    }
 } // namespace
 
 DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, const SamplingConfig &sampling)
@@ -104,9 +113,7 @@ int DeepseekModel::decode(SessionBase &session) {
     deepseek_session.d_token().set_data(prev_token_id, "deepseek decode token H2D 失败");
     deepseek_session.d_pos().set_data(pos, "deepseek decode pos H2D 失败");
 
-    // Correctness-first DeepSeek QD still reads MoE top-k expert ids back to host,
-    // so decode CUDA Graph is disabled until a graph-safe indexed MoE is verified.
-    const bool graph_enabled = false;
+    const bool graph_enabled = deepseek_quant_direct_enabled() && !deepseek_cuda_graph_disabled();
     const bool profile_this_step = Profiler::instance().capturing();
     if (!graph_enabled) {
         eager_decode_greedy_device(deepseek_session, pos);

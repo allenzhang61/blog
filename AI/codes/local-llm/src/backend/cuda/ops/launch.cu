@@ -455,6 +455,49 @@ void launch_quant_down_f32_indexed_accum(DType quant_type, const uint8_t *down_w
 }
 
 template <int QUANT_TYPE>
+void launch_quant_down_f32_indexed_accum_ordered_typed(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                       size_t down_row_bytes, const float *act,
+                                                       const int *expert_ids, const float *route_weights,
+                                                       float *out, int k, int hidden_size, int ffn_dim) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int blocks = (hidden_size + warps_per_block - 1) / warps_per_block;
+    quant_down_f32_indexed_accum_ordered_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+        down_weight, down_expert_bytes, down_row_bytes, act, expert_ids, route_weights,
+        out, k, hidden_size, ffn_dim);
+}
+
+void launch_quant_down_f32_indexed_accum_ordered(DType quant_type, const uint8_t *down_weight,
+                                                 size_t down_expert_bytes, size_t down_row_bytes,
+                                                 const float *act, const int *expert_ids,
+                                                 const float *route_weights, float *out,
+                                                 int k, int hidden_size, int ffn_dim) {
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_down_f32_indexed_accum_ordered_typed<12>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                  act, expert_ids, route_weights, out,
+                                                                  k, hidden_size, ffn_dim);
+            break;
+        case DType::Q6_K:
+            launch_quant_down_f32_indexed_accum_ordered_typed<14>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                  act, expert_ids, route_weights, out,
+                                                                  k, hidden_size, ffn_dim);
+            break;
+        case DType::Q5_0:
+            launch_quant_down_f32_indexed_accum_ordered_typed<6>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                 act, expert_ids, route_weights, out,
+                                                                 k, hidden_size, ffn_dim);
+            break;
+        case DType::Q8_0:
+            launch_quant_down_f32_indexed_accum_ordered_typed<8>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                 act, expert_ids, route_weights, out,
+                                                                 k, hidden_size, ffn_dim);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
 void launch_quant_matmul_q8_1_typed(const uint8_t *weight, size_t row_bytes,
                                     const uint8_t *x_q8_1, float *y,
                                     int out_dim, int in_dim, int m) {

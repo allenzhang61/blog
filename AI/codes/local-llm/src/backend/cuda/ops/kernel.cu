@@ -2249,6 +2249,56 @@ template __global__ void quant_down_f32_indexed_accum_kernel<6>(const uint8_t *,
 template __global__ void quant_down_f32_indexed_accum_kernel<8>(const uint8_t *, size_t, size_t, const float *,
                                                                const int *, const float *, float *, int, int, int, int);
 
+template <int QUANT_TYPE>
+__global__ void quant_down_f32_indexed_accum_ordered_kernel(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                            size_t down_row_bytes, const float *act,
+                                                            const int *expert_ids, const float *route_weights,
+                                                            float *out, int k, int hidden_size, int ffn_dim) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    if (warp_id >= hidden_size) return;
+
+    float total = 0.0f;
+    for (int route = 0; route < k; ++route) {
+        const int expert = expert_ids[route];
+        if (expert < 0) continue;
+
+        const uint8_t *expert_base = down_weight + static_cast<size_t>(expert) * down_expert_bytes;
+        const uint8_t *row_base = expert_base + static_cast<size_t>(warp_id) * down_row_bytes;
+        const float *act_row = act + static_cast<size_t>(route) * ffn_dim;
+        float acc = 0.0f;
+        for (int i = lane; i < ffn_dim; i += 32) {
+            float w;
+            if (QUANT_TYPE == 12) w = q4k_at(row_base, i);
+            else if (QUANT_TYPE == 14) w = q6k_at(row_base, i);
+            else if (QUANT_TYPE == 6) w = q50_at(row_base, i);
+            else w = q80_at(row_base, i);
+            acc = fmaf(w, act_row[i], acc);
+        }
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            acc += __shfl_down_sync(0xffffffff, acc, offset);
+        }
+        if (lane == 0) {
+            total = fmaf(acc, route_weights[route], total);
+        }
+        total = __shfl_sync(0xffffffff, total, 0);
+    }
+    if (lane == 0) out[warp_id] += total;
+}
+
+template __global__ void quant_down_f32_indexed_accum_ordered_kernel<12>(const uint8_t *, size_t, size_t,
+                                                                         const float *, const int *,
+                                                                         const float *, float *, int, int, int);
+template __global__ void quant_down_f32_indexed_accum_ordered_kernel<14>(const uint8_t *, size_t, size_t,
+                                                                         const float *, const int *,
+                                                                         const float *, float *, int, int, int);
+template __global__ void quant_down_f32_indexed_accum_ordered_kernel<6>(const uint8_t *, size_t, size_t,
+                                                                        const float *, const int *,
+                                                                        const float *, float *, int, int, int);
+template __global__ void quant_down_f32_indexed_accum_ordered_kernel<8>(const uint8_t *, size_t, size_t,
+                                                                        const float *, const int *,
+                                                                        const float *, float *, int, int, int);
+
 // Prefill Q8_1 量化 matmul：对齐 llama.cpp 的核心数据流，先把 activation 量化成
 // Q8_1，再用量化权重做 block dot。每个 warp 负责一个 (token,out) 输出元素。
 template <int QUANT_TYPE>

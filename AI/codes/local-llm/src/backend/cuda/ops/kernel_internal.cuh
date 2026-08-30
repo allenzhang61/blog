@@ -81,6 +81,11 @@ __global__ void quant_down_f32_indexed_accum_kernel(const uint8_t *down_weight, 
                                                     const int *expert_ids, const float *route_weights,
                                                     float *out, int k, int hidden_size, int ffn_dim,
                                                     int blocks_per_row);
+template <int QUANT_TYPE>
+__global__ void quant_down_f32_indexed_accum_ordered_kernel(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                            size_t down_row_bytes, const float *act,
+                                                            const int *expert_ids, const float *route_weights,
+                                                            float *out, int k, int hidden_size, int ffn_dim);
 // 量化直算 Embedding：按 token id 只反量化命中行到 f32，避免整表展开成 F16。
 template <int QUANT_TYPE>
 __global__ void quant_embedding_kernel(const int *input, float *output, const uint8_t *table,

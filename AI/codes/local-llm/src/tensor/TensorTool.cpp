@@ -317,39 +317,34 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
         return device_indexed_moe_reject("expert tensor dimensions mismatch");
     }
 
-    // Correctness-first indexed MoE: only keep route weights on device, but
-    // mirror the non-indexed decode path for expert math to avoid fused-kernel drift.
-    std::vector<int> expert_ids(static_cast<size_t>(k));
-    cuda_memcpy_d2h(expert_ids.data(), d_expert_ids,
-                    static_cast<size_t>(k) * sizeof(int), "ds.moe.indexed.idx");
-
-    ScopedGpuTimer timer(name && name[0] ? name : "ds.gemm.e_indexed_moe", 0);
-    auto g_act_f32 = GPUTensor(scratch, scratch_key::kAct, {1, ffn_dim}, DType::F32);
-    auto g_expert_out_f32 = GPUTensor(scratch, scratch_key::kExpertOut, {1, hidden_size}, DType::F32);
-    for (int r = 0; r < k; ++r) {
-        const int expert_id = expert_ids[static_cast<size_t>(r)];
-        if (expert_id < 0 || expert_id >= n_experts) {
-            throw std::runtime_error("DeepSeek indexed MoE router 返回非法 expert id: route=" +
-                                     std::to_string(r) + " expert=" + std::to_string(expert_id));
-        }
-
-        const StorageTensor s_gate = expert_tensor_view(s_gate_exps, expert_id, n_experts, {ffn_dim, in_dim});
-        const StorageTensor s_up = expert_tensor_view(s_up_exps, expert_id, n_experts, {ffn_dim, in_dim});
-        const StorageTensor s_down = expert_tensor_view(s_down_exps, expert_id, n_experts, {hidden_size, ffn_dim});
-
-        if (can_quant_swiglu(s_gate, s_up, g_input_f32, g_act_f32, "ds.gemm.e_swiglu")) {
-            quant_swiglu(s_gate, s_up, g_input_f32, g_act_f32, "ds.gemm.e_swiglu");
-        } else {
-            auto g_gate_out_f32 = GPUTensor(scratch, scratch_key::kGate, {1, ffn_dim}, DType::F32);
-            auto g_up_out_f32 = GPUTensor(scratch, scratch_key::kUp, {1, ffn_dim}, DType::F32);
-            gemm(s_gate, g_input_f32, g_gate_out_f32, scratch, scratch_key::kFfnInLowp, "ds.gemm.egate");
-            gemm(s_up, g_input_f32, g_up_out_f32, scratch, scratch_key::kFfnInLowp, "ds.gemm.eup");
-            silu_mul(g_gate_out_f32, g_up_out_f32, g_act_f32);
-        }
-
-        gemm(s_down, g_act_f32, g_expert_out_f32, scratch, scratch_key::kActLowp, "ds.gemm.edown");
-        moe_accumulate_device(g_expert_out_f32, d_weights + r, g_out_f32);
+    const CudaWeight *gate = global_cuda_weight_pool().cached_weight(s_gate_exps);
+    const CudaWeight *up = global_cuda_weight_pool().cached_weight(s_up_exps);
+    const CudaWeight *down = global_cuda_weight_pool().cached_weight(s_down_exps);
+    if (gate == nullptr || up == nullptr || down == nullptr) {
+        throw std::runtime_error("TensorTool::moe_routed_decode_indexed 量化专家权重超过 CudaWeightPool 上限");
     }
+    const size_t gate_expert_bytes = gate->bytes / static_cast<size_t>(n_experts);
+    const size_t up_expert_bytes = up->bytes / static_cast<size_t>(n_experts);
+    const size_t down_expert_bytes = down->bytes / static_cast<size_t>(n_experts);
+    const size_t gate_row_bytes = gate_expert_bytes / static_cast<size_t>(ffn_dim);
+    const size_t up_row_bytes = up_expert_bytes / static_cast<size_t>(ffn_dim);
+    const size_t down_row_bytes = down_expert_bytes / static_cast<size_t>(hidden_size);
+
+    ScopedGpuTimer timer(name && name[0] ? name : "ds.gemm.e_indexed_moe",
+                         gate->bytes + up->bytes + down->bytes);
+    auto g_act_f32 = GPUTensor(scratch, scratch_key::kAct, {k, ffn_dim}, DType::F32);
+    launch_quant_swiglu_indexed(s_gate_exps.dtype,
+                                static_cast<const uint8_t *>(gate->ptr),
+                                static_cast<const uint8_t *>(up->ptr),
+                                gate_expert_bytes, up_expert_bytes,
+                                gate_row_bytes, up_row_bytes,
+                                g_input_f32.data<float>(), d_expert_ids,
+                                g_act_f32.data<float>(), k, ffn_dim, in_dim);
+    launch_quant_down_f32_indexed_accum_ordered(s_down_exps.dtype,
+                                                static_cast<const uint8_t *>(down->ptr),
+                                                down_expert_bytes, down_row_bytes,
+                                                g_act_f32.data<float>(), d_expert_ids, d_weights,
+                                                g_out_f32.data<float>(), k, hidden_size, ffn_dim);
     return true;
 }
 
