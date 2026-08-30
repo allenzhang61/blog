@@ -69,9 +69,32 @@ int main(int argc, char **argv) {
     const std::string text = std::getenv("PROMPT") ? std::getenv("PROMPT") : "法国的首都是";
     const int eos = model->eos_token_id();
 
-    // 性能采集：仅 --profile 时开启，所有埋点否则零开销。
+    // warmup：profile 模式先完整生成一轮，触发权重惰性上传、CUDA context / cuBLAS
+    // 初始化与 kernel 首次启动；之后才开启统计，让性能报告尽量只反映稳态推理。
+    // 非 profile 模式仍只短 warmup，避免普通运行无端多跑一遍完整输出。
+    {
+        std::unique_ptr<SessionBase> warmup_session(model->create_session(text));
+        int wnext = model->prefill(*warmup_session);
+        const int warmup_decode_steps = args.profile
+                                            ? args.max_output_tokens
+                                            : (args.max_output_tokens < 4 ? args.max_output_tokens : 4);
+        int warmup_tokens = 0;
+        for (int i = 0; i < warmup_decode_steps && wnext != eos; ++i) {
+            warmup_session->append_output(wnext);
+            wnext = model->decode(*warmup_session);
+            ++warmup_tokens;
+        }
+        check_cuda(cudaStreamSynchronize(get_current_cuda_stream()), "warmup sync 失败");
+        if (args.profile) {
+            std::cout << "[warmup] tokens=" << warmup_tokens
+                      << " finished before profiling; cached_bytes=" << pool.cached_bytes()
+                      << std::endl;
+        }
+    }
+
+    // 性能采集：warmup 完成后才开启，所有埋点否则零开销。
     Profiler::instance().enable(args.profile);
-    // 权重懒加载追踪：挂到 pool 上，记录“权重一块块搬进显存”的事件时间线。
+    // 权重懒加载追踪：只统计正式推理阶段；如果仍出现事件，说明 warmup 未覆盖或 pool 发生淘汰。
     InMemoryWeightLoadTracker weight_tracker;
     if (args.profile) {
         pool.set_load_tracker(&weight_tracker);
@@ -83,35 +106,8 @@ int main(int argc, char **argv) {
     EmptyMemoryUsageProvider empty_memory_usage;
     const bool profile_memory_stages = args.profile && env_flag_enabled("LOCAL_LLM_PROFILE_MEMORY_STAGES");
     if (profile_memory_stages) {
-        mem_reporter.sample(pool, empty_memory_usage, "after_model_init");
+        mem_reporter.sample(pool, empty_memory_usage, "after_warmup");
     }
-
-    // warmup：正式计时前跑一遍完整前向，触发权重惰性上传、CUDA context / cuBLAS
-    // 初始化与 kernel 首次启动，避免首步冷启动污染稳态计时。
-    // warmup 使用独立 session，作用域结束释放，因此与正式跑天然隔离。
-    {
-        std::unique_ptr<SessionBase> warmup_session(model->create_session(text));
-        if (profile_memory_stages) {
-            mem_reporter.sample(pool, model->memory_usage(*warmup_session), "warmup_session_created");
-        }
-        int wnext = model->prefill(*warmup_session);
-        if (profile_memory_stages) {
-            mem_reporter.sample(pool, model->memory_usage(*warmup_session), "warmup_prefill");
-        }
-        const int warmup_decode_steps = args.max_output_tokens < 4 ? args.max_output_tokens : 4;
-        for (int i = 0; i < warmup_decode_steps && wnext != eos; ++i) {
-            warmup_session->append_output(wnext);
-            wnext = model->decode(*warmup_session);
-            if (profile_memory_stages) {
-                mem_reporter.sample(pool, model->memory_usage(*warmup_session), "warmup_decode");
-            }
-        }
-    }
-    if (profile_memory_stages) {
-        mem_reporter.sample(pool, empty_memory_usage, "after_warmup_session_destroyed");
-    }
-    // warmup 已把权重全部搬入显存并触发首启，清零聚合与时间线，只统计稳态。
-    Profiler::instance().reset();
 
     if (args.profile) {
         device_monitor.start(100);

@@ -141,37 +141,37 @@ template <int QUANT_TYPE>
 void launch_quant_swiglu_typed(const uint8_t *gate_weight, const uint8_t *up_weight,
                                size_t gate_row_bytes, size_t up_row_bytes,
                                const float *x, float *act, int ffn_dim, int in_dim,
-                               bool f16_operands) {
+                               bool f16_operands, bool fast_silu) {
     constexpr int warps_per_block = kBlock / 32;
     const int blocks = (ffn_dim + warps_per_block - 1) / warps_per_block;
     if (f16_operands) {
         quant_swiglu_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim);
+            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim, fast_silu);
     } else {
         quant_swiglu_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim);
+            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim, fast_silu);
     }
 }
 
 void launch_quant_swiglu(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
                          size_t gate_row_bytes, size_t up_row_bytes, const float *x, float *act,
-                         int ffn_dim, int in_dim, bool f16_operands) {
+                         int ffn_dim, int in_dim, bool f16_operands, bool fast_silu) {
     switch (quant_type) {
         case DType::Q4_K:
             launch_quant_swiglu_typed<12>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                          x, act, ffn_dim, in_dim, f16_operands);
+                                          x, act, ffn_dim, in_dim, f16_operands, fast_silu);
             break;
         case DType::Q6_K:
             launch_quant_swiglu_typed<14>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                          x, act, ffn_dim, in_dim, f16_operands);
+                                          x, act, ffn_dim, in_dim, f16_operands, fast_silu);
             break;
         case DType::Q5_0:
             launch_quant_swiglu_typed<6>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                         x, act, ffn_dim, in_dim, f16_operands);
+                                         x, act, ffn_dim, in_dim, f16_operands, fast_silu);
             break;
         case DType::Q8_0:
             launch_quant_swiglu_typed<8>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                         x, act, ffn_dim, in_dim, f16_operands);
+                                         x, act, ffn_dim, in_dim, f16_operands, fast_silu);
             break;
         default:
             break;
@@ -183,18 +183,18 @@ void launch_quant_swiglu_indexed_typed(const uint8_t *gate_weight, const uint8_t
                                        size_t gate_expert_bytes, size_t up_expert_bytes,
                                        size_t gate_row_bytes, size_t up_row_bytes, const float *x,
                                        const int *expert_ids, float *act, int k, int ffn_dim,
-                                       int in_dim, bool f16_operands) {
+                                       int in_dim, bool f16_operands, bool fast_silu) {
     constexpr int warps_per_block = kBlock / 32;
     const int total = k * ffn_dim;
     const int blocks = (total + warps_per_block - 1) / warps_per_block;
     if (f16_operands) {
         quant_swiglu_indexed_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
-            x, expert_ids, act, k, ffn_dim, in_dim);
+            x, expert_ids, act, k, ffn_dim, in_dim, fast_silu);
     } else {
         quant_swiglu_indexed_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
-            x, expert_ids, act, k, ffn_dim, in_dim);
+            x, expert_ids, act, k, ffn_dim, in_dim, fast_silu);
     }
 }
 
@@ -202,17 +202,17 @@ void launch_quant_swiglu_indexed(DType quant_type, const uint8_t *gate_weight, c
                                  size_t gate_expert_bytes, size_t up_expert_bytes,
                                  size_t gate_row_bytes, size_t up_row_bytes, const float *x,
                                  const int *expert_ids, float *act, int k, int ffn_dim,
-                                 int in_dim, bool f16_operands) {
+                                 int in_dim, bool f16_operands, bool fast_silu) {
     switch (quant_type) {
         case DType::Q4_K:
             launch_quant_swiglu_indexed_typed<12>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
                                                   gate_row_bytes, up_row_bytes, x, expert_ids, act,
-                                                  k, ffn_dim, in_dim, f16_operands);
+                                                  k, ffn_dim, in_dim, f16_operands, fast_silu);
             break;
         case DType::Q6_K:
             launch_quant_swiglu_indexed_typed<14>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
                                                   gate_row_bytes, up_row_bytes, x, expert_ids, act,
-                                                  k, ffn_dim, in_dim, f16_operands);
+                                                  k, ffn_dim, in_dim, f16_operands, fast_silu);
             break;
         default:
             break;
@@ -277,6 +277,77 @@ void launch_quant_gemv_q8_1(DType quant_type, const uint8_t *weight, size_t row_
 }
 
 template <int QUANT_TYPE>
+void launch_quant_swiglu_indexed_block_typed(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                             size_t gate_expert_bytes, size_t up_expert_bytes,
+                                             size_t gate_row_bytes, size_t up_row_bytes, const float *x,
+                                             const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
+                                             int blocks_per_row, bool fast_silu) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int total = k * ffn_dim;
+    const int blocks = (total + warps_per_block - 1) / warps_per_block;
+    quant_swiglu_indexed_block_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+        gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
+        x, expert_ids, act, k, ffn_dim, in_dim, blocks_per_row, fast_silu);
+}
+
+void launch_quant_swiglu_indexed_block(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
+                                       size_t gate_expert_bytes, size_t up_expert_bytes,
+                                       size_t gate_row_bytes, size_t up_row_bytes, const float *x,
+                                       const int *expert_ids, float *act, int k, int ffn_dim,
+                                       int in_dim, bool fast_silu) {
+    const int blocks_per_row = static_cast<int>(q8_1_row_bytes(in_dim) / 36);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_swiglu_indexed_block_typed<12>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
+                                                        gate_row_bytes, up_row_bytes, x, expert_ids, act,
+                                                        k, ffn_dim, in_dim, blocks_per_row, fast_silu);
+            break;
+        case DType::Q6_K:
+            launch_quant_swiglu_indexed_block_typed<14>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
+                                                        gate_row_bytes, up_row_bytes, x, expert_ids, act,
+                                                        k, ffn_dim, in_dim, blocks_per_row, fast_silu);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
+void launch_quant_swiglu_indexed_q8_1_typed(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                            size_t gate_expert_bytes, size_t up_expert_bytes,
+                                            size_t gate_row_bytes, size_t up_row_bytes, const uint8_t *x_q8_1,
+                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
+                                            int blocks_per_row) {
+    constexpr int warps_per_block = kBlock / 32;
+    const int total = k * ffn_dim;
+    const int blocks = (total + warps_per_block - 1) / warps_per_block;
+    quant_swiglu_indexed_q8_1_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+        gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
+        x_q8_1, expert_ids, act, k, ffn_dim, in_dim, blocks_per_row);
+}
+
+void launch_quant_swiglu_indexed_q8_1(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
+                                      size_t gate_expert_bytes, size_t up_expert_bytes,
+                                      size_t gate_row_bytes, size_t up_row_bytes, const uint8_t *x_q8_1,
+                                      const int *expert_ids, float *act, int k, int ffn_dim, int in_dim) {
+    const int blocks_per_row = static_cast<int>(q8_1_row_bytes(in_dim) / 36);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_swiglu_indexed_q8_1_typed<12>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
+                                                       gate_row_bytes, up_row_bytes, x_q8_1, expert_ids, act,
+                                                       k, ffn_dim, in_dim, blocks_per_row);
+            break;
+        case DType::Q6_K:
+            launch_quant_swiglu_indexed_q8_1_typed<14>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
+                                                       gate_row_bytes, up_row_bytes, x_q8_1, expert_ids, act,
+                                                       k, ffn_dim, in_dim, blocks_per_row);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
 void launch_quant_down_q8_1_indexed_accum_typed(const uint8_t *down_weight, size_t down_expert_bytes,
                                                 size_t down_row_bytes, const uint8_t *act_q8_1,
                                                 const int *expert_ids, const float *route_weights,
@@ -316,6 +387,98 @@ void launch_quant_down_q8_1_indexed_accum(DType quant_type, const uint8_t *down_
             launch_quant_down_q8_1_indexed_accum_typed<8>(down_weight, down_expert_bytes, down_row_bytes,
                                                           act_q8_1, expert_ids, route_weights, out,
                                                           k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
+void launch_quant_down_q8_1_indexed_accum_shared_typed(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                       size_t down_row_bytes, const uint8_t *act_q8_1,
+                                                       const int *expert_ids, const float *route_weights,
+                                                       float *out, int k, int hidden_size, int ffn_dim,
+                                                       int blocks_per_row) {
+    constexpr int rows_per_block = kBlock / 32;
+    const int row_tiles = (hidden_size + rows_per_block - 1) / rows_per_block;
+    const int blocks = k * row_tiles;
+    quant_down_q8_1_indexed_accum_shared_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+        down_weight, down_expert_bytes, down_row_bytes, act_q8_1, expert_ids, route_weights,
+        out, k, hidden_size, ffn_dim, blocks_per_row);
+}
+
+void launch_quant_down_q8_1_indexed_accum_shared(DType quant_type, const uint8_t *down_weight,
+                                                 size_t down_expert_bytes, size_t down_row_bytes,
+                                                 const uint8_t *act_q8_1, const int *expert_ids,
+                                                 const float *route_weights, float *out,
+                                                 int k, int hidden_size, int ffn_dim) {
+    const int blocks_per_row = static_cast<int>(q8_1_row_bytes(ffn_dim) / 36);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_down_q8_1_indexed_accum_shared_typed<12>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                  act_q8_1, expert_ids, route_weights, out,
+                                                                  k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        case DType::Q6_K:
+            launch_quant_down_q8_1_indexed_accum_shared_typed<14>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                  act_q8_1, expert_ids, route_weights, out,
+                                                                  k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        case DType::Q5_0:
+            launch_quant_down_q8_1_indexed_accum_shared_typed<6>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                 act_q8_1, expert_ids, route_weights, out,
+                                                                 k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        case DType::Q8_0:
+            launch_quant_down_q8_1_indexed_accum_shared_typed<8>(down_weight, down_expert_bytes, down_row_bytes,
+                                                                 act_q8_1, expert_ids, route_weights, out,
+                                                                 k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        default:
+            break;
+    }
+}
+
+template <int QUANT_TYPE>
+void launch_quant_down_f32_indexed_accum_typed(const uint8_t *down_weight, size_t down_expert_bytes,
+                                               size_t down_row_bytes, const float *act,
+                                               const int *expert_ids, const float *route_weights,
+                                               float *out, int k, int hidden_size, int ffn_dim,
+                                               int blocks_per_row) {
+    constexpr int rows_per_block = kBlock / 32;
+    const int row_tiles = (hidden_size + rows_per_block - 1) / rows_per_block;
+    const int blocks = k * row_tiles;
+    quant_down_f32_indexed_accum_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+        down_weight, down_expert_bytes, down_row_bytes, act, expert_ids, route_weights,
+        out, k, hidden_size, ffn_dim, blocks_per_row);
+}
+
+void launch_quant_down_f32_indexed_accum(DType quant_type, const uint8_t *down_weight,
+                                         size_t down_expert_bytes, size_t down_row_bytes,
+                                         const float *act, const int *expert_ids,
+                                         const float *route_weights, float *out,
+                                         int k, int hidden_size, int ffn_dim) {
+    const int blocks_per_row = static_cast<int>(q8_1_row_bytes(ffn_dim) / 36);
+    switch (quant_type) {
+        case DType::Q4_K:
+            launch_quant_down_f32_indexed_accum_typed<12>(down_weight, down_expert_bytes, down_row_bytes,
+                                                          act, expert_ids, route_weights, out,
+                                                          k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        case DType::Q6_K:
+            launch_quant_down_f32_indexed_accum_typed<14>(down_weight, down_expert_bytes, down_row_bytes,
+                                                          act, expert_ids, route_weights, out,
+                                                          k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        case DType::Q5_0:
+            launch_quant_down_f32_indexed_accum_typed<6>(down_weight, down_expert_bytes, down_row_bytes,
+                                                         act, expert_ids, route_weights, out,
+                                                         k, hidden_size, ffn_dim, blocks_per_row);
+            break;
+        case DType::Q8_0:
+            launch_quant_down_f32_indexed_accum_typed<8>(down_weight, down_expert_bytes, down_row_bytes,
+                                                         act, expert_ids, route_weights, out,
+                                                         k, hidden_size, ffn_dim, blocks_per_row);
             break;
         default:
             break;

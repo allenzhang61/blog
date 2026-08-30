@@ -66,17 +66,60 @@ void launch_quant_matmul_q8_1_mmq(DType quant_type, const uint8_t *weight, size_
 // SiLU(gate) * up，减少 egate + eup + silu_mul 三次 launch 和中间张量写回。
 void launch_quant_swiglu(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
                          size_t gate_row_bytes, size_t up_row_bytes, const float *x, float *act,
-                         int ffn_dim, int in_dim, bool f16_operands);
+                         int ffn_dim, int in_dim, bool f16_operands, bool fast_silu = false);
+
+// DeepSeek routed MoE decode 专用 indexed 版本：expert_ids[k] 保持在 GPU 上，
+// 每个 route 选中对应 expert 的 gate/up 权重，计算 act[route, :] = SiLU(gate(x)) * up(x)。
+// 输出 act 是 F32 中间激活，后续会按 route 做 Q8_1 量化和 down projection。
 void launch_quant_swiglu_indexed(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
                                  size_t gate_expert_bytes, size_t up_expert_bytes,
                                  size_t gate_row_bytes, size_t up_row_bytes, const float *x,
                                  const int *expert_ids, float *act, int k, int ffn_dim,
-                                 int in_dim, bool f16_operands);
+                                 int in_dim, bool f16_operands, bool fast_silu = false);
+
+// Indexed routed SwiGLU 的 block-level F32 activation 版本：仍使用 F32 hidden 输入，
+// 但在 Q4_K/Q6_K 的 32-wide quant block 内聚合 sum(q*x) / sum(x)，减少每元素
+// 重复读取 scale/min 元数据的开销。用于评估 e_swiglu 解块优化。
+void launch_quant_swiglu_indexed_block(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
+                                       size_t gate_expert_bytes, size_t up_expert_bytes,
+                                       size_t gate_row_bytes, size_t up_row_bytes, const float *x,
+                                       const int *expert_ids, float *act, int k, int ffn_dim,
+                                       int in_dim, bool fast_silu = false);
+
+// Indexed routed SwiGLU 的 Q8_1 activation 版本：输入 hidden 已按 Q8_1 量化一次，
+// gate/up 两个 projection 直接做 quant weight × Q8_1 activation block dot，
+// 然后写出 act[route, :] = SiLU(gate) * up。用于评估 e_swiglu 的 Q8_1 数据流。
+void launch_quant_swiglu_indexed_q8_1(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
+                                      size_t gate_expert_bytes, size_t up_expert_bytes,
+                                      size_t gate_row_bytes, size_t up_row_bytes, const uint8_t *x_q8_1,
+                                      const int *expert_ids, float *act, int k, int ffn_dim, int in_dim);
+
+// DeepSeek routed MoE decode 的 down projection：输入为每个 route 的 Q8_1 act，
+// 根据 expert_ids 选择对应 down expert，计算 down(act[route]) * route_weights[route]，
+// 并累加到同一个 hidden-size out 中；多 route 写同一 out 元素时 kernel 内使用 atomicAdd。
 void launch_quant_down_q8_1_indexed_accum(DType quant_type, const uint8_t *down_weight,
                                           size_t down_expert_bytes, size_t down_row_bytes,
                                           const uint8_t *act_q8_1, const int *expert_ids,
                                           const float *route_weights, float *out,
                                           int k, int hidden_size, int ffn_dim);
+
+// Routed down 的 shared-staged 版本：act_q8_1 仍由独立 quantize kernel 只生成一次，
+// down kernel 内把每个 route/qblk 的 Q8_1 block 暂存到 shared memory，让同一 block
+// 负责的多条 hidden row warp 复用，避免每个输出行都重复从 global 读取同一份 act。
+void launch_quant_down_q8_1_indexed_accum_shared(DType quant_type, const uint8_t *down_weight,
+                                                 size_t down_expert_bytes, size_t down_row_bytes,
+                                                 const uint8_t *act_q8_1, const int *expert_ids,
+                                                 const float *route_weights, float *out,
+                                                 int k, int hidden_size, int ffn_dim);
+
+// Fused routed down（旧实验）：输入仍是 F32 act，但 kernel 内按 32 元素块临时生成 Q8_1
+// 语义并立刻做 down projection + route-weight accumulate，省掉单独的 Q8_1
+// act 全局写回/读回和一次 kernel launch。block 内多个 hidden row 复用同一份临时 Q8_1 block。
+void launch_quant_down_f32_indexed_accum(DType quant_type, const uint8_t *down_weight,
+                                         size_t down_expert_bytes, size_t down_row_bytes,
+                                         const float *act, const int *expert_ids,
+                                         const float *route_weights, float *out,
+                                         int k, int hidden_size, int ffn_dim);
 
 // SwiGLU 门控：out = SiLU(gate) * up，n 个元素。
 void launch_silu_mul(const float *gate, const float *up, float *out, int n);

@@ -1294,7 +1294,7 @@ template __global__ void quant_matmul_kernel<8, true>(const uint8_t *, size_t, c
 template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                     size_t gate_row_bytes, size_t up_row_bytes,
-                                    const float *x, float *act, int ffn_dim, int in_dim) {
+                                    const float *x, float *act, int ffn_dim, int in_dim, bool fast_silu) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
     const int lane = threadIdx.x & 31;
     if (warp_id >= ffn_dim) return;
@@ -1330,32 +1330,34 @@ __global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *u
         up_acc += __shfl_down_sync(0xffffffff, up_acc, offset);
     }
     if (lane == 0) {
-        act[warp_id] = gate_acc / (1.0f + expf(-gate_acc)) * up_acc;
+        const float e = fast_silu ? __expf(-gate_acc) : expf(-gate_acc);
+        act[warp_id] = gate_acc / (1.0f + e) * up_acc;
     }
 }
 
 template __global__ void quant_swiglu_kernel<12, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                        const float *, float *, int, int);
+                                                        const float *, float *, int, int, bool);
 template __global__ void quant_swiglu_kernel<14, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                        const float *, float *, int, int);
+                                                        const float *, float *, int, int, bool);
 template __global__ void quant_swiglu_kernel<6, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int);
+                                                       const float *, float *, int, int, bool);
 template __global__ void quant_swiglu_kernel<8, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int);
+                                                       const float *, float *, int, int, bool);
 template __global__ void quant_swiglu_kernel<12, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int);
+                                                       const float *, float *, int, int, bool);
 template __global__ void quant_swiglu_kernel<14, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int);
+                                                       const float *, float *, int, int, bool);
 template __global__ void quant_swiglu_kernel<6, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                      const float *, float *, int, int);
+                                                      const float *, float *, int, int, bool);
 template __global__ void quant_swiglu_kernel<8, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                      const float *, float *, int, int);
+                                                      const float *, float *, int, int, bool);
 
 template <int QUANT_TYPE, bool F16_OPERANDS>
 __global__ void quant_swiglu_indexed_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                             size_t gate_expert_bytes, size_t up_expert_bytes,
                                             size_t gate_row_bytes, size_t up_row_bytes, const float *x,
-                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim) {
+                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
+                                            bool fast_silu) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
     const int lane = threadIdx.x & 31;
     const int total = k * ffn_dim;
@@ -1396,22 +1398,303 @@ __global__ void quant_swiglu_indexed_kernel(const uint8_t *gate_weight, const ui
         up_acc += __shfl_down_sync(0xffffffff, up_acc, offset);
     }
     if (lane == 0) {
-        act[static_cast<size_t>(route) * ffn_dim + row] = gate_acc / (1.0f + expf(-gate_acc)) * up_acc;
+        const float e = fast_silu ? __expf(-gate_acc) : expf(-gate_acc);
+        act[static_cast<size_t>(route) * ffn_dim + row] = gate_acc / (1.0f + e) * up_acc;
     }
 }
 
 template __global__ void quant_swiglu_indexed_kernel<12, false>(const uint8_t *, const uint8_t *, size_t, size_t,
                                                                 size_t, size_t, const float *, const int *,
-                                                                float *, int, int, int);
+                                                                float *, int, int, int, bool);
 template __global__ void quant_swiglu_indexed_kernel<14, false>(const uint8_t *, const uint8_t *, size_t, size_t,
                                                                 size_t, size_t, const float *, const int *,
-                                                                float *, int, int, int);
+                                                                float *, int, int, int, bool);
 template __global__ void quant_swiglu_indexed_kernel<12, true>(const uint8_t *, const uint8_t *, size_t, size_t,
                                                                size_t, size_t, const float *, const int *,
-                                                               float *, int, int, int);
+                                                               float *, int, int, int, bool);
 template __global__ void quant_swiglu_indexed_kernel<14, true>(const uint8_t *, const uint8_t *, size_t, size_t,
                                                                size_t, size_t, const float *, const int *,
-                                                               float *, int, int, int);
+                                                               float *, int, int, int, bool);
+
+template <int QUANT_TYPE>
+__global__ void quant_swiglu_indexed_block_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                                  size_t gate_expert_bytes, size_t up_expert_bytes,
+                                                  size_t gate_row_bytes, size_t up_row_bytes, const float *x,
+                                                  const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
+                                                  int blocks_per_row, bool fast_silu) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = k * ffn_dim;
+    if (warp_id >= total) return;
+
+    const int route = warp_id / ffn_dim;
+    const int row = warp_id - route * ffn_dim;
+    const int expert = expert_ids[route];
+    if (expert < 0) {
+        if (lane == 0) act[static_cast<size_t>(route) * ffn_dim + row] = 0.0f;
+        return;
+    }
+
+    const uint8_t *gate_base = gate_weight + static_cast<size_t>(expert) * gate_expert_bytes;
+    const uint8_t *up_base = up_weight + static_cast<size_t>(expert) * up_expert_bytes;
+    const uint8_t *gate_row = gate_base + static_cast<size_t>(row) * gate_row_bytes;
+    const uint8_t *up_row = up_base + static_cast<size_t>(row) * up_row_bytes;
+    float gate_acc = 0.0f;
+    float up_acc = 0.0f;
+
+    for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+        const int kk = qblk * 32 + lane;
+        const float xv = kk < in_dim ? x[kk] : 0.0f;
+
+        if (QUANT_TYPE == 12) {
+            const int super = qblk >> 3;
+            const int j = qblk & 7;
+            const uint8_t *gate_blk = gate_row + static_cast<size_t>(super) * 144;
+            const uint8_t *up_blk = up_row + static_cast<size_t>(super) * 144;
+            const float gate_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(gate_blk)));
+            const float gate_dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(gate_blk + 2)));
+            const float up_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(up_blk)));
+            const float up_dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(up_blk + 2)));
+            const uint8_t *gate_scales = gate_blk + 4;
+            const uint8_t *up_scales = up_blk + 4;
+            const uint8_t *gate_qs = gate_blk + 16;
+            const uint8_t *up_qs = up_blk + 16;
+            const int pair = j >> 1;
+            const uint8_t gate_packed = gate_qs[pair * 32 + lane];
+            const uint8_t up_packed = up_qs[pair * 32 + lane];
+            const int gate_qw = (j & 1) ? (gate_packed >> 4) : (gate_packed & 0x0F);
+            const int up_qw = (j & 1) ? (up_packed >> 4) : (up_packed & 0x0F);
+            float gate_qdot = static_cast<float>(gate_qw) * xv;
+            float up_qdot = static_cast<float>(up_qw) * xv;
+            float xsum = xv;
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                gate_qdot += __shfl_down_sync(0xffffffff, gate_qdot, offset);
+                up_qdot += __shfl_down_sync(0xffffffff, up_qdot, offset);
+                xsum += __shfl_down_sync(0xffffffff, xsum, offset);
+            }
+            if (lane == 0) {
+                uint8_t gate_sc, gate_m;
+                uint8_t up_sc, up_m;
+                q4k_scale_min(j, gate_scales, gate_sc, gate_m);
+                q4k_scale_min(j, up_scales, up_sc, up_m);
+                gate_acc = fmaf(gate_dw * static_cast<float>(gate_sc), gate_qdot, gate_acc);
+                gate_acc -= gate_dmin * static_cast<float>(gate_m) * xsum;
+                up_acc = fmaf(up_dw * static_cast<float>(up_sc), up_qdot, up_acc);
+                up_acc -= up_dmin * static_cast<float>(up_m) * xsum;
+            }
+        } else {
+            const int super = qblk >> 3;
+            const int sub = qblk & 7;
+            const int half = sub >> 2;
+            const int grp = sub & 3;
+            const int n = half * 128;
+            const uint8_t *gate_blk = gate_row + static_cast<size_t>(super) * 210;
+            const uint8_t *up_blk = up_row + static_cast<size_t>(super) * 210;
+            const uint8_t *gate_ql = gate_blk;
+            const uint8_t *gate_qh = gate_blk + 128;
+            const uint8_t *up_ql = up_blk;
+            const uint8_t *up_qh = up_blk + 128;
+            const int8_t *gate_scales = reinterpret_cast<const int8_t *>(gate_blk + 192);
+            const int8_t *up_scales = reinterpret_cast<const int8_t *>(up_blk + 192);
+            const float gate_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(gate_blk + 208)));
+            const float up_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(up_blk + 208)));
+            const uint8_t *gate_qlp = gate_ql + (n / 2);
+            const uint8_t *gate_qhp = gate_qh + (n / 4);
+            const uint8_t *up_qlp = up_ql + (n / 2);
+            const uint8_t *up_qhp = up_qh + (n / 4);
+            const int8_t *gate_sc = gate_scales + (n / 16);
+            const int8_t *up_sc = up_scales + (n / 16);
+            int gate_qw;
+            int up_qw;
+            if (grp == 0) {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 0] & 0xF) | (((gate_qhp[lane] >> 0) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 0] & 0xF) | (((up_qhp[lane] >> 0) & 3) << 4)) - 32;
+            } else if (grp == 1) {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 32] & 0xF) | (((gate_qhp[lane] >> 2) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 32] & 0xF) | (((up_qhp[lane] >> 2) & 3) << 4)) - 32;
+            } else if (grp == 2) {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 0] >> 4) | (((gate_qhp[lane] >> 4) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 0] >> 4) | (((up_qhp[lane] >> 4) & 3) << 4)) - 32;
+            } else {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 32] >> 4) | (((gate_qhp[lane] >> 6) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 32] >> 4) | (((up_qhp[lane] >> 6) & 3) << 4)) - 32;
+            }
+            float gate_qdot0 = lane < 16 ? static_cast<float>(gate_qw) * xv : 0.0f;
+            float gate_qdot1 = lane >= 16 ? static_cast<float>(gate_qw) * xv : 0.0f;
+            float up_qdot0 = lane < 16 ? static_cast<float>(up_qw) * xv : 0.0f;
+            float up_qdot1 = lane >= 16 ? static_cast<float>(up_qw) * xv : 0.0f;
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                gate_qdot0 += __shfl_down_sync(0xffffffff, gate_qdot0, offset);
+                gate_qdot1 += __shfl_down_sync(0xffffffff, gate_qdot1, offset);
+                up_qdot0 += __shfl_down_sync(0xffffffff, up_qdot0, offset);
+                up_qdot1 += __shfl_down_sync(0xffffffff, up_qdot1, offset);
+            }
+            if (lane == 0) {
+                const float gate_s0 = static_cast<float>(gate_sc[grp * 2 + 0]);
+                const float gate_s1 = static_cast<float>(gate_sc[grp * 2 + 1]);
+                const float up_s0 = static_cast<float>(up_sc[grp * 2 + 0]);
+                const float up_s1 = static_cast<float>(up_sc[grp * 2 + 1]);
+                gate_acc = fmaf(gate_dw, gate_s0 * gate_qdot0 + gate_s1 * gate_qdot1, gate_acc);
+                up_acc = fmaf(up_dw, up_s0 * up_qdot0 + up_s1 * up_qdot1, up_acc);
+            }
+        }
+    }
+    if (lane == 0) {
+        const float e = fast_silu ? __expf(-gate_acc) : expf(-gate_acc);
+        act[static_cast<size_t>(route) * ffn_dim + row] = gate_acc / (1.0f + e) * up_acc;
+    }
+}
+
+template __global__ void quant_swiglu_indexed_block_kernel<12>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                               size_t, size_t, const float *, const int *,
+                                                               float *, int, int, int, int, bool);
+template __global__ void quant_swiglu_indexed_block_kernel<14>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                               size_t, size_t, const float *, const int *,
+                                                               float *, int, int, int, int, bool);
+
+template <int QUANT_TYPE>
+__global__ void quant_swiglu_indexed_q8_1_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
+                                                 size_t gate_expert_bytes, size_t up_expert_bytes,
+                                                 size_t gate_row_bytes, size_t up_row_bytes, const uint8_t *x_q8_1,
+                                                 const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
+                                                 int blocks_per_row) {
+    const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    const int lane = threadIdx.x & 31;
+    const int total = k * ffn_dim;
+    if (warp_id >= total) return;
+
+    const int route = warp_id / ffn_dim;
+    const int row = warp_id - route * ffn_dim;
+    const int expert = expert_ids[route];
+    if (expert < 0) {
+        if (lane == 0) act[static_cast<size_t>(route) * ffn_dim + row] = 0.0f;
+        return;
+    }
+
+    const uint8_t *gate_base = gate_weight + static_cast<size_t>(expert) * gate_expert_bytes;
+    const uint8_t *up_base = up_weight + static_cast<size_t>(expert) * up_expert_bytes;
+    const uint8_t *gate_row = gate_base + static_cast<size_t>(row) * gate_row_bytes;
+    const uint8_t *up_row = up_base + static_cast<size_t>(row) * up_row_bytes;
+    float gate_acc = 0.0f;
+    float up_acc = 0.0f;
+
+    for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+        const int kk = qblk * 32 + lane;
+        const uint8_t *x_blk = x_q8_1 + static_cast<size_t>(qblk) * 36;
+        const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk)));
+        const float xsum = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk + 2)));
+        const int8_t qx = (kk < in_dim) ? reinterpret_cast<const int8_t *>(x_blk + 4)[lane] : 0;
+
+        if (QUANT_TYPE == 12) {
+            const int super = qblk >> 3;
+            const int j = qblk & 7;
+            const uint8_t *gate_blk = gate_row + static_cast<size_t>(super) * 144;
+            const uint8_t *up_blk = up_row + static_cast<size_t>(super) * 144;
+            const float gate_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(gate_blk)));
+            const float gate_dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(gate_blk + 2)));
+            const float up_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(up_blk)));
+            const float up_dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(up_blk + 2)));
+            const uint8_t *gate_scales = gate_blk + 4;
+            const uint8_t *up_scales = up_blk + 4;
+            const uint8_t *gate_qs = gate_blk + 16;
+            const uint8_t *up_qs = up_blk + 16;
+            const int pair = j >> 1;
+            const uint8_t gate_packed = gate_qs[pair * 32 + lane];
+            const uint8_t up_packed = up_qs[pair * 32 + lane];
+            const int gate_qw = (j & 1) ? (gate_packed >> 4) : (gate_packed & 0x0F);
+            const int up_qw = (j & 1) ? (up_packed >> 4) : (up_packed & 0x0F);
+            int gate_qdot = gate_qw * static_cast<int>(qx);
+            int up_qdot = up_qw * static_cast<int>(qx);
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                gate_qdot += __shfl_down_sync(0xffffffff, gate_qdot, offset);
+                up_qdot += __shfl_down_sync(0xffffffff, up_qdot, offset);
+            }
+            if (lane == 0) {
+                uint8_t gate_sc, gate_m;
+                uint8_t up_sc, up_m;
+                q4k_scale_min(j, gate_scales, gate_sc, gate_m);
+                q4k_scale_min(j, up_scales, up_sc, up_m);
+                gate_acc = fmaf(gate_dw * static_cast<float>(gate_sc) * d, static_cast<float>(gate_qdot), gate_acc);
+                gate_acc -= gate_dmin * static_cast<float>(gate_m) * xsum;
+                up_acc = fmaf(up_dw * static_cast<float>(up_sc) * d, static_cast<float>(up_qdot), up_acc);
+                up_acc -= up_dmin * static_cast<float>(up_m) * xsum;
+            }
+        } else {
+            const int super = qblk >> 3;
+            const int sub = qblk & 7;
+            const int half = sub >> 2;
+            const int grp = sub & 3;
+            const int n = half * 128;
+            const uint8_t *gate_blk = gate_row + static_cast<size_t>(super) * 210;
+            const uint8_t *up_blk = up_row + static_cast<size_t>(super) * 210;
+            const uint8_t *gate_ql = gate_blk;
+            const uint8_t *gate_qh = gate_blk + 128;
+            const uint8_t *up_ql = up_blk;
+            const uint8_t *up_qh = up_blk + 128;
+            const int8_t *gate_scales = reinterpret_cast<const int8_t *>(gate_blk + 192);
+            const int8_t *up_scales = reinterpret_cast<const int8_t *>(up_blk + 192);
+            const float gate_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(gate_blk + 208)));
+            const float up_dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(up_blk + 208)));
+            const uint8_t *gate_qlp = gate_ql + (n / 2);
+            const uint8_t *gate_qhp = gate_qh + (n / 4);
+            const uint8_t *up_qlp = up_ql + (n / 2);
+            const uint8_t *up_qhp = up_qh + (n / 4);
+            const int8_t *gate_sc = gate_scales + (n / 16);
+            const int8_t *up_sc = up_scales + (n / 16);
+            int gate_qw;
+            int up_qw;
+            if (grp == 0) {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 0] & 0xF) | (((gate_qhp[lane] >> 0) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 0] & 0xF) | (((up_qhp[lane] >> 0) & 3) << 4)) - 32;
+            } else if (grp == 1) {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 32] & 0xF) | (((gate_qhp[lane] >> 2) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 32] & 0xF) | (((up_qhp[lane] >> 2) & 3) << 4)) - 32;
+            } else if (grp == 2) {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 0] >> 4) | (((gate_qhp[lane] >> 4) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 0] >> 4) | (((up_qhp[lane] >> 4) & 3) << 4)) - 32;
+            } else {
+                gate_qw = static_cast<int8_t>((gate_qlp[lane + 32] >> 4) | (((gate_qhp[lane] >> 6) & 3) << 4)) - 32;
+                up_qw = static_cast<int8_t>((up_qlp[lane + 32] >> 4) | (((up_qhp[lane] >> 6) & 3) << 4)) - 32;
+            }
+            const int gate_qprod = gate_qw * static_cast<int>(qx);
+            const int up_qprod = up_qw * static_cast<int>(qx);
+            int gate_qdot0 = lane < 16 ? gate_qprod : 0;
+            int gate_qdot1 = lane >= 16 ? gate_qprod : 0;
+            int up_qdot0 = lane < 16 ? up_qprod : 0;
+            int up_qdot1 = lane >= 16 ? up_qprod : 0;
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                gate_qdot0 += __shfl_down_sync(0xffffffff, gate_qdot0, offset);
+                gate_qdot1 += __shfl_down_sync(0xffffffff, gate_qdot1, offset);
+                up_qdot0 += __shfl_down_sync(0xffffffff, up_qdot0, offset);
+                up_qdot1 += __shfl_down_sync(0xffffffff, up_qdot1, offset);
+            }
+            if (lane == 0) {
+                const float gate_s0 = static_cast<float>(gate_sc[grp * 2 + 0]);
+                const float gate_s1 = static_cast<float>(gate_sc[grp * 2 + 1]);
+                const float up_s0 = static_cast<float>(up_sc[grp * 2 + 0]);
+                const float up_s1 = static_cast<float>(up_sc[grp * 2 + 1]);
+                gate_acc = fmaf(gate_dw * d,
+                                gate_s0 * static_cast<float>(gate_qdot0) +
+                                gate_s1 * static_cast<float>(gate_qdot1),
+                                gate_acc);
+                up_acc = fmaf(up_dw * d,
+                              up_s0 * static_cast<float>(up_qdot0) +
+                              up_s1 * static_cast<float>(up_qdot1),
+                              up_acc);
+            }
+        }
+    }
+    if (lane == 0) {
+        act[static_cast<size_t>(route) * ffn_dim + row] = gate_acc / (1.0f + expf(-gate_acc)) * up_acc;
+    }
+}
+
+template __global__ void quant_swiglu_indexed_q8_1_kernel<12>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                              size_t, size_t, const uint8_t *, const int *,
+                                                              float *, int, int, int, int);
+template __global__ void quant_swiglu_indexed_q8_1_kernel<14>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                              size_t, size_t, const uint8_t *, const int *,
+                                                              float *, int, int, int, int);
 
 // ---- llama.cpp-style Q8_1 activation + quant GEMV（实验路径）----
 // Q8_1 activation block: f16 d + f16 sum + int8 qs[32] = 36 bytes.
@@ -1716,6 +1999,279 @@ template __global__ void quant_down_q8_1_indexed_accum_kernel<6>(const uint8_t *
                                                                  const int *, const float *, float *, int, int, int, int);
 template __global__ void quant_down_q8_1_indexed_accum_kernel<8>(const uint8_t *, size_t, size_t, const uint8_t *,
                                                                  const int *, const float *, float *, int, int, int, int);
+
+template <int QUANT_TYPE>
+__global__ void quant_down_q8_1_indexed_accum_shared_kernel(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                           size_t down_row_bytes, const uint8_t *act_q8_1,
+                                                           const int *expert_ids, const float *route_weights,
+                                                           float *out, int k, int hidden_size, int ffn_dim,
+                                                           int blocks_per_row) {
+    constexpr int rows_per_block = kBlockConst / 32;
+    __shared__ int8_t s_qx[32];
+    __shared__ float s_d;
+    __shared__ float s_xsum;
+
+    const int row_tiles = (hidden_size + rows_per_block - 1) / rows_per_block;
+    const int tile = blockIdx.x;
+    const int route = tile / row_tiles;
+    const int row_tile = tile - route * row_tiles;
+    if (route >= k) return;
+
+    const int warp = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+    const int row = row_tile * rows_per_block + warp;
+    const bool row_active = row < hidden_size;
+    const int expert = expert_ids[route];
+    if (expert < 0) return;
+
+    const uint8_t *expert_base = down_weight + static_cast<size_t>(expert) * down_expert_bytes;
+    const uint8_t *row_base = row_active ? expert_base + static_cast<size_t>(row) * down_row_bytes : nullptr;
+    const uint8_t *act_row = act_q8_1 + static_cast<size_t>(route) * blocks_per_row * 36;
+    float acc = 0.0f;
+
+    for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+        if (warp == 0) {
+            const uint8_t *x_blk = act_row + static_cast<size_t>(qblk) * 36;
+            if (lane == 0) {
+                s_d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk)));
+                s_xsum = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(x_blk + 2)));
+            }
+            const int kk = qblk * 32 + lane;
+            s_qx[lane] = kk < ffn_dim ? reinterpret_cast<const int8_t *>(x_blk + 4)[lane] : 0;
+        }
+        __syncthreads();
+
+        if (row_active) {
+            const int kk = qblk * 32 + lane;
+            const float d = s_d;
+            const float xsum = s_xsum;
+            const int8_t qx = s_qx[lane];
+
+            if (QUANT_TYPE == 12) {
+                const int super = qblk >> 3;
+                const int j = qblk & 7;
+                const uint8_t *base = row_base + static_cast<size_t>(super) * 144;
+                const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+                const float dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
+                const uint8_t *scales = base + 4;
+                const uint8_t *qs = base + 16;
+                const int pair = j >> 1;
+                const uint8_t packed = qs[pair * 32 + lane];
+                const int qw = (j & 1) ? (packed >> 4) : (packed & 0x0F);
+                int qdot = qw * static_cast<int>(qx);
+                for (int offset = 16; offset > 0; offset >>= 1) {
+                    qdot += __shfl_down_sync(0xffffffff, qdot, offset);
+                }
+                if (lane == 0) {
+                    uint8_t sc, m;
+                    q4k_scale_min(j, scales, sc, m);
+                    acc = fmaf(dw * static_cast<float>(sc) * d, static_cast<float>(qdot), acc);
+                    acc -= dmin * static_cast<float>(m) * xsum;
+                }
+            } else if (QUANT_TYPE == 14) {
+                const int super = qblk >> 3;
+                const int sub = qblk & 7;
+                const int half = sub >> 2;
+                const int grp = sub & 3;
+                const int n = half * 128;
+                const uint8_t *base = row_base + static_cast<size_t>(super) * 210;
+                const uint8_t *ql = base;
+                const uint8_t *qh = base + 128;
+                const int8_t *scales = reinterpret_cast<const int8_t *>(base + 192);
+                const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 208)));
+                const uint8_t *qlp = ql + (n / 2);
+                const uint8_t *qhp = qh + (n / 4);
+                const int8_t *sc = scales + (n / 16);
+                int qw;
+                if (grp == 0) {
+                    qw = static_cast<int8_t>((qlp[lane + 0] & 0xF) | (((qhp[lane] >> 0) & 3) << 4)) - 32;
+                } else if (grp == 1) {
+                    qw = static_cast<int8_t>((qlp[lane + 32] & 0xF) | (((qhp[lane] >> 2) & 3) << 4)) - 32;
+                } else if (grp == 2) {
+                    qw = static_cast<int8_t>((qlp[lane + 0] >> 4) | (((qhp[lane] >> 4) & 3) << 4)) - 32;
+                } else {
+                    qw = static_cast<int8_t>((qlp[lane + 32] >> 4) | (((qhp[lane] >> 6) & 3) << 4)) - 32;
+                }
+                const int qprod = qw * static_cast<int>(qx);
+                int qdot0 = lane < 16 ? qprod : 0;
+                int qdot1 = lane >= 16 ? qprod : 0;
+                for (int offset = 16; offset > 0; offset >>= 1) {
+                    qdot0 += __shfl_down_sync(0xffffffff, qdot0, offset);
+                    qdot1 += __shfl_down_sync(0xffffffff, qdot1, offset);
+                }
+                if (lane == 0) {
+                    const float s0 = static_cast<float>(sc[grp * 2 + 0]);
+                    const float s1 = static_cast<float>(sc[grp * 2 + 1]);
+                    acc = fmaf(dw * d, s0 * static_cast<float>(qdot0) + s1 * static_cast<float>(qdot1), acc);
+                }
+            } else {
+                const float xv = d * static_cast<float>(qx);
+                float w = 0.0f;
+                if (kk < ffn_dim) {
+                    if (QUANT_TYPE == 6) w = q50_at(row_base, kk);
+                    else w = q80_at(row_base, kk);
+                }
+                acc = fmaf(w, xv, acc);
+            }
+        }
+        __syncthreads();
+    }
+    if (row_active && lane == 0) atomicAdd(out + row, acc * route_weights[route]);
+}
+
+template __global__ void quant_down_q8_1_indexed_accum_shared_kernel<12>(const uint8_t *, size_t, size_t,
+                                                                         const uint8_t *, const int *,
+                                                                         const float *, float *, int, int, int, int);
+template __global__ void quant_down_q8_1_indexed_accum_shared_kernel<14>(const uint8_t *, size_t, size_t,
+                                                                         const uint8_t *, const int *,
+                                                                         const float *, float *, int, int, int, int);
+template __global__ void quant_down_q8_1_indexed_accum_shared_kernel<6>(const uint8_t *, size_t, size_t,
+                                                                        const uint8_t *, const int *,
+                                                                        const float *, float *, int, int, int, int);
+template __global__ void quant_down_q8_1_indexed_accum_shared_kernel<8>(const uint8_t *, size_t, size_t,
+                                                                        const uint8_t *, const int *,
+                                                                        const float *, float *, int, int, int, int);
+
+template <int QUANT_TYPE>
+__global__ void quant_down_f32_indexed_accum_kernel(const uint8_t *down_weight, size_t down_expert_bytes,
+                                                    size_t down_row_bytes, const float *act,
+                                                    const int *expert_ids, const float *route_weights,
+                                                    float *out, int k, int hidden_size, int ffn_dim,
+                                                    int blocks_per_row) {
+    constexpr int rows_per_block = kBlockConst / 32;
+    __shared__ int8_t s_qx[32];
+    __shared__ float s_d;
+    __shared__ float s_xsum;
+
+    const int tile = blockIdx.x;
+    const int route = tile / ((hidden_size + rows_per_block - 1) / rows_per_block);
+    const int row_tile = tile - route * ((hidden_size + rows_per_block - 1) / rows_per_block);
+    if (route >= k) return;
+
+    const int warp = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+    const int row = row_tile * rows_per_block + warp;
+    const bool row_active = row < hidden_size;
+    const int expert = expert_ids[route];
+    if (expert < 0) return;
+
+    const uint8_t *expert_base = down_weight + static_cast<size_t>(expert) * down_expert_bytes;
+    const uint8_t *row_base = row_active ? expert_base + static_cast<size_t>(row) * down_row_bytes : nullptr;
+    const float *act_row = act + static_cast<size_t>(route) * ffn_dim;
+    float acc = 0.0f;
+
+    for (int qblk = 0; qblk < blocks_per_row; ++qblk) {
+        if (warp == 0) {
+            const int kk = qblk * 32 + lane;
+            const float v = kk < ffn_dim ? act_row[kk] : 0.0f;
+            float amax = fabsf(v);
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                amax = fmaxf(amax, __shfl_down_sync(0xffffffff, amax, offset));
+            }
+            amax = __shfl_sync(0xffffffff, amax, 0);
+            const float d_full = amax > 0.0f ? amax / 127.0f : 0.0f;
+            const float id = d_full > 0.0f ? 1.0f / d_full : 0.0f;
+            int q = __float2int_rn(v * id);
+            q = max(-127, min(127, q));
+
+            int qsum = q;
+            for (int offset = 16; offset > 0; offset >>= 1) {
+                qsum += __shfl_down_sync(0xffffffff, qsum, offset);
+            }
+            s_qx[lane] = static_cast<int8_t>(q);
+            if (lane == 0) {
+                s_d = __half2float(__float2half(d_full));
+                s_xsum = __half2float(__float2half(d_full * static_cast<float>(qsum)));
+            }
+        }
+        __syncthreads();
+
+        if (row_active) {
+            const int kk = qblk * 32 + lane;
+            const float d = s_d;
+            const float xsum = s_xsum;
+            const int8_t qx = kk < ffn_dim ? s_qx[lane] : 0;
+
+            if (QUANT_TYPE == 12) {
+                const int super = qblk >> 3;
+                const int j = qblk & 7;
+                const uint8_t *base = row_base + static_cast<size_t>(super) * 144;
+                const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
+                const float dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
+                const uint8_t *scales = base + 4;
+                const uint8_t *qs = base + 16;
+                const int pair = j >> 1;
+                const uint8_t packed = qs[pair * 32 + lane];
+                const int qw = (j & 1) ? (packed >> 4) : (packed & 0x0F);
+                int qdot = qw * static_cast<int>(qx);
+                for (int offset = 16; offset > 0; offset >>= 1) {
+                    qdot += __shfl_down_sync(0xffffffff, qdot, offset);
+                }
+                if (lane == 0) {
+                    uint8_t sc, m;
+                    q4k_scale_min(j, scales, sc, m);
+                    acc = fmaf(dw * static_cast<float>(sc) * d, static_cast<float>(qdot), acc);
+                    acc -= dmin * static_cast<float>(m) * xsum;
+                }
+            } else if (QUANT_TYPE == 14) {
+                const int super = qblk >> 3;
+                const int sub = qblk & 7;
+                const int half = sub >> 2;
+                const int grp = sub & 3;
+                const int n = half * 128;
+                const uint8_t *base = row_base + static_cast<size_t>(super) * 210;
+                const uint8_t *ql = base;
+                const uint8_t *qh = base + 128;
+                const int8_t *scales = reinterpret_cast<const int8_t *>(base + 192);
+                const float dw = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 208)));
+                const uint8_t *qlp = ql + (n / 2);
+                const uint8_t *qhp = qh + (n / 4);
+                const int8_t *sc = scales + (n / 16);
+                int qw;
+                if (grp == 0) {
+                    qw = static_cast<int8_t>((qlp[lane + 0] & 0xF) | (((qhp[lane] >> 0) & 3) << 4)) - 32;
+                } else if (grp == 1) {
+                    qw = static_cast<int8_t>((qlp[lane + 32] & 0xF) | (((qhp[lane] >> 2) & 3) << 4)) - 32;
+                } else if (grp == 2) {
+                    qw = static_cast<int8_t>((qlp[lane + 0] >> 4) | (((qhp[lane] >> 4) & 3) << 4)) - 32;
+                } else {
+                    qw = static_cast<int8_t>((qlp[lane + 32] >> 4) | (((qhp[lane] >> 6) & 3) << 4)) - 32;
+                }
+                const int qprod = qw * static_cast<int>(qx);
+                int qdot0 = lane < 16 ? qprod : 0;
+                int qdot1 = lane >= 16 ? qprod : 0;
+                for (int offset = 16; offset > 0; offset >>= 1) {
+                    qdot0 += __shfl_down_sync(0xffffffff, qdot0, offset);
+                    qdot1 += __shfl_down_sync(0xffffffff, qdot1, offset);
+                }
+                if (lane == 0) {
+                    const float s0 = static_cast<float>(sc[grp * 2 + 0]);
+                    const float s1 = static_cast<float>(sc[grp * 2 + 1]);
+                    acc = fmaf(dw * d, s0 * static_cast<float>(qdot0) + s1 * static_cast<float>(qdot1), acc);
+                }
+            } else {
+                const float xv = d * static_cast<float>(qx);
+                float w = 0.0f;
+                if (kk < ffn_dim) {
+                    if (QUANT_TYPE == 6) w = q50_at(row_base, kk);
+                    else w = q80_at(row_base, kk);
+                }
+                acc = fmaf(w, xv, acc);
+            }
+        }
+        __syncthreads();
+    }
+    if (row_active && lane == 0) atomicAdd(out + row, acc * route_weights[route]);
+}
+
+template __global__ void quant_down_f32_indexed_accum_kernel<12>(const uint8_t *, size_t, size_t, const float *,
+                                                                const int *, const float *, float *, int, int, int, int);
+template __global__ void quant_down_f32_indexed_accum_kernel<14>(const uint8_t *, size_t, size_t, const float *,
+                                                                const int *, const float *, float *, int, int, int, int);
+template __global__ void quant_down_f32_indexed_accum_kernel<6>(const uint8_t *, size_t, size_t, const float *,
+                                                               const int *, const float *, float *, int, int, int, int);
+template __global__ void quant_down_f32_indexed_accum_kernel<8>(const uint8_t *, size_t, size_t, const float *,
+                                                               const int *, const float *, float *, int, int, int, int);
 
 // Prefill Q8_1 量化 matmul：对齐 llama.cpp 的核心数据流，先把 activation 量化成
 // Q8_1，再用量化权重做 block dot。每个 warp 负责一个 (token,out) 输出元素。
