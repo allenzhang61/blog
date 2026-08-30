@@ -30,19 +30,17 @@ void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
 
 // 量化直算 GEMM：Y[M,out_dim] = X[M,in_dim] · W[out_dim,in_dim]^T，权重量化常驻、on-the-fly 反量化。
 // quant_type 指明权重量化格式；row_bytes 为每行量化字节数。X f32，Y f32，均 row-major。
-// f16_operands=true 时，on-the-fly 解出的权重和输入先 round 到 F16，再转回 F32 累加，用于贴近 safe path。
 // 避免把量化权重展开成 F16（省显存 + 省一次读写），直接在 kernel 内解块，追平 llama.cpp 的量化直算路径。
 void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
-                       float *y, int out_dim, int in_dim, int m, bool f16_operands);
+                       float *y, int out_dim, int in_dim, int m);
 
 void launch_quant_gemv_add(DType quant_type, const uint8_t *weight, size_t row_bytes,
-                           const float *x, float *y, int out_dim, int in_dim,
-                           bool f16_operands);
+                           const float *x, float *y, int out_dim, int in_dim);
 
 // 量化直算 MATMUL：每个 warp 负责一个 (token,row) 输出元素，面向 prefill m>1。
 // 相比 launch_quant_gemv 的 token 维串行循环，这里按 m*out_dim 并行，避免 prefill 仍依赖 F16 dequant cache。
 void launch_quant_matmul(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
-                         float *y, int out_dim, int in_dim, int m, bool f16_operands);
+                         float *y, int out_dim, int in_dim, int m);
 
 // llama.cpp-style 实验路径：先把 activation 动态量化成 Q8_1（每 32 个元素 36 字节），
 // 再用量化权重与 Q8_1 activation 做 GEMV/MMQ。
@@ -66,7 +64,7 @@ void launch_quant_matmul_q8_1_mmq(DType quant_type, const uint8_t *weight, size_
 // SiLU(gate) * up，减少 egate + eup + silu_mul 三次 launch 和中间张量写回。
 void launch_quant_swiglu(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
                          size_t gate_row_bytes, size_t up_row_bytes, const float *x, float *act,
-                         int ffn_dim, int in_dim, bool f16_operands, bool fast_silu = false);
+                         int ffn_dim, int in_dim);
 
 // DeepSeek routed MoE decode 专用 indexed 版本：expert_ids[k] 保持在 GPU 上，
 // 每个 route 选中对应 expert 的 gate/up 权重，计算 act[route, :] = SiLU(gate(x)) * up(x)。
@@ -75,7 +73,7 @@ void launch_quant_swiglu_indexed(DType quant_type, const uint8_t *gate_weight, c
                                  size_t gate_expert_bytes, size_t up_expert_bytes,
                                  size_t gate_row_bytes, size_t up_row_bytes, const float *x,
                                  const int *expert_ids, float *act, int k, int ffn_dim,
-                                 int in_dim, bool f16_operands, bool fast_silu = false);
+                                 int in_dim);
 
 // Indexed routed SwiGLU 的 block-level F32 activation 版本：仍使用 F32 hidden 输入，
 // 但在 Q4_K/Q6_K 的 32-wide quant block 内聚合 sum(q*x) / sum(x)，减少每元素
@@ -292,10 +290,10 @@ void launch_mla_store_latent_q8_1_device_pos(const float *kv_cache, uint8_t *lat
                                              const int *d_pos);
 void launch_mla_absorb_q_nope(DType quant_type, const float *q, const uint8_t *kv_b_weight,
                               size_t row_bytes, float *q_abs, int n_heads, int qk_nope,
-                              int qk_rope, int v_head, int kv_lora, bool f16_operands);
+                              int qk_rope, int v_head, int kv_lora);
 void launch_mla_absorb_q4_xsum_delta(const float *q, const uint8_t *kv_b_weight, size_t row_bytes,
                                      float *q_abs_xsum_delta, int n_heads, int qk_nope,
-                                     int qk_rope, int v_head, int kv_lora, bool f16_operands);
+                                     int qk_rope, int v_head, int kv_lora);
 void launch_mla_absorb_attend_device_pos(const float *q_abs, const float *q, const uint8_t *latent_q8_1_cache,
                                          size_t latent_q8_1_row_bytes, const float *q_abs_xsum_delta,
                                          float *attn_xsum_delta, const float *kv_cache,
@@ -314,13 +312,13 @@ void launch_mla_absorb_context_device_pos(const float *scores, const uint8_t *la
 void launch_mla_project_v_device_pos(DType quant_type, const uint8_t *kv_b_weight, size_t row_bytes,
                                      const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
                                      float *kv_b_cache, int n_heads, int qk_nope, int v_head,
-                                     int kv_lora, const int *d_pos, bool f16_operands);
+                                     int kv_lora, const int *d_pos);
 void launch_mla_absorb_context_v_device_pos(const float *scores, const float *kv_b_cache,
                                             float *attn, int n_heads, int qk_nope, int v_head,
                                             const int *d_pos, int max_seq_len);
 void launch_mla_absorb_v(DType quant_type, const uint8_t *kv_b_weight, size_t row_bytes,
                          const float *attn_latent, const float *attn_xsum_delta, float *attn,
-                         int n_heads, int qk_nope, int v_head, int kv_lora, bool f16_operands);
+                         int n_heads, int qk_nope, int v_head, int kv_lora);
 
 // ================= MoE（DeepSeekMoE 路由）=================
 // router_logits[tokens, n_experts] -> 每 token 选 top-k，对被选专家的 gate 值做 softmax

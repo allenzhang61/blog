@@ -36,12 +36,6 @@ run_case "prefill_q8_1_story" "${STORY_PROMPT}" \
 run_case "safe_prefill_router_story" "${STORY_PROMPT}" \
   LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1 \
   LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS=ds.gemm.router
-run_case "safe_decode_edown_story" "${STORY_PROMPT}" \
-  LOCAL_LLM_DEEPSEEK_DECODE_QUANT_DIRECT_EXCLUDE_OPS=ds.gemm.edown
-run_case "safe_decode_sdown_story" "${STORY_PROMPT}" \
-  LOCAL_LLM_DEEPSEEK_DECODE_QUANT_DIRECT_EXCLUDE_OPS=ds.gemm.sdown
-run_case "safe_decode_attn_out_story" "${STORY_PROMPT}" \
-  LOCAL_LLM_DEEPSEEK_DECODE_QUANT_DIRECT_EXCLUDE_OPS=ds.gemm.d_attn_output
 run_case "safe_prefill_kvb_story" "${STORY_PROMPT}" \
   LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1 \
   LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS=ds.gemm.kv_b

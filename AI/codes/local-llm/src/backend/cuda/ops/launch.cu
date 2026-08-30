@@ -32,33 +32,27 @@ void launch_bf16_gemv(const uint16_t *weight, const uint16_t *x, float *y,
 
 template <int QUANT_TYPE>
 void launch_quant_gemv_typed(const uint8_t *weight, size_t row_bytes, const float *x,
-                             float *y, int out_dim, int in_dim, int m,
-                             bool f16_operands) {
+                             float *y, int out_dim, int in_dim, int m) {
     constexpr int warps_per_block = kBlock / 32;
     const int blocks = (out_dim + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        quant_gemv_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+    quant_gemv_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             weight, row_bytes, x, y, out_dim, in_dim, m);
-    } else {
-        quant_gemv_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            weight, row_bytes, x, y, out_dim, in_dim, m);
-    }
 }
 
 void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
-                       float *y, int out_dim, int in_dim, int m, bool f16_operands) {
+                       float *y, int out_dim, int in_dim, int m) {
     switch (quant_type) {
         case DType::Q4_K:
-            launch_quant_gemv_typed<12>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_gemv_typed<12>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         case DType::Q6_K:
-            launch_quant_gemv_typed<14>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_gemv_typed<14>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         case DType::Q5_0:
-            launch_quant_gemv_typed<6>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_gemv_typed<6>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         case DType::Q8_0:
-            launch_quant_gemv_typed<8>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_gemv_typed<8>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         default:
             break;
@@ -67,34 +61,27 @@ void launch_quant_gemv(DType quant_type, const uint8_t *weight, size_t row_bytes
 
 template <int QUANT_TYPE>
 void launch_quant_gemv_add_typed(const uint8_t *weight, size_t row_bytes,
-                                 const float *x, float *y, int out_dim, int in_dim,
-                                 bool f16_operands) {
+                                 const float *x, float *y, int out_dim, int in_dim) {
     const int warps_per_block = kBlock / 32;
     const int blocks = (out_dim + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        quant_gemv_add_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+    quant_gemv_add_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             weight, row_bytes, x, y, out_dim, in_dim);
-    } else {
-        quant_gemv_add_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            weight, row_bytes, x, y, out_dim, in_dim);
-    }
 }
 
 void launch_quant_gemv_add(DType quant_type, const uint8_t *weight, size_t row_bytes,
-                           const float *x, float *y, int out_dim, int in_dim,
-                           bool f16_operands) {
+                           const float *x, float *y, int out_dim, int in_dim) {
     switch (quant_type) {
         case DType::Q4_K:
-            launch_quant_gemv_add_typed<12>(weight, row_bytes, x, y, out_dim, in_dim, f16_operands);
+            launch_quant_gemv_add_typed<12>(weight, row_bytes, x, y, out_dim, in_dim);
             break;
         case DType::Q6_K:
-            launch_quant_gemv_add_typed<14>(weight, row_bytes, x, y, out_dim, in_dim, f16_operands);
+            launch_quant_gemv_add_typed<14>(weight, row_bytes, x, y, out_dim, in_dim);
             break;
         case DType::Q5_0:
-            launch_quant_gemv_add_typed<6>(weight, row_bytes, x, y, out_dim, in_dim, f16_operands);
+            launch_quant_gemv_add_typed<6>(weight, row_bytes, x, y, out_dim, in_dim);
             break;
         case DType::Q8_0:
-            launch_quant_gemv_add_typed<8>(weight, row_bytes, x, y, out_dim, in_dim, f16_operands);
+            launch_quant_gemv_add_typed<8>(weight, row_bytes, x, y, out_dim, in_dim);
             break;
         default:
             break;
@@ -103,34 +90,28 @@ void launch_quant_gemv_add(DType quant_type, const uint8_t *weight, size_t row_b
 
 template <int QUANT_TYPE>
 void launch_quant_matmul_typed(const uint8_t *weight, size_t row_bytes, const float *x,
-                               float *y, int out_dim, int in_dim, int m,
-                               bool f16_operands) {
+                               float *y, int out_dim, int in_dim, int m) {
     constexpr int warps_per_block = kBlock / 32;
     const int total = m * out_dim;
     const int blocks = (total + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        quant_matmul_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+    quant_matmul_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             weight, row_bytes, x, y, out_dim, in_dim, m);
-    } else {
-        quant_matmul_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            weight, row_bytes, x, y, out_dim, in_dim, m);
-    }
 }
 
 void launch_quant_matmul(DType quant_type, const uint8_t *weight, size_t row_bytes, const float *x,
-                         float *y, int out_dim, int in_dim, int m, bool f16_operands) {
+                         float *y, int out_dim, int in_dim, int m) {
     switch (quant_type) {
         case DType::Q4_K:
-            launch_quant_matmul_typed<12>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_matmul_typed<12>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         case DType::Q6_K:
-            launch_quant_matmul_typed<14>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_matmul_typed<14>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         case DType::Q5_0:
-            launch_quant_matmul_typed<6>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_matmul_typed<6>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         case DType::Q8_0:
-            launch_quant_matmul_typed<8>(weight, row_bytes, x, y, out_dim, in_dim, m, f16_operands);
+            launch_quant_matmul_typed<8>(weight, row_bytes, x, y, out_dim, in_dim, m);
             break;
         default:
             break;
@@ -140,38 +121,32 @@ void launch_quant_matmul(DType quant_type, const uint8_t *weight, size_t row_byt
 template <int QUANT_TYPE>
 void launch_quant_swiglu_typed(const uint8_t *gate_weight, const uint8_t *up_weight,
                                size_t gate_row_bytes, size_t up_row_bytes,
-                               const float *x, float *act, int ffn_dim, int in_dim,
-                               bool f16_operands, bool fast_silu) {
+                               const float *x, float *act, int ffn_dim, int in_dim) {
     constexpr int warps_per_block = kBlock / 32;
     const int blocks = (ffn_dim + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        quant_swiglu_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim, fast_silu);
-    } else {
-        quant_swiglu_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim, fast_silu);
-    }
+    quant_swiglu_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+            gate_weight, up_weight, gate_row_bytes, up_row_bytes, x, act, ffn_dim, in_dim);
 }
 
 void launch_quant_swiglu(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
                          size_t gate_row_bytes, size_t up_row_bytes, const float *x, float *act,
-                         int ffn_dim, int in_dim, bool f16_operands, bool fast_silu) {
+                         int ffn_dim, int in_dim) {
     switch (quant_type) {
         case DType::Q4_K:
             launch_quant_swiglu_typed<12>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                          x, act, ffn_dim, in_dim, f16_operands, fast_silu);
+                                          x, act, ffn_dim, in_dim);
             break;
         case DType::Q6_K:
             launch_quant_swiglu_typed<14>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                          x, act, ffn_dim, in_dim, f16_operands, fast_silu);
+                                          x, act, ffn_dim, in_dim);
             break;
         case DType::Q5_0:
             launch_quant_swiglu_typed<6>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                         x, act, ffn_dim, in_dim, f16_operands, fast_silu);
+                                         x, act, ffn_dim, in_dim);
             break;
         case DType::Q8_0:
             launch_quant_swiglu_typed<8>(gate_weight, up_weight, gate_row_bytes, up_row_bytes,
-                                         x, act, ffn_dim, in_dim, f16_operands, fast_silu);
+                                         x, act, ffn_dim, in_dim);
             break;
         default:
             break;
@@ -183,36 +158,30 @@ void launch_quant_swiglu_indexed_typed(const uint8_t *gate_weight, const uint8_t
                                        size_t gate_expert_bytes, size_t up_expert_bytes,
                                        size_t gate_row_bytes, size_t up_row_bytes, const float *x,
                                        const int *expert_ids, float *act, int k, int ffn_dim,
-                                       int in_dim, bool f16_operands, bool fast_silu) {
+                                       int in_dim) {
     constexpr int warps_per_block = kBlock / 32;
     const int total = k * ffn_dim;
     const int blocks = (total + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        quant_swiglu_indexed_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
-            x, expert_ids, act, k, ffn_dim, in_dim, fast_silu);
-    } else {
-        quant_swiglu_indexed_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
-            x, expert_ids, act, k, ffn_dim, in_dim, fast_silu);
-    }
+    quant_swiglu_indexed_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+        gate_weight, up_weight, gate_expert_bytes, up_expert_bytes, gate_row_bytes, up_row_bytes,
+        x, expert_ids, act, k, ffn_dim, in_dim);
 }
 
 void launch_quant_swiglu_indexed(DType quant_type, const uint8_t *gate_weight, const uint8_t *up_weight,
                                  size_t gate_expert_bytes, size_t up_expert_bytes,
                                  size_t gate_row_bytes, size_t up_row_bytes, const float *x,
                                  const int *expert_ids, float *act, int k, int ffn_dim,
-                                 int in_dim, bool f16_operands, bool fast_silu) {
+                                 int in_dim) {
     switch (quant_type) {
         case DType::Q4_K:
             launch_quant_swiglu_indexed_typed<12>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
                                                   gate_row_bytes, up_row_bytes, x, expert_ids, act,
-                                                  k, ffn_dim, in_dim, f16_operands, fast_silu);
+                                                  k, ffn_dim, in_dim);
             break;
         case DType::Q6_K:
             launch_quant_swiglu_indexed_typed<14>(gate_weight, up_weight, gate_expert_bytes, up_expert_bytes,
                                                   gate_row_bytes, up_row_bytes, x, expert_ids, act,
-                                                  k, ffn_dim, in_dim, f16_operands, fast_silu);
+                                                  k, ffn_dim, in_dim);
             break;
         default:
             break;
@@ -907,37 +876,32 @@ void launch_mla_store_latent_q8_1_device_pos(const float *kv_cache, uint8_t *lat
 template <int QUANT_TYPE>
 void launch_mla_absorb_q_nope_typed(const float *q, const uint8_t *kv_b_weight,
                                     size_t row_bytes, float *q_abs, int n_heads, int qk_nope,
-                                    int qk_rope, int v_head, int kv_lora, bool f16_operands) {
+                                    int qk_rope, int v_head, int kv_lora) {
     const int warps_per_block = kBlock / 32;
     const int blocks = (n_heads * kv_lora + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        mla_absorb_q_nope_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+    mla_absorb_q_nope_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             q, kv_b_weight, row_bytes, q_abs, n_heads, qk_nope, qk_rope, v_head, kv_lora);
-    } else {
-        mla_absorb_q_nope_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            q, kv_b_weight, row_bytes, q_abs, n_heads, qk_nope, qk_rope, v_head, kv_lora);
-    }
 }
 
 void launch_mla_absorb_q_nope(DType quant_type, const float *q, const uint8_t *kv_b_weight,
                               size_t row_bytes, float *q_abs, int n_heads, int qk_nope,
-                              int qk_rope, int v_head, int kv_lora, bool f16_operands) {
+                              int qk_rope, int v_head, int kv_lora) {
     switch (quant_type) {
         case DType::Q4_K:
             launch_mla_absorb_q_nope_typed<12>(q, kv_b_weight, row_bytes, q_abs, n_heads, qk_nope,
-                                               qk_rope, v_head, kv_lora, f16_operands);
+                                               qk_rope, v_head, kv_lora);
             break;
         case DType::Q6_K:
             launch_mla_absorb_q_nope_typed<14>(q, kv_b_weight, row_bytes, q_abs, n_heads, qk_nope,
-                                               qk_rope, v_head, kv_lora, f16_operands);
+                                               qk_rope, v_head, kv_lora);
             break;
         case DType::Q5_0:
             launch_mla_absorb_q_nope_typed<6>(q, kv_b_weight, row_bytes, q_abs, n_heads, qk_nope,
-                                              qk_rope, v_head, kv_lora, f16_operands);
+                                              qk_rope, v_head, kv_lora);
             break;
         case DType::Q8_0:
             launch_mla_absorb_q_nope_typed<8>(q, kv_b_weight, row_bytes, q_abs, n_heads, qk_nope,
-                                              qk_rope, v_head, kv_lora, f16_operands);
+                                              qk_rope, v_head, kv_lora);
             break;
         default:
             break;
@@ -946,17 +910,12 @@ void launch_mla_absorb_q_nope(DType quant_type, const float *q, const uint8_t *k
 
 void launch_mla_absorb_q4_xsum_delta(const float *q, const uint8_t *kv_b_weight, size_t row_bytes,
                                      float *q_abs_xsum_delta, int n_heads, int qk_nope,
-                                     int qk_rope, int v_head, int kv_lora, bool f16_operands) {
+                                     int qk_rope, int v_head, int kv_lora) {
     const int blocks_per_row = static_cast<int>(q8_1_row_bytes(kv_lora) / 36);
     const int warps_per_block = kBlock / 32;
     const int blocks = (n_heads * blocks_per_row + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        mla_absorb_q4_xsum_delta_kernel<true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+    mla_absorb_q4_xsum_delta_kernel<<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             q, kv_b_weight, row_bytes, q_abs_xsum_delta, n_heads, qk_nope, qk_rope, v_head, blocks_per_row);
-    } else {
-        mla_absorb_q4_xsum_delta_kernel<false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            q, kv_b_weight, row_bytes, q_abs_xsum_delta, n_heads, qk_nope, qk_rope, v_head, blocks_per_row);
-    }
 }
 
 void launch_mla_absorb_attend_device_pos(const float *q_abs, const float *q, const uint8_t *latent_q8_1_cache,
@@ -1001,46 +960,36 @@ template <int QUANT_TYPE>
 void launch_mla_project_v_typed(const uint8_t *kv_b_weight, size_t row_bytes,
                                 const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
                                 float *kv_b_cache, int n_heads, int qk_nope, int v_head,
-                                int kv_lora, const int *d_pos, bool f16_operands) {
+                                int kv_lora, const int *d_pos) {
     const int total = n_heads * v_head;
     const int warps_per_block = kBlock / 32;
     const int blocks = (total + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        mla_project_v_device_pos_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+    mla_project_v_device_pos_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             kv_b_weight, row_bytes, latent_q8_1_cache, latent_q8_1_row_bytes, kv_b_cache,
             n_heads, qk_nope, v_head, kv_lora, d_pos);
-    } else {
-        mla_project_v_device_pos_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            kv_b_weight, row_bytes, latent_q8_1_cache, latent_q8_1_row_bytes, kv_b_cache,
-            n_heads, qk_nope, v_head, kv_lora, d_pos);
-    }
 }
 
 void launch_mla_project_v_device_pos(DType quant_type, const uint8_t *kv_b_weight, size_t row_bytes,
                                      const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
                                      float *kv_b_cache, int n_heads, int qk_nope, int v_head,
-                                     int kv_lora, const int *d_pos, bool f16_operands) {
+                                     int kv_lora, const int *d_pos) {
     ScopedGpuTimer timer("mla_project_v");
     switch (quant_type) {
         case DType::Q4_K:
             launch_mla_project_v_typed<12>(kv_b_weight, row_bytes, latent_q8_1_cache, latent_q8_1_row_bytes,
-                                           kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos,
-                                           f16_operands);
+                                           kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos);
             break;
         case DType::Q6_K:
             launch_mla_project_v_typed<14>(kv_b_weight, row_bytes, latent_q8_1_cache, latent_q8_1_row_bytes,
-                                           kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos,
-                                           f16_operands);
+                                           kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos);
             break;
         case DType::Q5_0:
             launch_mla_project_v_typed<6>(kv_b_weight, row_bytes, latent_q8_1_cache, latent_q8_1_row_bytes,
-                                          kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos,
-                                          f16_operands);
+                                          kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos);
             break;
         case DType::Q8_0:
             launch_mla_project_v_typed<8>(kv_b_weight, row_bytes, latent_q8_1_cache, latent_q8_1_row_bytes,
-                                          kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos,
-                                          f16_operands);
+                                          kv_b_cache, n_heads, qk_nope, v_head, kv_lora, d_pos);
             break;
         default:
             break;
@@ -1059,37 +1008,32 @@ void launch_mla_absorb_context_v_device_pos(const float *scores, const float *kv
 template <int QUANT_TYPE>
 void launch_mla_absorb_v_typed(const uint8_t *kv_b_weight, size_t row_bytes,
                                const float *attn_latent, const float *attn_xsum_delta, float *attn,
-                               int n_heads, int qk_nope, int v_head, int kv_lora, bool f16_operands) {
+                               int n_heads, int qk_nope, int v_head, int kv_lora) {
     const int warps_per_block = kBlock / 32;
     const int blocks = (n_heads * v_head + warps_per_block - 1) / warps_per_block;
-    if (f16_operands) {
-        mla_absorb_v_kernel<QUANT_TYPE, true><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
+    mla_absorb_v_kernel<QUANT_TYPE><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
             kv_b_weight, row_bytes, attn_latent, attn_xsum_delta, attn, n_heads, qk_nope, v_head, kv_lora);
-    } else {
-        mla_absorb_v_kernel<QUANT_TYPE, false><<<blocks, kBlock, 0, get_current_cuda_stream()>>>(
-            kv_b_weight, row_bytes, attn_latent, attn_xsum_delta, attn, n_heads, qk_nope, v_head, kv_lora);
-    }
 }
 
 void launch_mla_absorb_v(DType quant_type, const uint8_t *kv_b_weight, size_t row_bytes,
                          const float *attn_latent, const float *attn_xsum_delta, float *attn,
-                         int n_heads, int qk_nope, int v_head, int kv_lora, bool f16_operands) {
+                         int n_heads, int qk_nope, int v_head, int kv_lora) {
     switch (quant_type) {
         case DType::Q4_K:
             launch_mla_absorb_v_typed<12>(kv_b_weight, row_bytes, attn_latent, attn_xsum_delta, attn, n_heads,
-                                          qk_nope, v_head, kv_lora, f16_operands);
+                                          qk_nope, v_head, kv_lora);
             break;
         case DType::Q6_K:
             launch_mla_absorb_v_typed<14>(kv_b_weight, row_bytes, attn_latent, attn_xsum_delta, attn, n_heads,
-                                          qk_nope, v_head, kv_lora, f16_operands);
+                                          qk_nope, v_head, kv_lora);
             break;
         case DType::Q5_0:
             launch_mla_absorb_v_typed<6>(kv_b_weight, row_bytes, attn_latent, attn_xsum_delta, attn, n_heads,
-                                         qk_nope, v_head, kv_lora, f16_operands);
+                                         qk_nope, v_head, kv_lora);
             break;
         case DType::Q8_0:
             launch_mla_absorb_v_typed<8>(kv_b_weight, row_bytes, attn_latent, attn_xsum_delta, attn, n_heads,
-                                         qk_nope, v_head, kv_lora, f16_operands);
+                                         qk_nope, v_head, kv_lora);
             break;
         default:
             break;

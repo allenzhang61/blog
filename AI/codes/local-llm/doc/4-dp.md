@@ -211,7 +211,7 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 - 每个 warp 负责一个输出行 `o`，32 lane 沿 `in_dim` 分工点积后 warp 归约；内层循环 M 个 token（decode M=1、prefill M>1 通用）。
 - 逐 dtype 提供 `q4k_at / q6k_at / q50_at / q80_at` 解块函数，块布局与对应 `dequantize_*` kernel 对齐（Q4_K 144B/256、Q6_K 210B/256、Q5_0 22B/32、Q8_0 34B/32）。
 - 入口 [`TensorTool::gemm`](../src/tensor/TensorTool.cpp) 对量化权重支持直算；DeepSeek `ds.gemm.*` 默认仍使用 safe path，可用 `LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS=edown,sdown,egate,eup` 逐项测试直通候选，也可用 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV=1` 测试全量直通。
-- 新增 llama.cpp-style 实验旁路：`LOCAL_LLM_EXPERIMENTAL_QUANT_GEMV_Q8_1=1` 时，已进入 quant GEMV 的 decode `m==1` 会先把 activation 动态量化为 Q8_1（每 32 元素 36B：`f16 d + f16 sum + int8 qs[32]`），再做 `quant weight × Q8_1 activation`。该开关只改变 quant GEMV 算法，不单独强制 DeepSeek 绕过 safe path；仍需配合 `LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS=...` 或全量直通实验开关。当前 Q4_K/Q6_K 已实现 block-level dot，Q5_0/Q8_0 仍为逐元素 fallback。
+- Q8_1 activation 相关 kernel 仅保留给 MoE/MLA 等专项路径；generic `quant_direct_gemm()` 当前统一使用 F32 activation + on-the-fly weight dequant，避免在通用 GEMM 调度中混入额外动态量化误差。当前 Q4_K/Q6_K/Q5_0/Q8_0 均按逐元素权重解码路径执行。
 
 ### 2. 量化直算 Embedding（`quant_embedding_kernel`）
 
@@ -224,7 +224,7 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 - `d_attn,kv_` 直通：输出会明显跑偏（出现 URL-like 文本）。
 - `egate/eup/edown` 任意两个或三个同时直通：短输出会退化为重复 `!`。
 - 单独 `egate`：当前长输出测试会触发异常退出；单独 `eup`：输出严重跑偏；`edown` 与 `sdown` 的 F32 operands 直通短跑可对齐，但长文本 exact-output 会间歇分叉，不能作为默认。
-- F16 operands 实验：`LOCAL_LLM_EXPERIMENTAL_QUANT_GEMV_F16_OPERANDS=1` 会让 `edown` 实验路径输出偏移；`sdown` 单独 F16 operands 也会偏移。因此“on-the-fly 解量化后先 round 到 F16”并不等价于 safe path，当前不能作为扩大直通范围的默认策略。
+- F16 operands 实验：此前验证“on-the-fly 解量化后先 round 到 F16”会让 `edown` 实验路径输出偏移，`sdown` 单独 F16 operands 也会偏移，并不等价于 safe path；相关开关与代码路径已移除。
 
 因此当前不是“全量量化直通”，而是**correctness-safe 默认 + 显式直通实验**：默认保留 `ds.gemm.*` safe dequant+cuBLAS 主路径，量化直通只用于受控对拍和性能实验。
 
@@ -279,7 +279,7 @@ absorption 性能轮廓：64-token 技术长文 prompt 下，expanded 路径 `ds
 
 目标是把 DeepSeek 从当前的 `quant weight -> dequantize_to_f16 -> cuBLAS` 逐步切换为 `quant weight -> quant direct kernel`，让 12GB RTX 3080 上尽量做到量化权重常驻，不再依赖大块 F16 dequant cache。这个切换会改变数值轨迹，因此需要把 quant-direct 作为新的实验基线，而不是继续要求与 safe dequant+cuBLAS 完全逐 token 相等。
 
-- **阶段 1：decode GEMV 全覆盖**。新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT=1`，仅在 `ds.gemm.*` 且 `m == 1` 时跳过 `try_dequant()`，所有 DeepSeek decode 量化 GEMM 走 `launch_quant_gemv` / `launch_quant_gemv_q8_1`；prefill `m > 1` 仍保留 safe path。
+- **阶段 1：decode GEMV 全覆盖（已移除）**。早期曾有 decode-only 实验分支，仅在 `ds.gemm.*` 且 `m == 1` 时跳过 `try_dequant()`；该分支后续因显存/路径组合不稳定被删除，当前 `quant_direct_gemm()` 统一为 F32 activation + on-the-fly weight dequant 的最小实现。
 - **阶段 2：MoE 专项优化**。面向 `egate/eup/edown/sgate/sup/sdown` 做 shape-specialized quant kernel，减少 routed/shared experts 的小 GEMM launch 和中间写回。
 - **阶段 3：prefill quant matmul**。补齐 `m > 1` 的 quant MMQ/quant matmul，避免长 prompt 仍依赖 `try_dequant()`。
 - **阶段 4：切换默认路径**。在 decode、prefill、质量 smoke、长文本连续运行都稳定后，再把 DeepSeek 默认切到 quant-direct，并保留 `LOCAL_LLM_FORCE_SAFE_DEQUANT_GEMM=1` 作为回退开关。
@@ -294,7 +294,7 @@ absorption 性能轮廓：64-token 技术长文 prompt 下，expanded 路径 `ds
 
 阶段 1 初测：
 
-- 命令：`LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT=1 LOCAL_LLM_CUDA_DEQUANT_POOL_GB=0.05`，France prompt，`--max-output-tokens 16 --profile --profile-sample-every 4`。
+- 命令：历史命令使用过 decode-only 实验开关配合 `LOCAL_LLM_CUDA_DEQUANT_POOL_GB=0.05`，该 decode-only 分支已移除，仅保留为历史记录。
 - 结果：生成 `The capital of France is Paris.`，实际 decode 7 tokens，stdout 吞吐约 `34.6 t/s`，profile 汇总约 `35.6 t/s`。
 - 显存：采样峰值 `device used ≈ 9038 MiB`，`CudaWeightPool` 驻留峰值 `≈ 7048 MiB`，H2D 上传总量 `≈ 7048 MiB`，没有 weight-pool 驱逐。
 - 限制：长 story prompt 在阶段 1 下可能 prefill 后直接 EOS；128 token 场景在 12GB RTX 3080 上仍可能触发真实 `cudaMalloc` OOM，因为阶段 1 只移除 decode 的 F16 dequant，prefill/warmup 仍保留 safe dequant，且量化权重常驻会持续增长。
@@ -303,7 +303,7 @@ absorption 性能轮廓：64-token 技术长文 prompt 下，expanded 路径 `ds
 
 - 实现：新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1`，仅在 `m == 1`、gate/up 量化 dtype 与 shape 一致时接管 MoE decode；否则自动 fallback 到原 `egate/eup/sgate/sup + silu_mul`。
 - 覆盖：routed experts 的 `egate+eup+silu_mul` 合并为 `ds.gemm.e_swiglu`，shared experts 的 `sgate+sup+silu_mul` 合并为 `ds.gemm.s_swiglu`；`edown/sdown` 仍沿用阶段 1 的 quant GEMV。
-- 命令：`LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT=1 LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1 LOCAL_LLM_CUDA_DEQUANT_POOL_GB=0.05`，France prompt，`--max-output-tokens 16 --profile --profile-sample-every 4`。
+- 命令：历史命令使用过 decode-only 实验开关配合 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU=1 LOCAL_LLM_CUDA_DEQUANT_POOL_GB=0.05`，其中 decode-only 分支已移除。
 - 结果：生成 `The capital of France is Paris.`，实际 decode 7 tokens，stdout 吞吐约 `36.8–37.5 t/s`，profile 汇总约 `37.8 t/s`。
 - 命中：profile 中 `ds.gemm.e_swiglu` 2496 次、`ds.gemm.s_swiglu` 52 次；对应的 decode routed/shared gate/up/SiLU 已由 fused kernel 接管。
 - 显存：延迟分配 fallback-only gate/up scratch 后，采样峰值 `device used ≈ 9008 MiB`，`CudaWeightPool` 驻留峰值 `≈ 7050 MiB`，H2D 上传总量 `≈ 7050 MiB`，与阶段 1 基本同量级。
@@ -314,7 +314,7 @@ absorption 性能轮廓：64-token 技术长文 prompt 下，expanded 路径 `ds
 - llama.cpp 对齐修正：llama.cpp 的 CUDA MMQ 不是 float activation 逐元素直乘，而是先把 activation 动态量化成 Q8_1，再用 quant weight × Q8_1 activation 做 block dot / tiled MMQ。local-llm 已新增 `launch_quant_matmul_q8_1`，阶段 3 现在先 `launch_quantize_q8_1`，再走 Q8_1 prefill matmul；旧 float `launch_quant_matmul` 保留为 fallback/单测路径。
 - 覆盖：prefill 中的 MLA、dense FFN、router、shared experts 等 `m > 1` GEMM 可走 quant matmul；routed experts 当前代码仍逐 token 调用，`m == 1` 时依赖阶段 1 decode quant-direct 开关。
 - 单测：新增 `LaunchQuantMatmulTest.ComputesQ80MultipleRows` 和 `LaunchQuantMatmulQ81Test.ComputesQ80MultipleRows`，分别验证 float activation matmul 与 Q8_1 activation matmul；211 上两者均通过。
-- 命令：推荐使用转正后的 `LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1`，等价于对 DeepSeek `ds.gemm.*` 自动打开 decode quant-direct、decode Q8_1 activation、prefill Q8_1 quant matmul 和 MoE fused SwiGLU；旧的 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET=1` 暂保留兼容。仍可用 `LOCAL_LLM_DEEPSEEK_DECODE_QUANT_DIRECT_EXCLUDE_OPS` / `LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS` 把单个 op 回退 safe path。
+- 命令：`LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 是 DeepSeek 量化直通总开关；当前 generic `quant_direct_gemm()` 已回退为 F32 activation + on-the-fly weight dequant，不再包含 decode Q8_1 activation 分支。旧的 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET=1` 暂保留兼容。仍可用 `LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS` 把 prefill 单个 op 回退 safe path。
 - 结果：程序可跑完，实际 decode 16 tokens，stdout 吞吐约 `41.3 t/s`；France prompt 输出 `巴黎，法国的首都是巴黎...` 或同义事实回答，不再是无关英文续写，但仍不等于 exact-output 期望 `The capital of France is Paris.`。
 - 显存：packed expert 修复后，阶段 3 France prompt 末值 `weight_allocs=377`，`CudaWeightPool` 驻留约 `9880 MiB`，`device used≈10382 MiB`；没有 F16 dequant 大缓存依赖。
 - 长跑：packed expert 修复后 128 token story prompt 可跑完且不 OOM；在修复 MLA latent gather 的 stream 顺序问题后，无 trace quant-direct 也可稳定续写英文 story，stdout 吞吐约 `21.2 t/s`。

@@ -82,16 +82,6 @@ namespace {
         return is_deepseek_gemm_op(op_name);
     }
 
-    bool should_force_deepseek_decode_quant_gemv(const char *name, int m) {
-        if (m != 1) return false;
-        const std::string op_name = name ? name : "";
-        if (!is_deepseek_gemm_op(op_name)) return false;
-        if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DECODE_QUANT_DIRECT") &&
-            !should_use_deepseek_quant_direct()) return false;
-        if (env_list_contains("LOCAL_LLM_DEEPSEEK_DECODE_QUANT_DIRECT_EXCLUDE_OPS", op_name)) return false;
-        return true;
-    }
-
     bool should_force_deepseek_prefill_quant_matmul(const char *name, int m) {
         if (m <= 1) return false;
         const std::string op_name = name ? name : "";
@@ -111,33 +101,6 @@ namespace {
         return false;
     }
 
-    bool should_use_f16_quant_gemv_operands(const char *name) {
-        if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_QUANT_GEMV_F16_OPERANDS")) return true;
-        const std::string op_name = name ? name : "";
-        return env_list_contains("LOCAL_LLM_QUANT_GEMV_F16_OPERAND_OPS", op_name);
-    }
-
-    bool should_use_q8_1_quant_gemv(const char *name) {
-        if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_QUANT_GEMV_Q8_1")) return true;
-        const std::string op_name = name ? name : "";
-        return should_use_deepseek_quant_direct() &&
-               (is_deepseek_gemm_op(op_name) || op_name == "lm_head");
-    }
-
-    bool should_use_deepseek_prefill_q8_1_raw_sum(const char *name) {
-        if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_Q8_1_RAW_SUM")) return false;
-        const std::string op_name = name ? name : "";
-        return is_deepseek_gemm_op(op_name);
-    }
-
-    bool should_use_deepseek_prefill_tiled_mmq(const char *name, DType dtype) {
-        if (dtype != DType::Q4_K && dtype != DType::Q6_K) return false;
-        const std::string op_name = name ? name : "";
-        if (!is_deepseek_gemm_op(op_name)) return false;
-        return should_use_deepseek_quant_direct() ||
-               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_TILED_MMQ");
-    }
-
     bool should_use_moe_fused_swiglu(const char *name) {
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
@@ -153,12 +116,6 @@ namespace {
                !env_flag_enabled("LOCAL_LLM_DISABLE_DEEPSEEK_MOE_Q8_1_SWIGLU");
     }
 
-    bool should_use_moe_fast_swiglu(const char *name) {
-        const std::string op_name = name ? name : "";
-        if (!is_deepseek_gemm_op(op_name)) return false;
-        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FAST_SWIGLU");
-    }
-
     bool should_use_moe_block_swiglu(const char *name) {
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
@@ -167,8 +124,7 @@ namespace {
     }
 
     bool should_use_device_indexed_moe() {
-        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE") ||
-               should_use_deepseek_quant_direct();
+        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE");
     }
 
     bool should_use_moe_shared_q8_1_down() {
@@ -202,66 +158,13 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
     // DeepSeek 层内 GEMM 对逐层数值漂移非常敏感，默认沿用已验证正确的
     // dequantize-to-F16 + cuBLAS 路径；量化直算保留为显式实验开关。
     if (Quant::is_quantized_dtype(s_weight.dtype)) {
-        const int out_dim = static_cast<int>(s_weight.shape[0]);
-        const int in_dim = static_cast<int>(s_weight.shape[1]);
         const int m = static_cast<int>(g_input_f32.rows());
         if (should_use_safe_dequant_gemm(name) && !should_force_quant_gemv(name) &&
-            !should_force_deepseek_decode_quant_gemv(name, m) &&
             !should_force_deepseek_prefill_quant_matmul(name, m)) {
-            const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, false);
-            if (q == nullptr) {
-                throw std::runtime_error("TensorTool::gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
-            }
-            CudaWeight dequant = q->try_dequant();
-            auto *d_input_f16 = scratch.ensure<uint16_t>(lowp_key + ".safe.f16",
-                                                             static_cast<size_t>(g_input_f32.numel()));
-            launch_f32_to_f16_copy(g_input_f32.data<float>(), d_input_f16, g_input_f32.numel());
-            gemm_main(global_cuda_weight_pool().handle, dequant.ptr, d_input_f16, g_output_f32.data<float>(),
-                      out_dim, in_dim, static_cast<size_t>(m), CUDA_R_16F, CUDA_R_16F,
-                      dequant.bytes, name);
+            safe_dequant_gemm(s_weight, g_input_f32, g_output_f32, scratch, lowp_key, name);
             return;
         }
-        const GPUTensor g_weight_q = s_weight.to_gpu(false);
-        const size_t row_bytes = g_weight_q.nbytes / static_cast<size_t>(out_dim);
-        ScopedGpuTimer timer(name && name[0] ? name : nullptr, g_weight_q.nbytes);
-        const bool f16_operands = should_use_f16_quant_gemv_operands(name);
-        if (m > 1) {
-            if (should_force_deepseek_prefill_quant_matmul(name, m)) {
-                const bool use_tiled_mmq = should_use_deepseek_prefill_tiled_mmq(name, s_weight.dtype);
-                const size_t q8_bytes = static_cast<size_t>(m) *
-                                        (use_tiled_mmq ? q8_1_mmq_row_bytes(in_dim) : q8_1_row_bytes(in_dim));
-                uint8_t *d_input_q8_1 = scratch.ensure<uint8_t>(lowp_key + ".prefill.q8_1", q8_bytes);
-                const bool raw_sum = use_tiled_mmq || should_use_deepseek_prefill_q8_1_raw_sum(name);
-                if (use_tiled_mmq) {
-                    launch_quantize_q8_1_mmq(g_input_f32.data<float>(), d_input_q8_1, in_dim, m, raw_sum);
-                    launch_quant_matmul_q8_1_mmq(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
-                                                 row_bytes, d_input_q8_1, g_output_f32.data<float>(),
-                                                 out_dim, in_dim, m);
-                } else {
-                    launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, m, raw_sum);
-                    launch_quant_matmul_q8_1(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
-                                             row_bytes, d_input_q8_1, g_output_f32.data<float>(),
-                                             out_dim, in_dim, m);
-                }
-                return;
-            }
-            launch_quant_matmul(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
-                                row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
-                                out_dim, in_dim, m, f16_operands);
-            return;
-        }
-        if (m == 1 && should_use_q8_1_quant_gemv(name)) {
-            const size_t q8_bytes = q8_1_row_bytes(in_dim);
-            uint8_t *d_input_q8_1 = scratch.ensure<uint8_t>(lowp_key + ".q8_1", q8_bytes);
-            launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, m);
-            launch_quant_gemv_q8_1(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
-                                   row_bytes, d_input_q8_1, g_output_f32.data<float>(),
-                                   out_dim, in_dim);
-            return;
-        }
-        launch_quant_gemv(s_weight.dtype, static_cast<const uint8_t *>(g_weight_q.data()),
-                          row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
-                          out_dim, in_dim, m, f16_operands);
+        quant_direct_gemm(s_weight, g_input_f32, g_output_f32, scratch, lowp_key, name);
         return;
     }
 
@@ -289,6 +192,54 @@ void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f3
               static_cast<size_t>(g_input_f32.rows()),
               cuda_type_of(g_weight.dtype), d_input_type, g_weight.nbytes,
               name);
+}
+
+void TensorTool::safe_dequant_gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
+                                   const GPUTensor &g_output_f32, CudaScratch &scratch,
+                                   const std::string &lowp_key, const char *name) {
+    const int out_dim = static_cast<int>(s_weight.shape[0]);
+    const int in_dim = static_cast<int>(s_weight.shape[1]);
+    const int m = static_cast<int>(g_input_f32.rows());
+    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, false);
+    if (q == nullptr) {
+        throw std::runtime_error("TensorTool::safe_dequant_gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
+    }
+    CudaWeight dequant = q->try_dequant();
+    auto *d_input_f16 = scratch.ensure<uint16_t>(lowp_key + ".safe.f16",
+                                                static_cast<size_t>(g_input_f32.numel()));
+    launch_f32_to_f16_copy(g_input_f32.data<float>(), d_input_f16, g_input_f32.numel());
+    gemm_main(global_cuda_weight_pool().handle, dequant.ptr, d_input_f16, g_output_f32.data<float>(),
+              out_dim, in_dim, static_cast<size_t>(m), CUDA_R_16F, CUDA_R_16F,
+              dequant.bytes, name);
+}
+
+void TensorTool::quant_direct_gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
+                                   const GPUTensor &g_output_f32, CudaScratch &scratch,
+                                   const std::string &lowp_key, const char *name) {
+    const int out_dim = static_cast<int>(s_weight.shape[0]);
+    const int in_dim = static_cast<int>(s_weight.shape[1]);
+    const int m = static_cast<int>(g_input_f32.rows());
+    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, false);
+    if (q == nullptr) {
+        throw std::runtime_error("TensorTool::quant_direct_gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
+    }
+    const size_t row_bytes = q->bytes / static_cast<size_t>(out_dim);
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, q->bytes);
+
+    // Correctness-first quant-direct: keep activations in F32 and only decode
+    // quantized weights on the fly. Q8_1 activation/MMQ variants stay outside
+    // this generic GEMM path until their numerical drift is isolated.
+    (void) scratch;
+    (void) lowp_key;
+    if (m > 1) {
+        launch_quant_matmul(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+                            row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
+                            out_dim, in_dim, m);
+        return;
+    }
+    launch_quant_gemv(s_weight.dtype, static_cast<const uint8_t *>(q->ptr),
+                      row_bytes, g_input_f32.data<float>(), g_output_f32.data<float>(),
+                      out_dim, in_dim, m);
 }
 
 const void *TensorTool::prepare_lowp_input(const GPUTensor &g_input_f32, DType weight_dtype,
@@ -328,10 +279,9 @@ void TensorTool::gemm_lowp(const StorageTensor &s_weight, const void *d_input_lo
               name);
 }
 
-bool TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
-                              const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
-                              const char *name) {
-    /*参数校验*/
+bool TensorTool::can_quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
+                                  const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
+                                  const char *name) {
     if (!should_use_moe_fused_swiglu(name)) return false;
     if (g_input_f32.rows() != 1 || g_input_f32.dtype != DType::F32 || g_act_f32.dtype != DType::F32) return false;
     if (!Quant::is_quantized_dtype(s_gate_weight.dtype) || s_gate_weight.dtype != s_up_weight.dtype) return false;
@@ -340,20 +290,28 @@ bool TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageT
     const int ffn_dim = static_cast<int>(s_gate_weight.shape[0]);
     const int in_dim = static_cast<int>(s_gate_weight.shape[1]);
     if (g_input_f32.cols() != in_dim || g_act_f32.rows() != 1 || g_act_f32.cols() != ffn_dim) return false;
+    return true;
+}
 
-    const GPUTensor g_gate_weight = s_gate_weight.to_gpu(false);
-    const GPUTensor g_up_weight = s_up_weight.to_gpu(false);
-    const size_t gate_row_bytes = g_gate_weight.nbytes / static_cast<size_t>(ffn_dim);
-    const size_t up_row_bytes = g_up_weight.nbytes / static_cast<size_t>(ffn_dim);
-    const bool f16_operands = should_use_f16_quant_gemv_operands(name);
-    ScopedGpuTimer timer(name && name[0] ? name : nullptr, g_gate_weight.nbytes + g_up_weight.nbytes);
+void TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
+                              const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
+                              const char *name) {
+    const int ffn_dim = static_cast<int>(s_gate_weight.shape[0]);
+    const int in_dim = static_cast<int>(s_gate_weight.shape[1]);
+    const CudaWeight *gate = global_cuda_weight_pool().cached_weight(s_gate_weight, false);
+    const CudaWeight *up = global_cuda_weight_pool().cached_weight(s_up_weight, false);
+    if (gate == nullptr || up == nullptr) {
+        throw std::runtime_error("TensorTool::quant_swiglu 量化权重超过 CudaWeightPool 上限");
+    }
+    const size_t gate_row_bytes = gate->bytes / static_cast<size_t>(ffn_dim);
+    const size_t up_row_bytes = up->bytes / static_cast<size_t>(ffn_dim);
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, gate->bytes + up->bytes);
     launch_quant_swiglu(s_gate_weight.dtype,
-                        static_cast<const uint8_t *>(g_gate_weight.data()),
-                        static_cast<const uint8_t *>(g_up_weight.data()),
+                        static_cast<const uint8_t *>(gate->ptr),
+                        static_cast<const uint8_t *>(up->ptr),
                         gate_row_bytes, up_row_bytes,
                         g_input_f32.data<float>(), g_act_f32.data<float>(),
-                        ffn_dim, in_dim, f16_operands, should_use_moe_fast_swiglu(name));
-    return true;
+                        ffn_dim, in_dim);
 }
 
 bool TensorTool::quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
@@ -368,12 +326,15 @@ bool TensorTool::quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &
     const int in_dim = static_cast<int>(s_weight.shape[1]);
     if (g_input_f32.cols() != in_dim || g_output_f32.cols() != out_dim) return false;
 
-    const GPUTensor g_weight = s_weight.to_gpu(false);
-    const size_t row_bytes = g_weight.nbytes / static_cast<size_t>(out_dim);
-    ScopedGpuTimer timer(name && name[0] ? name : nullptr, g_weight.nbytes);
-    launch_quant_gemv_add(s_weight.dtype, static_cast<const uint8_t *>(g_weight.data()), row_bytes,
+    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, false);
+    if (q == nullptr) {
+        throw std::runtime_error("TensorTool::quant_gemv_add 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
+    }
+    const size_t row_bytes = q->bytes / static_cast<size_t>(out_dim);
+    ScopedGpuTimer timer(name && name[0] ? name : nullptr, q->bytes);
+    launch_quant_gemv_add(s_weight.dtype, static_cast<const uint8_t *>(q->ptr), row_bytes,
                           g_input_f32.data<float>(), g_output_f32.data<float>(),
-                          out_dim, in_dim, should_use_f16_quant_gemv_operands(name));
+                          out_dim, in_dim);
     return true;
 }
 
@@ -446,16 +407,14 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
                                           gate_expert_bytes, up_expert_bytes,
                                           gate_row_bytes, up_row_bytes, g_input_f32.data<float>(),
                                           d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim,
-                                          should_use_moe_fast_swiglu(name));
+                                          false);
     } else {
         launch_quant_swiglu_indexed(s_gate_exps.dtype,
                                     static_cast<const uint8_t *>(g_gate_exps.data()),
                                     static_cast<const uint8_t *>(g_up_exps.data()),
                                     gate_expert_bytes, up_expert_bytes,
                                     gate_row_bytes, up_row_bytes, g_input_f32.data<float>(),
-                                    d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim,
-                                    should_use_f16_quant_gemv_operands(name),
-                                    should_use_moe_fast_swiglu(name));
+                                    d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim);
     }
 
     if (should_use_moe_f32_fused_down()) {
@@ -823,17 +782,15 @@ bool TensorTool::mla_absorb_components(const StorageTensor &s_kv_b_weight, const
 
     const GPUTensor g_kv_b_weight = s_kv_b_weight.to_gpu(false);
     const size_t row_bytes = g_kv_b_weight.nbytes / static_cast<size_t>(kvb_out);
-    const bool f16_operands = should_use_f16_quant_gemv_operands("ds.mla_absorb");
     launch_mla_absorb_q_nope(s_kv_b_weight.dtype, g_q_f32.data<float>(),
                              static_cast<const uint8_t *>(g_kv_b_weight.data()),
-                             row_bytes, g_q_abs_f32.data<float>(), n_heads, qk_nope, qk_rope, v_head, kv_lora,
-                             f16_operands);
+                             row_bytes, g_q_abs_f32.data<float>(), n_heads, qk_nope, qk_rope, v_head, kv_lora);
     const int blocks_per_row = static_cast<int>(q8_1_row_bytes(kv_lora) / 36);
     if (s_kv_b_weight.dtype == DType::Q4_K) {
         launch_mla_absorb_q4_xsum_delta(g_q_f32.data<float>(),
                                         static_cast<const uint8_t *>(g_kv_b_weight.data()),
                                         row_bytes, g_q_abs_xsum_delta_f32.data<float>(), n_heads,
-                                        qk_nope, qk_rope, v_head, kv_lora, f16_operands);
+                                        qk_nope, qk_rope, v_head, kv_lora);
     } else {
         cuda_memset_async(g_q_abs_xsum_delta_f32.data<float>(), 0,
                           static_cast<size_t>(n_heads * blocks_per_row) * sizeof(float),
@@ -851,7 +808,7 @@ bool TensorTool::mla_absorb_components(const StorageTensor &s_kv_b_weight, const
     launch_mla_absorb_v(s_kv_b_weight.dtype, static_cast<const uint8_t *>(g_kv_b_weight.data()), row_bytes,
                         g_attn_latent_f32.data<float>(), g_attn_xsum_delta_f32.data<float>(),
                         g_attn_f32.data<float>(),
-                        n_heads, qk_nope, v_head, kv_lora, f16_operands);
+                        n_heads, qk_nope, v_head, kv_lora);
     return true;
 }
 
@@ -901,7 +858,6 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
 
     const GPUTensor g_kv_b_weight = s_kv_b_weight.to_gpu(false);
     const size_t row_bytes = g_kv_b_weight.nbytes / static_cast<size_t>(kvb_out);
-    const bool f16_operands = should_use_f16_quant_gemv_operands("ds.mla_absorb");
     const int blocks_per_row = static_cast<int>(q8_1_row_bytes(kv_lora) / 36);
     auto g_q_abs_f32 = GPUTensor(scratch, "mla_absorb_q", {static_cast<int64_t>(n_heads), static_cast<int64_t>(kv_lora)},
                                  DType::F32);
@@ -914,13 +870,12 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
 
     launch_mla_absorb_q_nope(s_kv_b_weight.dtype, g_q_f32.data<float>(),
                              static_cast<const uint8_t *>(g_kv_b_weight.data()),
-                             row_bytes, g_q_abs_f32.data<float>(), n_heads, qk_nope, qk_rope, v_head, kv_lora,
-                             f16_operands);
+                             row_bytes, g_q_abs_f32.data<float>(), n_heads, qk_nope, qk_rope, v_head, kv_lora);
     if (s_kv_b_weight.dtype == DType::Q4_K) {
         launch_mla_absorb_q4_xsum_delta(g_q_f32.data<float>(),
                                         static_cast<const uint8_t *>(g_kv_b_weight.data()),
                                         row_bytes, g_q_abs_xsum_delta_f32.data<float>(), n_heads,
-                                        qk_nope, qk_rope, v_head, kv_lora, f16_operands);
+                                        qk_nope, qk_rope, v_head, kv_lora);
     } else {
         cuda_memset_async(g_q_abs_xsum_delta_f32.data<float>(), 0,
                           static_cast<size_t>(n_heads * blocks_per_row) * sizeof(float),
@@ -933,7 +888,7 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
                                         d_pos, max_seq_len, softmax_scale);
     launch_mla_project_v_device_pos(s_kv_b_weight.dtype, static_cast<const uint8_t *>(g_kv_b_weight.data()), row_bytes,
                                     latent_q8_1_cache, latent_q8_1_row_bytes, g_kv_b_cache_f32.data<float>(),
-                                    n_heads, qk_nope, v_head, kv_lora, d_pos, f16_operands);
+                                    n_heads, qk_nope, v_head, kv_lora, d_pos);
     launch_mla_absorb_context_v_device_pos(g_attn_scores_f32.data<float>(), g_kv_b_cache_f32.data<float>(),
                                            g_attn_f32.data<float>(), n_heads, qk_nope, v_head,
                                            d_pos, max_seq_len);

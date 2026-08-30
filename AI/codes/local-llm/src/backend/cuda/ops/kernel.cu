@@ -1082,22 +1082,39 @@ __global__ void f32_to_bf16_copy_kernel(const float *src, uint16_t *out, int64_t
 // 与对应 dequantize_* kernel 的块布局严格一致（Q4_K/Q6_K/Q5_0/Q8_0），保证数值等价。
 
 // Q4_K：super-block 256 元素 / 144 字节；布局 d(f16) dmin(f16) scales[12] qs[128]。
+// 内存布局：
+// base + 0   : d，half，2 字节
+// base + 2   : dmin，half，2 字节
+// base + 4   : scales，12 字节
+// base + 16  : qs，128 字节
 __device__ inline float q4k_at(const uint8_t *row_base, int idx) {
-    const int64_t blk = idx >> 8;          // idx / 256
-    const int in_blk = idx & 255;          // 0..255
+    const int64_t blk = idx >> 8;          // idx / 256 // 表示第 idx 个元素落在哪个 Q4_K super-block 里。
+    const int in_blk = idx & 255;          // 0..255    // 示它在当前 256 元素 super-block 里的位置
     const uint8_t *base = row_base + blk * 144;
     const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base)));
     const float dmin = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t *>(base + 2)));
     const uint8_t *scales = base + 4;
     const uint8_t *qs = base + 16;
+    // Q4_K 把 256 个元素再分成 8 个 sub-block，每个 sub-block 32 个元素。所以 j 是当前元素属于第几个 32 元素小块。
     const int j = in_blk >> 5;             // sub-block 0..7
+    // 表示当前元素在这个 32 元素 sub-block 内的位置。
     const int inner = in_blk & 31;         // 0..31
     // qs 每 32 字节服务一对 sub-block(2p,2p+1)：低4bit->2p, 高4bit->2p+1。
     const int pair = j >> 1;
     const uint8_t q = qs[pair * 32 + inner];
     uint8_t sc, m;
     q4k_scale_min(j, scales, sc, m);
-    const int nib = (j & 1) ? (q >> 4) : (q & 0x0F);
+    /*
+     * Q4_K 的 qs 是按两个 sub-block 成对存的：
+    *       sub-block 0 和 1 共用 qs[0..31]
+            sub-block 2 和 3 共用 qs[32..63]
+            sub-block 4 和 5 共用 qs[64..95]
+            sub-block 6 和 7 共用 qs[96..127]
+        同一个字节里：
+            低 4 bit：偶数 sub-block，例如 0、2、4、6
+            高 4 bit：奇数 sub-block，例如 1、3、5、7
+     */
+    const int nib = (j & 1) ? (q >> 4) : (q & 0x0F); // j 是偶数：取低 4 bit；j 是奇数：取高 4 bit。
     return d * sc * nib - dmin * m;
 }
 
@@ -1171,15 +1188,7 @@ __device__ inline float q80_at(const uint8_t *row_base, int idx) {
 // quant_type：12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。row_bytes 为每行量化字节数（out_dim 行等长）。
 // X/Y 均为 row-major（x[m*in_dim+k], y[m*out_dim+o]），与 gemm_main 的列主序 [dim,tokens] 一致。
 // 每个 warp 负责一个输出行 o，内层循环 M 个 token；权重块按需解量化（M 小，重解成本远低于 F16 展开）。
-template <bool F16_OPERANDS>
-__device__ inline float quant_gemv_operand(float v) {
-    if constexpr (F16_OPERANDS) {
-        return __half2float(__float2half(v));
-    }
-    return v;
-}
-
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                   float *y, int out_dim, int in_dim, int m) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
@@ -1195,8 +1204,7 @@ __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const
             else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
             else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
             else w = q80_at(row_base, k);
-            w = quant_gemv_operand<F16_OPERANDS>(w);
-            const float xv = quant_gemv_operand<F16_OPERANDS>(xr[k]);
+            const float xv = xr[k];
             acc = fmaf(w, xv, acc);
         }
         for (int offset = 16; offset > 0; offset >>= 1) {
@@ -1206,16 +1214,12 @@ __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const
     }
 }
 
-template __global__ void quant_gemv_kernel<12, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<14, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<6, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<8, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<12, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<14, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_gemv_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<12>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<14>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<6>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_gemv_kernel<8>(const uint8_t *, size_t, const float *, float *, int, int, int);
 
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_gemv_add_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                       float *y, int out_dim, int in_dim) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
@@ -1230,8 +1234,7 @@ __global__ void quant_gemv_add_kernel(const uint8_t *weight, size_t row_bytes, c
         else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
         else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
         else w = q80_at(row_base, k);
-        w = quant_gemv_operand<F16_OPERANDS>(w);
-        const float xv = quant_gemv_operand<F16_OPERANDS>(x[k]);
+        const float xv = x[k];
         acc = fmaf(w, xv, acc);
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -1240,18 +1243,14 @@ __global__ void quant_gemv_add_kernel(const uint8_t *weight, size_t row_bytes, c
     if (lane == 0) y[warp_id] += acc;
 }
 
-template __global__ void quant_gemv_add_kernel<12, false>(const uint8_t *, size_t, const float *, float *, int, int);
-template __global__ void quant_gemv_add_kernel<14, false>(const uint8_t *, size_t, const float *, float *, int, int);
-template __global__ void quant_gemv_add_kernel<6, false>(const uint8_t *, size_t, const float *, float *, int, int);
-template __global__ void quant_gemv_add_kernel<8, false>(const uint8_t *, size_t, const float *, float *, int, int);
-template __global__ void quant_gemv_add_kernel<12, true>(const uint8_t *, size_t, const float *, float *, int, int);
-template __global__ void quant_gemv_add_kernel<14, true>(const uint8_t *, size_t, const float *, float *, int, int);
-template __global__ void quant_gemv_add_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int);
-template __global__ void quant_gemv_add_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<12>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<14>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<6>(const uint8_t *, size_t, const float *, float *, int, int);
+template __global__ void quant_gemv_add_kernel<8>(const uint8_t *, size_t, const float *, float *, int, int);
 
 // Prefill 专用量化 MATMUL：每个 warp 负责一个输出元素 y[row,out]。
 // grid 覆盖 m*out_dim，避免 quant_gemv_kernel 在 token 维串行导致 prefill 并行度不足。
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_matmul_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                     float *y, int out_dim, int in_dim, int m) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
@@ -1270,8 +1269,7 @@ __global__ void quant_matmul_kernel(const uint8_t *weight, size_t row_bytes, con
         else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
         else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
         else w = q80_at(row_base, k);
-        w = quant_gemv_operand<F16_OPERANDS>(w);
-        const float xv = quant_gemv_operand<F16_OPERANDS>(xr[k]);
+        const float xv = xr[k];
         acc = fmaf(w, xv, acc);
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -1280,21 +1278,17 @@ __global__ void quant_matmul_kernel(const uint8_t *weight, size_t row_bytes, con
     if (lane == 0) y[static_cast<size_t>(row) * out_dim + out] = acc;
 }
 
-template __global__ void quant_matmul_kernel<12, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_matmul_kernel<14, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_matmul_kernel<6, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_matmul_kernel<8, false>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_matmul_kernel<12, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_matmul_kernel<14, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_matmul_kernel<6, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
-template __global__ void quant_matmul_kernel<8, true>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<12>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<14>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<6>(const uint8_t *, size_t, const float *, float *, int, int, int);
+template __global__ void quant_matmul_kernel<8>(const uint8_t *, size_t, const float *, float *, int, int, int);
 
 // MoE decode 专用：同一输入下 gate/up 两个 projection 融合，并直接写 act=SiLU(gate)*up。
 // 每个 warp 负责一个 FFN 输出元素，避免 egate/eup/silu_mul 三次小 kernel launch。
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                     size_t gate_row_bytes, size_t up_row_bytes,
-                                    const float *x, float *act, int ffn_dim, int in_dim, bool fast_silu) {
+                                    const float *x, float *act, int ffn_dim, int in_dim) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
     const int lane = threadIdx.x & 31;
     if (warp_id >= ffn_dim) return;
@@ -1319,10 +1313,8 @@ __global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *u
             wg = q80_at(gate_row, k);
             wu = q80_at(up_row, k);
         }
-        wg = quant_gemv_operand<F16_OPERANDS>(wg);
-        wu = quant_gemv_operand<F16_OPERANDS>(wu);
-        const float xv = quant_gemv_operand<F16_OPERANDS>(x[k]);
-        gate_acc = fmaf(wg, xv, gate_acc);
+        const float xv = x[k];
+        gate_acc = fmaf(wg, xv, gate_acc); // wg*xv+gate_acc
         up_acc = fmaf(wu, xv, up_acc);
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -1330,34 +1322,25 @@ __global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *u
         up_acc += __shfl_down_sync(0xffffffff, up_acc, offset);
     }
     if (lane == 0) {
-        const float e = fast_silu ? __expf(-gate_acc) : expf(-gate_acc);
+        const float e = expf(-gate_acc);
         act[warp_id] = gate_acc / (1.0f + e) * up_acc;
     }
 }
 
-template __global__ void quant_swiglu_kernel<12, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                        const float *, float *, int, int, bool);
-template __global__ void quant_swiglu_kernel<14, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                        const float *, float *, int, int, bool);
-template __global__ void quant_swiglu_kernel<6, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int, bool);
-template __global__ void quant_swiglu_kernel<8, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int, bool);
-template __global__ void quant_swiglu_kernel<12, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int, bool);
-template __global__ void quant_swiglu_kernel<14, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                       const float *, float *, int, int, bool);
-template __global__ void quant_swiglu_kernel<6, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                      const float *, float *, int, int, bool);
-template __global__ void quant_swiglu_kernel<8, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                      const float *, float *, int, int, bool);
+template __global__ void quant_swiglu_kernel<12>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                 const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<14>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                 const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<6>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                const float *, float *, int, int);
+template __global__ void quant_swiglu_kernel<8>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                const float *, float *, int, int);
 
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_swiglu_indexed_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                             size_t gate_expert_bytes, size_t up_expert_bytes,
                                             size_t gate_row_bytes, size_t up_row_bytes, const float *x,
-                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
-                                            bool fast_silu) {
+                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim) {
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
     const int lane = threadIdx.x & 31;
     const int total = k * ffn_dim;
@@ -1387,9 +1370,7 @@ __global__ void quant_swiglu_indexed_kernel(const uint8_t *gate_weight, const ui
             wg = q6k_at(gate_row, i);
             wu = q6k_at(up_row, i);
         }
-        wg = quant_gemv_operand<F16_OPERANDS>(wg);
-        wu = quant_gemv_operand<F16_OPERANDS>(wu);
-        const float xv = quant_gemv_operand<F16_OPERANDS>(x[i]);
+        const float xv = x[i];
         gate_acc = fmaf(wg, xv, gate_acc);
         up_acc = fmaf(wu, xv, up_acc);
     }
@@ -1398,23 +1379,17 @@ __global__ void quant_swiglu_indexed_kernel(const uint8_t *gate_weight, const ui
         up_acc += __shfl_down_sync(0xffffffff, up_acc, offset);
     }
     if (lane == 0) {
-        const float e = fast_silu ? __expf(-gate_acc) : expf(-gate_acc);
+        const float e = expf(-gate_acc);
         act[static_cast<size_t>(route) * ffn_dim + row] = gate_acc / (1.0f + e) * up_acc;
     }
 }
 
-template __global__ void quant_swiglu_indexed_kernel<12, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                                size_t, size_t, const float *, const int *,
-                                                                float *, int, int, int, bool);
-template __global__ void quant_swiglu_indexed_kernel<14, false>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                                size_t, size_t, const float *, const int *,
-                                                                float *, int, int, int, bool);
-template __global__ void quant_swiglu_indexed_kernel<12, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                               size_t, size_t, const float *, const int *,
-                                                               float *, int, int, int, bool);
-template __global__ void quant_swiglu_indexed_kernel<14, true>(const uint8_t *, const uint8_t *, size_t, size_t,
-                                                               size_t, size_t, const float *, const int *,
-                                                               float *, int, int, int, bool);
+template __global__ void quant_swiglu_indexed_kernel<12>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                         size_t, size_t, const float *, const int *,
+                                                         float *, int, int, int);
+template __global__ void quant_swiglu_indexed_kernel<14>(const uint8_t *, const uint8_t *, size_t, size_t,
+                                                         size_t, size_t, const float *, const int *,
+                                                         float *, int, int, int);
 
 template <int QUANT_TYPE>
 __global__ void quant_swiglu_indexed_block_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
@@ -1422,6 +1397,7 @@ __global__ void quant_swiglu_indexed_block_kernel(const uint8_t *gate_weight, co
                                                   size_t gate_row_bytes, size_t up_row_bytes, const float *x,
                                                   const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
                                                   int blocks_per_row, bool fast_silu) {
+    (void) fast_silu;
     const int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) >> 5;
     const int lane = threadIdx.x & 31;
     const int total = k * ffn_dim;
@@ -1540,7 +1516,7 @@ __global__ void quant_swiglu_indexed_block_kernel(const uint8_t *gate_weight, co
         }
     }
     if (lane == 0) {
-        const float e = fast_silu ? __expf(-gate_acc) : expf(-gate_acc);
+        const float e = expf(-gate_acc);
         act[static_cast<size_t>(route) * ffn_dim + row] = gate_acc / (1.0f + e) * up_acc;
     }
 }
@@ -2988,7 +2964,7 @@ __device__ inline float q4k_min_coeff_at(const uint8_t *row_base, int qblk) {
     return -dmin * static_cast<float>(m);
 }
 
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void mla_absorb_q_nope_kernel(const float *q, const uint8_t *kv_b_weight,
                                          size_t row_bytes, float *q_abs, int n_heads,
                                          int qk_nope, int qk_rope, int v_head, int kv_lora) {
@@ -3009,8 +2985,7 @@ __global__ void mla_absorb_q_nope_kernel(const float *q, const uint8_t *kv_b_wei
         else if (QUANT_TYPE == 14) w = q6k_at(row_base, latent);
         else if (QUANT_TYPE == 6) w = q50_at(row_base, latent);
         else w = q80_at(row_base, latent);
-        w = quant_gemv_operand<F16_OPERANDS>(w);
-        const float xv = quant_gemv_operand<F16_OPERANDS>(qh[d]);
+        const float xv = qh[d];
         acc = fmaf(w, xv, acc);
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -3019,16 +2994,11 @@ __global__ void mla_absorb_q_nope_kernel(const float *q, const uint8_t *kv_b_wei
     if (lane == 0) q_abs[warp_id] = acc;
 }
 
-template __global__ void mla_absorb_q_nope_kernel<12, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q_nope_kernel<14, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q_nope_kernel<6, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q_nope_kernel<8, false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q_nope_kernel<12, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q_nope_kernel<14, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q_nope_kernel<6, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q_nope_kernel<8, true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<12>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<14>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<6>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
+template __global__ void mla_absorb_q_nope_kernel<8>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
 
-template <bool F16_OPERANDS>
 __global__ void mla_absorb_q4_xsum_delta_kernel(const float *q, const uint8_t *kv_b_weight,
                                                 size_t row_bytes, float *q_abs_xsum_delta,
                                                 int n_heads, int qk_nope, int qk_rope,
@@ -3046,7 +3016,7 @@ __global__ void mla_absorb_q4_xsum_delta_kernel(const float *q, const uint8_t *k
         const int row = h * (qk_nope + v_head) + d;
         const uint8_t *row_base = kv_b_weight + static_cast<size_t>(row) * row_bytes;
         const float coeff = q4k_min_coeff_at(row_base, qblk);
-        const float qv = quant_gemv_operand<F16_OPERANDS>(qh[d]);
+        const float qv = qh[d];
         acc = fmaf(qv, coeff, acc);
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -3054,9 +3024,6 @@ __global__ void mla_absorb_q4_xsum_delta_kernel(const float *q, const uint8_t *k
     }
     if (lane == 0) q_abs_xsum_delta[warp_id] = acc;
 }
-
-template __global__ void mla_absorb_q4_xsum_delta_kernel<false>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
-template __global__ void mla_absorb_q4_xsum_delta_kernel<true>(const float *, const uint8_t *, size_t, float *, int, int, int, int, int);
 
 __global__ void mla_absorb_attend_device_pos_kernel(const float *q_abs, const float *q,
                                                     const uint8_t *latent_q8_1_cache,
@@ -3238,7 +3205,7 @@ __global__ void mla_absorb_context_device_pos_kernel(const float *scores, const 
     }
 }
 
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void mla_project_v_device_pos_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
                                                 const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
                                                 float *kv_b_cache, int n_heads, int qk_nope, int v_head,
@@ -3343,14 +3310,10 @@ __global__ void mla_project_v_device_pos_kernel(const uint8_t *kv_b_weight, size
     }
 }
 
-template __global__ void mla_project_v_device_pos_kernel<12, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
-template __global__ void mla_project_v_device_pos_kernel<14, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
-template __global__ void mla_project_v_device_pos_kernel<6, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
-template __global__ void mla_project_v_device_pos_kernel<8, false>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
-template __global__ void mla_project_v_device_pos_kernel<12, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
-template __global__ void mla_project_v_device_pos_kernel<14, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
-template __global__ void mla_project_v_device_pos_kernel<6, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
-template __global__ void mla_project_v_device_pos_kernel<8, true>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<12>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<14>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<6>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
+template __global__ void mla_project_v_device_pos_kernel<8>(const uint8_t *, size_t, const uint8_t *, size_t, float *, int, int, int, int, const int *);
 
 __global__ void mla_absorb_context_v_device_pos_kernel(const float *scores, const float *kv_b_cache,
                                                        float *attn, int n_heads, int qk_nope, int v_head,
@@ -3400,7 +3363,7 @@ __global__ void mla_absorb_context_v_device_pos_kernel(const float *scores, cons
     }
 }
 
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void mla_absorb_v_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
                                     const float *attn_latent, const float *attn_xsum_delta,
                                     float *attn, int n_heads, int qk_nope, int v_head, int kv_lora) {
@@ -3422,8 +3385,7 @@ __global__ void mla_absorb_v_kernel(const uint8_t *kv_b_weight, size_t row_bytes
         else if (QUANT_TYPE == 14) w = q6k_at(row_base, k);
         else if (QUANT_TYPE == 6) w = q50_at(row_base, k);
         else w = q80_at(row_base, k);
-        w = quant_gemv_operand<F16_OPERANDS>(w);
-        const float xv = quant_gemv_operand<F16_OPERANDS>(latent[k]);
+        const float xv = latent[k];
         acc = fmaf(w, xv, acc);
     }
     for (int offset = 16; offset > 0; offset >>= 1) {
@@ -3440,14 +3402,10 @@ __global__ void mla_absorb_v_kernel(const uint8_t *kv_b_weight, size_t row_bytes
     }
 }
 
-template __global__ void mla_absorb_v_kernel<12, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
-template __global__ void mla_absorb_v_kernel<14, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
-template __global__ void mla_absorb_v_kernel<6, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
-template __global__ void mla_absorb_v_kernel<8, false>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
-template __global__ void mla_absorb_v_kernel<12, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
-template __global__ void mla_absorb_v_kernel<14, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
-template __global__ void mla_absorb_v_kernel<6, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
-template __global__ void mla_absorb_v_kernel<8, true>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<12>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<14>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<6>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
+template __global__ void mla_absorb_v_kernel<8>(const uint8_t *, size_t, const float *, const float *, float *, int, int, int, int);
 
 // ================= MoE 路由 =================
 // 每个 block 处理一个 token：对 router_logits 做 sigmoid? DeepSeek-V2 用 softmax over all experts，

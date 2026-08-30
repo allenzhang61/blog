@@ -20,25 +20,24 @@ inline int grid_for(int n) { return (n + kBlock - 1) / kBlock; }
 __global__ void bf16_gemv_kernel(const uint16_t *weight, const uint16_t *x, float *y,
                                  int out_dim, int in_dim);
 // 量化直算 GEMM（decode M=1 / prefill M>1）：QUANT_TYPE 12=Q4_K 14=Q6_K 6=Q5_0 8=Q8_0。
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_gemv_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                   float *y, int out_dim, int in_dim, int m);
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_gemv_add_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                       float *y, int out_dim, int in_dim);
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_matmul_kernel(const uint8_t *weight, size_t row_bytes, const float *x,
                                     float *y, int out_dim, int in_dim, int m);
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void quant_swiglu_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                     size_t gate_row_bytes, size_t up_row_bytes,
-                                    const float *x, float *act, int ffn_dim, int in_dim, bool fast_silu);
-template <int QUANT_TYPE, bool F16_OPERANDS>
+                                    const float *x, float *act, int ffn_dim, int in_dim);
+template <int QUANT_TYPE>
 __global__ void quant_swiglu_indexed_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                             size_t gate_expert_bytes, size_t up_expert_bytes,
                                             size_t gate_row_bytes, size_t up_row_bytes, const float *x,
-                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim,
-                                            bool fast_silu);
+                                            const int *expert_ids, float *act, int k, int ffn_dim, int in_dim);
 template <int QUANT_TYPE>
 __global__ void quant_swiglu_indexed_block_kernel(const uint8_t *gate_weight, const uint8_t *up_weight,
                                                   size_t gate_expert_bytes, size_t up_expert_bytes,
@@ -203,11 +202,10 @@ __global__ void mla_store_kv_b_device_pos_kernel(const float *kv_b_new, float *k
 __global__ void mla_store_latent_q8_1_device_pos_kernel(const float *kv_cache, uint8_t *latent_q8_1_cache,
                                                         int kv_lora, int qk_rope, size_t row_bytes,
                                                         int blocks_per_row, const int *d_pos);
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void mla_absorb_q_nope_kernel(const float *q, const uint8_t *kv_b_weight,
                                          size_t row_bytes, float *q_abs, int n_heads,
                                          int qk_nope, int qk_rope, int v_head, int kv_lora);
-template <bool F16_OPERANDS>
 __global__ void mla_absorb_q4_xsum_delta_kernel(const float *q, const uint8_t *kv_b_weight,
                                                 size_t row_bytes, float *q_abs_xsum_delta,
                                                 int n_heads, int qk_nope, int qk_rope,
@@ -231,7 +229,7 @@ __global__ void mla_absorb_context_device_pos_kernel(const float *scores, const 
                                                      size_t latent_q8_1_row_bytes, float *attn_xsum_delta,
                                                      float *attn_latent, int n_heads, int kv_lora,
                                                      const int *d_pos, int max_seq_len);
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void mla_project_v_device_pos_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
                                                 const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
                                                 float *kv_b_cache, int n_heads, int qk_nope, int v_head,
@@ -239,7 +237,7 @@ __global__ void mla_project_v_device_pos_kernel(const uint8_t *kv_b_weight, size
 __global__ void mla_absorb_context_v_device_pos_kernel(const float *scores, const float *kv_b_cache,
                                                        float *attn, int n_heads, int qk_nope, int v_head,
                                                        const int *d_pos, int max_seq_len);
-template <int QUANT_TYPE, bool F16_OPERANDS>
+template <int QUANT_TYPE>
 __global__ void mla_absorb_v_kernel(const uint8_t *kv_b_weight, size_t row_bytes,
                                     const float *attn_latent, const float *attn_xsum_delta, float *attn,
                                     int n_heads, int qk_nope, int v_head, int kv_lora);

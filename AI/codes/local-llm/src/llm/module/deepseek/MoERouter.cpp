@@ -26,9 +26,7 @@ namespace {
     }
 
     bool should_use_device_indexed_moe() {
-        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE") ||
-               env_flag_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT") ||
-               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET");
+        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE");
     }
 } // namespace
 
@@ -39,20 +37,20 @@ MoERouter::MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &
 MoERoute MoERouter::forward(DeepseekSession &session, const GPUTensor &g_normed_f32) {
     const int64_t input_size = g_normed_f32.rows();
     auto &s = session.cuda_scratch;
-    const int64_t n_exp = config_.expert_count;
-    const int64_t k = config_.expert_used;
+    const int64_t expert_count = config_.expert_count;
+    const int64_t expert_used = config_.expert_used;
 
-    auto g_router_logits_f32 = GPUTensor(s, scratch_key::kRouterLogits, {input_size, n_exp}, DType::F32);
+    auto g_router_logits_f32 = GPUTensor(s, scratch_key::kRouterLogits, {input_size, expert_count}, DType::F32);
     // lw_.s_ffn_gate_inp->to_gpu(true);
     TensorTool::gemm(*lw_.s_ffn_gate_inp, g_normed_f32, g_router_logits_f32, s, scratch_key::kFfnInLowp,
                      "ds.gemm.router");
     deepseek_trace::tensor(session, g_router_logits_f32, "router_logits", session.trace_pos, session.trace_layer);
 
-    const std::vector<int64_t> route_shape = {input_size, k};
-    auto g_top_idx_i32 = GPUTensor(s, scratch_key::kTopIdx, route_shape, DType::I32);
-    auto g_top_w_f32 = GPUTensor(s, scratch_key::kTopW, route_shape, DType::F32);
+    // top_idx 和 top_w 是 MoE router 的输出，分别表示“选中了哪些 expert”和“每个 expert 的权重是多少”
+    auto g_top_idx_i32 = GPUTensor(s, scratch_key::kTopIdx, {input_size, expert_used}, DType::I32);
+    auto g_top_w_f32 = GPUTensor(s, scratch_key::kTopW, {input_size, expert_used}, DType::F32);
     TensorTool::moe_router_topk(g_router_logits_f32, g_top_idx_i32, g_top_w_f32,
-                                static_cast<int>(n_exp), static_cast<int>(k), config_.routed_scaling);
+                                static_cast<int>(expert_count), static_cast<int>(expert_used), config_.routed_scaling);
     deepseek_trace::topk(session, g_top_idx_i32, g_top_w_f32, "router_topk", session.trace_pos, session.trace_layer);
 
     MoERoute route;

@@ -57,12 +57,12 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
     auto &s = session.cuda_scratch;
     const int64_t hidden_size = config_.hidden_size;
     const int64_t ffn = config_.expert_ffn;
-    const int n_exp = config_.expert_count;
-    const int k = config_.expert_used;
+    const int expert_count = config_.expert_count;
+    const int expert_used = config_.expert_used;
     if (route.decode_device_indexed &&
         TensorTool::moe_routed_decode_indexed(*lw_.s_ffn_gate_exps, *lw_.s_ffn_up_exps, *lw_.s_ffn_down_exps,
                                               g_normed_f32, route.d_expert_ids_i32, route.d_weights_f32,
-                                              g_moe_f32, s, n_exp, k, "ds.gemm.e_indexed_moe")) {
+                                              g_moe_f32, s, expert_count, expert_used, "ds.gemm.e_indexed_moe")) {
         return;
     }
     if (route.decode_device_indexed) {
@@ -80,28 +80,34 @@ void RoutedExperts::forward(DeepseekSession &session, const GPUTensor &g_normed_
     for (int64_t input_index = 0; input_index < input_size; ++input_index) {
         const size_t token_offset = static_cast<size_t>(input_index) * hidden_size * sizeof(float);
         auto g_tok_in_f32 = GPUTensor(g_normed_f32, token_offset, {1, hidden_size});
-        for (int r = 0; r < k; ++r) {
-            const size_t route_idx = static_cast<size_t>(input_index) * k + r;
-            const int e = expert_ids[route_idx];
-            if (e < 0 || e >= n_exp) {
+        for (int r = 0; r < expert_used; ++r) {
+            const size_t route_idx = static_cast<size_t>(input_index) * expert_used + r;
+            const int expert_id = expert_ids[route_idx];
+            if (expert_id < 0 || expert_id >= expert_count) {
                 throw std::runtime_error("DeepSeek MoE router 返回非法 expert id: layer=" +
                                          std::to_string(lw_.layer_index) +
                                          " input=" + std::to_string(input_index) +
                                          " route=" + std::to_string(r) +
-                                         " expert=" + std::to_string(e));
+                                         " expert=" + std::to_string(expert_id));
             }
-            if (!TensorTool::quant_swiglu(s_gate_experts_[e], s_up_experts_[e],
-                                          g_tok_in_f32, g_act_f32, "ds.gemm.e_swiglu")) {
+
+            if (TensorTool::can_quant_swiglu(s_gate_experts_[expert_id], s_up_experts_[expert_id],
+                                             g_tok_in_f32, g_act_f32, "ds.gemm.e_swiglu")) {
+                TensorTool::quant_swiglu(s_gate_experts_[expert_id], s_up_experts_[expert_id],
+                                         g_tok_in_f32, g_act_f32, "ds.gemm.e_swiglu");
+            } else {
                 auto g_gate_out_f32 = GPUTensor(s, scratch_key::kGate, {1, ffn}, DType::F32);
                 auto g_up_out_f32 = GPUTensor(s, scratch_key::kUp, {1, ffn}, DType::F32);
-                TensorTool::gemm(s_gate_experts_[e], g_tok_in_f32, g_gate_out_f32, s, scratch_key::kFfnInLowp,
+                TensorTool::gemm(s_gate_experts_[expert_id], g_tok_in_f32, g_gate_out_f32, s, scratch_key::kFfnInLowp,
                                  "ds.gemm.egate");
-                TensorTool::gemm(s_up_experts_[e], g_tok_in_f32, g_up_out_f32, s, scratch_key::kFfnInLowp,
+                TensorTool::gemm(s_up_experts_[expert_id], g_tok_in_f32, g_up_out_f32, s, scratch_key::kFfnInLowp,
                                  "ds.gemm.eup");
                 TensorTool::silu_mul(g_gate_out_f32, g_up_out_f32, g_act_f32);
             }
-            TensorTool::gemm(s_down_experts_[e], g_act_f32, g_expert_out_f32, s, scratch_key::kActLowp,
+
+            TensorTool::gemm(s_down_experts_[expert_id], g_act_f32, g_expert_out_f32, s, scratch_key::kActLowp,
                              "ds.gemm.edown");
+
             auto g_tok_moe_f32 = GPUTensor(g_moe_f32, token_offset, {1, hidden_size});
             if (decode_device) {
                 // 权重指针指向 device 端 top_w[r]，avoid host readback。

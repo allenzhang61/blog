@@ -220,7 +220,7 @@ TEST(LaunchQuantMatmulTest, ComputesQ80MultipleRows) {
     ASSERT_EQ(cudaSuccess, d_x.copy_from(x));
 
     launch_quant_matmul(DType::Q8_0, d_weight.get(), row_bytes, d_x.get(), d_out.get(),
-                        out_dim, in_dim, m, false);
+                        out_dim, in_dim, m);
 
     ASSERT_EQ(cudaSuccess, cudaGetLastError());
     ASSERT_EQ(cudaSuccess, cudaDeviceSynchronize());
@@ -646,7 +646,7 @@ TEST(LaunchQuantSwiGLUIndexedQ81Test, MatchesSeparateQ81GateUpForQ4K) {
     launch_quantize_q8_1(d_x.get(), d_x_q8_1.get(), in_dim, 1);
     launch_quant_swiglu_indexed(DType::Q4_K, d_gate.get(), d_up.get(), expert_bytes, expert_bytes,
                                 row_bytes, row_bytes, d_x.get(), d_expert_ids.get(),
-                                d_out_f32.get(), k, ffn_dim, in_dim, false);
+                                d_out_f32.get(), k, ffn_dim, in_dim);
     launch_quant_swiglu_indexed_block(DType::Q4_K, d_gate.get(), d_up.get(), expert_bytes, expert_bytes,
                                       row_bytes, row_bytes, d_x.get(), d_expert_ids.get(),
                                       d_out_block.get(), k, ffn_dim, in_dim);

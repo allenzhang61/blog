@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 class CudaScratch;
 
@@ -18,6 +19,14 @@ public:
     // s_weight: [out_dim, in_dim]，g_input/g_output 均为 GPU float 激活视图。
     static void gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                      CudaScratch &scratch, const std::string &lowp_key, const char *name = "");
+    // 量化权重 safe path：先反量化到 F16，输入也转 F16，再交给 cuBLAS。
+    static void safe_dequant_gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
+                                  const GPUTensor &g_output_f32, CudaScratch &scratch,
+                                  const std::string &lowp_key, const char *name = "");
+    // 量化直通 path：权重保持量化格式，kernel 内按需反量化/整数点积。
+    static void quant_direct_gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
+                                  const GPUTensor &g_output_f32, CudaScratch &scratch,
+                                  const std::string &lowp_key, const char *name = "");
 
     // 把 f32 输入按权重 dtype 转一次低精度并写入 scratch[lowp_key]，返回该 lowp buffer 指针与其 cuda 类型。
     // 供多个共享同一输入的 GEMM 复用，避免对同一份激活重复做 f32->bf16/f16 转换。
@@ -31,8 +40,11 @@ public:
                           const GPUTensor &g_output_f32, const char *name = "");
 
     // DeepSeek MoE decode 实验路径：量化 gate/up 同输入 GEMV + SiLU 融合。
-    // 成功接管时返回 true；不满足量化/shape/decode 条件时返回 false，由调用方 fallback。
-    static bool quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
+    // can_quant_swiglu 只判断是否可由量化直通接管；quant_swiglu 在判断通过后执行实际计算。
+    static bool can_quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
+                                 const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
+                                 const char *name = "");
+    static void quant_swiglu(const StorageTensor &s_gate_weight, const StorageTensor &s_up_weight,
                              const GPUTensor &g_input_f32, const GPUTensor &g_act_f32,
                              const char *name = "");
     static bool quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
