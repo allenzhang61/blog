@@ -10,6 +10,7 @@
 #include "utils/stats/WeightLoadTracker.h"
 
 #include <chrono>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -118,7 +119,7 @@ CudaWeightPool::~CudaWeightPool() {
 CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight, bool use_storage_view) {
     auto found = items_.find(s_weight.name);
     if (found != items_.end()) {
-        return &found->second;
+        return found->second.get();
     }
 
     if (use_storage_view && s_weight.is_storage_slice()) {
@@ -126,16 +127,22 @@ CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight, bool us
                               s_weight.dtype, s_weight.storage_nbytes());
         storage.name = s_weight.storage_name();
         CudaWeight *base = cached_weight(storage);
+        auto base_found = items_.find(storage.name);
+        if (base == nullptr || base_found == items_.end()) {
+            throw std::runtime_error("CudaWeightPool 创建 storage view 失败: " + s_weight.name);
+        }
         auto view = CudaWeight::make_view(
             static_cast<uint8_t *>(base->ptr) + s_weight.storage_byte_offset(),
             s_weight.nbytes,
             cuda_type_for(s_weight),
             s_weight.dtype,
             Quant::num_elements(s_weight),
-            s_weight.name);
-        auto [it, inserted] = items_.emplace(s_weight.name, std::move(view));
+            s_weight.name,
+            base_found->second);
+        auto view_ptr = std::make_shared<CudaWeight>(std::move(view));
+        auto [it, inserted] = items_.emplace(s_weight.name, std::move(view_ptr));
         (void) inserted;
-        return &it->second;
+        return it->second.get();
     }
 
     size_t bytes = s_weight.nbytes;
@@ -146,16 +153,16 @@ CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight, bool us
         }
         bytes = elems * dtype_size_for(s_weight);
     }
-    CudaWeight device;
-    device.bytes = bytes;
-    device.type = cuda_type_for(s_weight);
-    device.dtype = s_weight.dtype;
-    device.num_elements = Quant::num_elements(s_weight);
-    device.name = s_weight.name;
+    auto device = std::make_shared<CudaWeight>();
+    device->bytes = bytes;
+    device->type = cuda_type_for(s_weight);
+    device->dtype = s_weight.dtype;
+    device->num_elements = Quant::num_elements(s_weight);
+    device->name = s_weight.name;
     double malloc_ms = 0.0;
-    cuda_malloc_timed(&device.ptr, bytes, s_weight.name, tracker_ != nullptr, malloc_ms);
+    cuda_malloc_timed(&device->ptr, bytes, s_weight.name, tracker_ != nullptr, malloc_ms);
     double h2d_ms = 0.0;
-    memcpy_h2d_timed(device.ptr, s_weight.data(), bytes, s_weight.name, tracker_ != nullptr, h2d_ms);
+    memcpy_h2d_timed(device->ptr, s_weight.data(), bytes, s_weight.name, tracker_ != nullptr, h2d_ms);
     auto [it, inserted] = items_.emplace(s_weight.name, std::move(device));
     bytes_ += bytes;
     (void) inserted;
@@ -164,7 +171,7 @@ CudaWeight *CudaWeightPool::cached_weight(const StorageTensor &s_weight, bool us
         tracker_->record(WeightLoadEventKind::Alloc, s_weight.name, bytes, malloc_ms, bytes_);
         tracker_->record(WeightLoadEventKind::Upload, s_weight.name, bytes, h2d_ms, bytes_);
     }
-    return &it->second;
+    return it->second.get();
 }
 
 CudaWeight *CudaWeightPool::find_cached_weight(const StorageTensor &s_weight) {
@@ -172,5 +179,5 @@ CudaWeight *CudaWeightPool::find_cached_weight(const StorageTensor &s_weight) {
     if (found == items_.end()) {
         return nullptr;
     }
-    return &found->second;
+    return found->second.get();
 }

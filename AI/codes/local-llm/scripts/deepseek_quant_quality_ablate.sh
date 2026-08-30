@@ -31,11 +31,3 @@ STORY_PROMPT='Write a short story about a robot learning to paint.'
 
 run_case "preset_france" "${FRANCE_PROMPT}"
 run_case "preset_story" "${STORY_PROMPT}"
-run_case "prefill_q8_1_story" "${STORY_PROMPT}" \
-  LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1
-run_case "safe_prefill_router_story" "${STORY_PROMPT}" \
-  LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1 \
-  LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS=ds.gemm.router
-run_case "safe_prefill_kvb_story" "${STORY_PROMPT}" \
-  LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1 \
-  LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS=ds.gemm.kv_b

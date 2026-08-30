@@ -15,20 +15,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-
-#include <cuda_runtime.h>
-
-namespace {
-    bool env_flag_enabled(const char *key) {
-        const char *env = std::getenv(key);
-        return env != nullptr && std::atoi(env) > 0;
-    }
-
-    bool should_use_device_indexed_moe() {
-        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE");
-    }
-} // namespace
 
 MoERouter::MoERouter(const DeepseekLayerWeights &weights, const DeepseekConfig &config)
     : config_(config), lw_(weights) {
@@ -56,16 +42,12 @@ MoERoute MoERouter::forward(DeepseekSession &session, const GPUTensor &g_normed_
     MoERoute route;
     route.d_expert_ids_i32 = g_top_idx_i32.data<int>();
     if (input_size == 1) {
-        if (should_use_device_indexed_moe()) {
-            route.d_weights_f32 = g_top_w_f32.data<float>();
-            route.decode_device = true;
-            route.decode_device_indexed = true;
-            return route;
-        }
-        route.c_expert_ids_i32 = g_top_idx_i32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeExpertIds, "ds.moe.idx");
-        // decode：top_w 不回读 host，保留 device 指针供加权累加 kernel 直接读取。
+        // decode：默认走 correctness-first indexed 入口；top_idx 在 TensorTool 内回读，
+        // top_w 仍保留 device 指针供加权累加 kernel 直接读取。
         route.d_weights_f32 = g_top_w_f32.data<float>();
         route.decode_device = true;
+        route.decode_device_indexed = true;
+        return route;
     } else {
         route.c_expert_ids_i32 = g_top_idx_i32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeExpertIds, "ds.moe.idx");
         route.c_weights_f32 = g_top_w_f32.to_host(session.cpu_scratch, cpu_scratch_key::kMoeWeights, "ds.moe.w");

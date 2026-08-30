@@ -49,8 +49,8 @@ public:
                              const char *name = "");
     static bool quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
                                const GPUTensor &g_output_f32, const char *name = "");
-    // DeepSeek routed MoE decode 的 device-indexed 快路径：top-k expert id/weight 保持在 GPU 上，
-    // 依次执行 gate/up 量化 GEMV + SiLU、act Q8_1 量化、down projection，并累加到 g_out_f32。
+    // DeepSeek routed MoE decode 的 correctness-first indexed 入口：expert id 从 GPU 回读，
+    // route weight 保持在 GPU 上；专家计算复用普通逐 expert quant-direct 路径。
     // 成功接管时返回 true；不满足量化/shape/decode 条件时返回 false，由调用方 fallback。
     static bool moe_routed_decode_indexed(const StorageTensor &s_gate_exps, const StorageTensor &s_up_exps,
                                           const StorageTensor &s_down_exps, const GPUTensor &g_input_f32,

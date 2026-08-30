@@ -74,12 +74,12 @@ prompt:  User: What is the capital of France?\n\nAssistant:
 | --- | --- | ---: | ---: | ---: |
 | llama.cpp | `llama-bench -ngl -1 -p 10 -n 128 -r 3` | 715.26 ± 210.15 t/s | **232.33 ± 0.69 t/s** | 1.0x |
 | local-llm（最新默认：correctness-safe） | prompt 实测 10 tokens，`--max-output-tokens 128` | — | **≈ 4.0 t/s** | **≈ 0.017x（慢约 58x）** |
-| local-llm（显式实验：`edown+sdown` 直通） | 同 prompt，`LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS=edown,sdown` | — | **≈ 4.89 t/s** | **≈ 0.021x（慢约 47.5x）** |
+| local-llm（历史实验：`edown+sdown` 直通） | 同 prompt，历史 `LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS=edown,sdown` | — | **≈ 4.89 t/s** | **≈ 0.021x（慢约 47.5x）** |
 | local-llm（修复后基线） | `--max-output-tokens 128` 墙钟 | — | **≈ 3.66 t/s** | **≈ 0.016x（慢约 63.5x）** |
 
 > llama-bench 是纯稳态生成口径；local-llm 为 warmup 后墙钟 decode 平均。两者均全量 offload 到 GPU。
 
-最新 correctness-safe 默认路径与 llama.cpp 的 decode 差距约 **58 倍**；显式打开 `edown/sdown` 直通可到约 **47.5 倍**，但不作为默认正确性/稳定性路径。DeepSeek 路径尚未做 llama.cpp 的 device-indexed MoE 量化直算与高效调度，当前瓶颈集中在 **MoE 逐 token / 逐专家的小 GEMM + host 回读**、缺少 CUDA Graph、以及大量小 kernel launch。
+最新 correctness-safe 默认路径与 llama.cpp 的 decode 差距约 **58 倍**；历史上显式打开 `edown/sdown` 直通可到约 **47.5 倍**。当前 `LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 已默认让 decode GEMV 走 `quant_direct_gemm()`，但仍受 MoE 逐 token / 逐专家的小 GEMM、host 回读、缺少 CUDA Graph、以及大量小 kernel launch 限制。
 
 ### 瓶颈定位（`--profile` 采样）
 
@@ -165,7 +165,7 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 | 基线（修复后） | 正确性对齐 | 3.66 | 1.0x | 0.016x |
 | P0（权重留 device） | decode 时 MoE top_w 不回读 host，加权累加直接读 device 权重 | 3.70 | ~1.0x | 0.016x |
 | 当前默认 | device argmax + routed expert view 预缓存 + correctness-safe dequant path | ~4.0 | ~1.09x | 0.017x |
-| 显式实验 | `LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS=edown,sdown` 选择性量化直通 | 4.89 | 1.34x | 0.021x |
+| 历史实验 | `LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS=edown,sdown` 选择性量化直通 | 4.89 | 1.34x | 0.021x |
 
 ### P0 实测与结论：单点消同步不足以撬动 decode
 
@@ -202,7 +202,7 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 
 ## 四、量化直算调研与第一阶段落地
 
-针对 P1 调研定位的根本约束，重构了 GEMM 与 Embedding 的权重访问路径，探索从「量化权重 → 反量化成 F16 → cuBLAS」改为**「量化权重常驻 device + 量化直算 kernel（on-the-fly 解块）」**。但 DeepSeek 的 greedy 输出对逐层数值漂移非常敏感，后续 exact-output 与 trace 对拍发现直通会从第一层 MoE 开始引入微差，因此当前默认策略改为：**Embedding 保持量化查表；DeepSeek 层内 GEMM 默认使用 correctness-safe dequant+cuBLAS；量化直通只保留为显式实验 allowlist**。
+针对 P1 调研定位的根本约束，重构了 GEMM 与 Embedding 的权重访问路径，探索从「量化权重 → 反量化成 F16 → cuBLAS」改为**「量化权重常驻 device + 量化直算 kernel（on-the-fly 解块）」**。但 DeepSeek 的 greedy 输出对逐层数值漂移非常敏感，后续 exact-output 与 trace 对拍发现直通会从第一层 MoE 开始引入微差，因此当前默认策略改为：**Embedding 保持量化查表；DeepSeek 层内 GEMM 默认使用 correctness-safe dequant+cuBLAS；`LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 时 decode GEMV 默认走 `quant_direct_gemm()`，prefill 仍按显式 prefill 直通开关控制**。
 
 ### 1. 量化直算 GEMM kernel（`quant_gemv_kernel`）
 
@@ -210,7 +210,7 @@ LOCAL_LLM_CUDA_DEQUANT_POOL_GB=1 \
 
 - 每个 warp 负责一个输出行 `o`，32 lane 沿 `in_dim` 分工点积后 warp 归约；内层循环 M 个 token（decode M=1、prefill M>1 通用）。
 - 逐 dtype 提供 `q4k_at / q6k_at / q50_at / q80_at` 解块函数，块布局与对应 `dequantize_*` kernel 对齐（Q4_K 144B/256、Q6_K 210B/256、Q5_0 22B/32、Q8_0 34B/32）。
-- 入口 [`TensorTool::gemm`](../src/tensor/TensorTool.cpp) 对量化权重支持直算；DeepSeek `ds.gemm.*` 默认仍使用 safe path，可用 `LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS=edown,sdown,egate,eup` 逐项测试直通候选，也可用 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV=1` 测试全量直通。
+- 入口 [`TensorTool::gemm`](../src/tensor/TensorTool.cpp) 对量化权重支持直算；DeepSeek `ds.gemm.*` 默认仍使用 safe path，`LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 时 decode GEMV（`m == 1`）默认走 `quant_direct_gemm()`，prefill 保持 safe path。
 - Q8_1 activation 相关 kernel 仅保留给 MoE/MLA 等专项路径；generic `quant_direct_gemm()` 当前统一使用 F32 activation + on-the-fly weight dequant，避免在通用 GEMM 调度中混入额外动态量化误差。当前 Q4_K/Q6_K/Q5_0/Q8_0 均按逐元素权重解码路径执行。
 
 ### 2. 量化直算 Embedding（`quant_embedding_kernel`）
@@ -310,11 +310,11 @@ absorption 性能轮廓：64-token 技术长文 prompt 下，expanded 路径 `ds
 
 阶段 3 初测：
 
-- 实现：新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT=1`，仅在 `ds.gemm.* && m > 1` 时跳过 `try_dequant()`；初版 `launch_quant_matmul` 是 float activation + on-the-fly weight dequant，每个 warp 负责一个 `(token,row)` 输出元素。
+- 历史实验：曾新增 prefill quant-direct 开关，仅在 `ds.gemm.* && m > 1` 时跳过 `try_dequant()`；初版 `launch_quant_matmul` 是 float activation + on-the-fly weight dequant，每个 warp 负责一个 `(token,row)` 输出元素。该 prefill 开关现已移除，prefill 回到 safe path。
 - llama.cpp 对齐修正：llama.cpp 的 CUDA MMQ 不是 float activation 逐元素直乘，而是先把 activation 动态量化成 Q8_1，再用 quant weight × Q8_1 activation 做 block dot / tiled MMQ。local-llm 已新增 `launch_quant_matmul_q8_1`，阶段 3 现在先 `launch_quantize_q8_1`，再走 Q8_1 prefill matmul；旧 float `launch_quant_matmul` 保留为 fallback/单测路径。
 - 覆盖：prefill 中的 MLA、dense FFN、router、shared experts 等 `m > 1` GEMM 可走 quant matmul；routed experts 当前代码仍逐 token 调用，`m == 1` 时依赖阶段 1 decode quant-direct 开关。
 - 单测：新增 `LaunchQuantMatmulTest.ComputesQ80MultipleRows` 和 `LaunchQuantMatmulQ81Test.ComputesQ80MultipleRows`，分别验证 float activation matmul 与 Q8_1 activation matmul；211 上两者均通过。
-- 命令：`LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 是 DeepSeek 量化直通总开关；当前 generic `quant_direct_gemm()` 已回退为 F32 activation + on-the-fly weight dequant，不再包含 decode Q8_1 activation 分支。旧的 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET=1` 暂保留兼容。仍可用 `LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS` 把 prefill 单个 op 回退 safe path。
+- 命令：`LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 是 DeepSeek 量化直通总开关；当前 generic `quant_direct_gemm()` 已回退为 F32 activation + on-the-fly weight dequant，不再包含 decode Q8_1 activation 分支。prefill quant-direct 及其 exclude ops 开关已移除。
 - 结果：程序可跑完，实际 decode 16 tokens，stdout 吞吐约 `41.3 t/s`；France prompt 输出 `巴黎，法国的首都是巴黎...` 或同义事实回答，不再是无关英文续写，但仍不等于 exact-output 期望 `The capital of France is Paris.`。
 - 显存：packed expert 修复后，阶段 3 France prompt 末值 `weight_allocs=377`，`CudaWeightPool` 驻留约 `9880 MiB`，`device used≈10382 MiB`；没有 F16 dequant 大缓存依赖。
 - 长跑：packed expert 修复后 128 token story prompt 可跑完且不 OOM；在修复 MLA latent gather 的 stream 顺序问题后，无 trace quant-direct 也可稳定续写英文 story，stdout 吞吐约 `21.2 t/s`。
@@ -325,7 +325,7 @@ absorption 性能轮廓：64-token 技术长文 prompt 下，expanded 路径 `ds
 - Q8_1 `sum` 对齐：llama.cpp 的 CUDA decode/MMVQ `vec_dot_q4_K_q8_1_impl_vmmq` 并不使用 `block_q8_1.ds.y`，而是在 dot 内对 q8 `qs` 求和后乘 `d8`；prefill/MMQ 的 `vec_dot_q4_K_q8_1_impl_mmq` 才使用 `ds8.y` 的 raw `sum(x)`。local 新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_Q8_1_RAW_SUM=1` 做隔离 A/B：只在 prefill Q8_1 quantize 写 raw `sum(x)`，decode 仍保留 `d * sum(qs)`。France pos=3 safe/quant 对拍显示 raw-sum prefill 反而更差（top-k mismatch `12 -> 16`，large tensor diffs `86 -> 294`，logits `first_diff 0.122 -> 0.340`、`rms_rel 0.0069 -> 0.0115`），因此不作为默认；当前默认继续使用 `d * sum(qs)`。补充单测已覆盖 Q4_K × Q8_1 的 scale/min compensation 与 Q6_K × Q8_1 的 scale group，证明 local block dot 公式本身自洽。后续若要更贴近 llama.cpp MMQ，应整体实现 `block_q8_1_mmq` 144B 打包、`I=128/J=8..128/K=256` tiled MMQ 和对应累加顺序，而不是单独改 Q8_1 header。
 - Full tiled MMQ 实验：`q8_1_mmq` activation 已改成 llama.cpp kernel 期望的 group-major 布局 `[group][token][block_q8_1_mmq]`，而不是 local 早期实验的 `[token][group]`。`launch_quant_matmul_q8_1_mmq()` 现在使用 fixed `I=128,J=8,K=256`：每个 CUDA block 覆盖 128 个输出行和 8 个 token，8 个 warp 分别对应 8 个 token，shared memory staging 当前 K-superblock 的两个 128-wide Q8_1 activation group，以及 Q4_K/Q6_K 的 padded `tile_x`。Q4_K 使用 `x_qs[i*(32+1)+...]`、`x_dm[i]`、`x_sc[i*4+i/8+...]` 三段；Q6_K 使用 `x_qs[i*(64+1)+...]`、`x_df[i]`、`x_sc[i*4+i/8+...]` 三段，内层用 `__dp4a` 做 4-way int8 dot。按“llama.cpp 正确性优先”原则，tiled MMQ 使用 raw `sum(x)` 作为 Q4_K min compensation，并已接入 `LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1`。France pos=3 与 llama.cpp mapped trace 对比：full tile + DP4A 的 logits `first_diff=0.738`、`rms_rel=3.28%`、`sum_diff=19827`，比早期 tiled raw-sum 的 `first_diff=0.780`、`rms_rel=3.67%` 有所改善；64-token story 可稳定输出，当前 smoke 吞吐约 `48.3 t/s`。当前仍只固定 `J=8`，尚未实现 llama.cpp 的动态 `J=8..128` 选择、全部模板分发和 stream-k/fixup。
 - decode Q8_1 覆盖补齐：`LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 覆盖 DeepSeek 层内 `ds.gemm.*` 的 decode Q8_1 GEMV，同时把通用 op 名 `"lm_head"` 纳入 Q8_1 GEMV，更接近 llama.cpp decode/MMVQ 的 quant weight × Q8_1 activation 数据流。旧的 `LOCAL_LLM_STRICT_NO_DEQUANT=1` 验证开关已删除；quant-direct 模式下是否触发 `try_dequant()` 由分发逻辑本身保证，普通 correctness-safe 默认仍允许 safe dequant。211 上 stable quant-direct 入口的 France profile 可见 `lm_head` 命中，输出 `巴黎，还是法国...`，16-token profile 约 `54.6 t/s`。
-- decode device-indexed MoE：新增 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE=1`，并由 `LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 自动启用。decode `input_size == 1` 时 `MoERouter` 不再把 `top_idx` 回读到 host，而是把 `top_idx/top_w` 的 device 指针传给 `RoutedExperts`；`RoutedExperts` 优先调用 `TensorTool::moe_routed_decode_indexed()`。该路径分两段：先用 `launch_quant_swiglu_indexed()` 按 device expert id 一次生成 6 个 route 的 `[k, expert_ffn]` act，再把 act 量化成 Q8_1，并用 `launch_quant_down_q8_1_indexed_accum()` 一次完成 routed down 与按 route 权重累加。下投影权重实测为 `Q8_0`，因此 indexed down 已补齐 `Q4_K/Q6_K/Q5_0/Q8_0` 分发；输出行内串行遍历 route，避免 atomic 和非确定累加顺序。211 上 `LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1` 的 profile 中 `ds.gemm.e_indexed_moe` 为 52 次（2 次采样 × 26 个 MoE 层），decode routed expert 已接管；仍存在的 `ds.gemm.e_swiglu/edown` 624 次来自 4-token prefill 的 `4 × 26 × 6`，prefill routed experts 后续再单独处理。
+- decode indexed MoE：旧 device-indexed MoE 实验开关已移除，decode `input_size == 1` 默认进入 `TensorTool::moe_routed_decode_indexed()`。该入口现在是 correctness-first 实现：只把 `top_w` 保留在 device 供加权累加，`top_idx` 在函数内部回读到 host，然后按 expert slice 复用普通 `quant_swiglu()`、`quant_direct_gemm(edown)`、`moe_accumulate_device()` 路径，避免旧 fused indexed kernel 导致的 greedy 重复退化。旧 `launch_quant_swiglu_indexed()` / `launch_quant_down_q8_1_indexed_accum()` 路径仍保留为未接入代码，后续若要恢复 fast path 需要重新做逐层对拍。
 - routed fused down 实验：第一版 `launch_quant_down_f32_indexed_accum()` 在 down kernel 内按 Q8_1 语义临时量化 F32 act，并立刻执行 indexed down projection + `route_weights` 加权累加，意图省掉 `launch_quantize_q8_1()` 的全局写回/读回和一次 kernel launch。Q8_0/Q4_K/Q6_K focused tests 均能与旧 `quantize_q8_1 + quant_down_q8_1_indexed_accum` 路径对齐；但 128-token profile 中旧 F32 fused 只有约 **53.6 t/s**，关闭该开关约 **62.7 t/s**，`ds.gemm.e_indexed_moe` 从约 **44.1 ms** 升到 **66.9 ms**。原因是当前 block 只能在同一个 hidden row tile 内复用 act Q8_1 block，不同 row tile 会重复量化同一 route/block，`__syncthreads()` 与重复量化成本超过了省下的全局内存访问；该路径保留为 `LOCAL_LLM_EXPERIMENTAL_FUSED_MOE_DOWN_F32=1` 调试开关。
 - routed Q8_1 shared staging 实验：第二版保留独立 `launch_quantize_q8_1()`，确保每个 route 的 act 只量化一次；新增 `launch_quant_down_q8_1_indexed_accum_shared()`，在 down kernel 内把当前 route/qblk 的 36B Q8_1 block staging 到 shared memory，让同一 CUDA block 内的多条 hidden row warp 复用。该版本消除了旧 F32 fused 的重复量化，128-token A/B 为默认 **62.6 t/s**、shared staging **58.0 t/s**，仍慢于默认；64-token 采样中 `ds.gemm.e_indexed_moe` 平均约 **0.208 ms -> 0.260 ms**。说明当前瓶颈不主要是 Q8_1 act global load，而 shared staging 引入的 `__syncthreads()` 和 block 布局限制仍抵消了复用收益；该路径由 `LOCAL_LLM_EXPERIMENTAL_FUSED_MOE_DOWN=1` 显式启用，默认关闭。
 - routed e_swiglu 实验：新增 `launch_quant_swiglu_indexed_q8_1()`，先把 MoE 输入 hidden 量化成一次 Q8_1，再用 Q8_1 block dot 同时计算 gate/up/SwiGLU；focused test 对齐“两次 `launch_quant_gemv_q8_1()` + `launch_silu_mul()`”参考路径。但 128-token profile 中该路径改变 greedy 轨迹并提前 EOS，`ds.gemm.e_indexed_moe` 平均约 **0.209 ms -> 0.291 ms**，负收益，保留为 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_Q8_1_SWIGLU=1`。另试 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FAST_SWIGLU=1`，只把 SiLU 的 `expf` 改为 `__expf`，`e_swiglu` 平均几乎不变（约 **0.03249 ms -> 0.03248 ms**），说明 exp 不是主要瓶颈。再试 `LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_BLOCK_SWIGLU=1`，保留 F32 activation 但在 Q4_K/Q6_K block 内聚合 `sum(q*x)`/`sum(x)` 以减少 scale/min 重复读取；focused test 可与旧 F32 indexed kernel 对齐，但 profile 中 `ds.gemm.e_indexed_moe` 平均约 **0.209 ms -> 0.317 ms**，仍明显变慢，默认关闭。

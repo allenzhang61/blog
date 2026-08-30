@@ -27,7 +27,7 @@ CudaWeightDequantPool *global_cuda_weight_dequant_pool() {
 
 size_t CudaWeightDequantPool::cache_limit_bytes() {
     const char *env = std::getenv("LOCAL_LLM_CUDA_DEQUANT_POOL_GB");
-    const double gb = env ? std::max(std::atof(env), 0.0) : 2.0;
+    const double gb = env ? std::max(std::atof(env), 0.0) : 1.0;
     return static_cast<size_t>(gb * 1024.0 * 1024.0 * 1024.0);
 }
 

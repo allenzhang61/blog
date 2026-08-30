@@ -10,6 +10,7 @@
 #include "format/MF.h"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -54,7 +55,7 @@ public:
 
 private:
     // 按 tensor 名称或组合名称索引的 device 权重缓存。
-    std::unordered_map<std::string, CudaWeight> items_;
+    std::unordered_map<std::string, std::shared_ptr<CudaWeight>> items_;
     // items_ 中已缓存权重的总字节数。
     size_t bytes_ = 0;
     // 懒加载追踪器（可选，不拥有）。

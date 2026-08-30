@@ -17,6 +17,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
     int norm_weight_type_of(DType dtype) {
@@ -50,55 +51,19 @@ namespace {
         return env != nullptr && std::atoi(env) > 0;
     }
 
-    bool env_list_contains(const char *key, const std::string &needle) {
-        const char *env = std::getenv(key);
-        if (env == nullptr || env[0] == '\0' || needle.empty()) return false;
-        const std::string list = env;
-        size_t start = 0;
-        while (start <= list.size()) {
-            const size_t comma = list.find(',', start);
-            const std::string item = list.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-            if (!item.empty() && needle.find(item) != std::string::npos) {
-                return true;
-            }
-            if (comma == std::string::npos) break;
-            start = comma + 1;
-        }
-        return false;
-    }
-
     bool is_deepseek_gemm_op(const std::string &op_name) {
         return op_name.rfind("ds.gemm.", 0) == 0;
     }
 
     bool should_use_deepseek_quant_direct() {
-        return env_flag_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT") ||
-               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_Q8_1_QUANT_DIRECT_PRESET");
+        return env_flag_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
     }
 
-    bool should_use_safe_dequant_gemm(const char *name) {
-        if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV")) return false;
-        const std::string op_name = name ? name : "";
-        return is_deepseek_gemm_op(op_name);
-    }
-
-    bool should_force_deepseek_prefill_quant_matmul(const char *name, int m) {
-        if (m <= 1) return false;
+    bool should_use_safe_dequant_gemm(const char *name, int m) {
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
-        if (!env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_QUANT_DIRECT") &&
-            !should_use_deepseek_quant_direct()) return false;
-        if (env_list_contains("LOCAL_LLM_DEEPSEEK_PREFILL_QUANT_DIRECT_EXCLUDE_OPS", op_name)) return false;
+        if (m == 1 && should_use_deepseek_quant_direct()) return false;
         return true;
-    }
-
-    bool should_force_quant_gemv(const char *name) {
-        if (env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_QUANT_GEMV")) return true;
-        const std::string op_name = name ? name : "";
-        if (env_list_contains("LOCAL_LLM_DEEPSEEK_QUANT_GEMV_OPS", op_name)) {
-            return true;
-        }
-        return false;
     }
 
     bool should_use_moe_fused_swiglu(const char *name) {
@@ -106,37 +71,6 @@ namespace {
         if (!is_deepseek_gemm_op(op_name)) return false;
         return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU") ||
                should_use_deepseek_quant_direct();
-    }
-
-    bool should_use_moe_q8_1_swiglu(const char *name) {
-        const std::string op_name = name ? name : "";
-        if (!is_deepseek_gemm_op(op_name)) return false;
-        return should_use_deepseek_quant_direct() &&
-               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_Q8_1_SWIGLU") &&
-               !env_flag_enabled("LOCAL_LLM_DISABLE_DEEPSEEK_MOE_Q8_1_SWIGLU");
-    }
-
-    bool should_use_moe_block_swiglu(const char *name) {
-        const std::string op_name = name ? name : "";
-        if (!is_deepseek_gemm_op(op_name)) return false;
-        return should_use_deepseek_quant_direct() &&
-               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_BLOCK_SWIGLU");
-    }
-
-    bool should_use_device_indexed_moe() {
-        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_DEVICE_INDEXED_MOE");
-    }
-
-    bool should_use_moe_shared_q8_1_down() {
-        return should_use_deepseek_quant_direct() &&
-               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_FUSED_MOE_DOWN") &&
-               !env_flag_enabled("LOCAL_LLM_DISABLE_FUSED_MOE_DOWN");
-    }
-
-    bool should_use_moe_f32_fused_down() {
-        return should_use_deepseek_quant_direct() &&
-               env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_FUSED_MOE_DOWN_F32") &&
-               !env_flag_enabled("LOCAL_LLM_DISABLE_FUSED_MOE_DOWN");
     }
 
     bool debug_device_indexed_moe() {
@@ -150,17 +84,26 @@ namespace {
         return false;
     }
 
+    StorageTensor expert_tensor_view(const StorageTensor &s_weight, int expert, int n_experts,
+                                     std::vector<int64_t> shape) {
+        const int64_t n_per_expert = s_weight.numel() / n_experts;
+        const size_t bytes_per_expert = s_weight.nbytes / static_cast<size_t>(n_experts);
+        return s_weight.slice(static_cast<size_t>(expert) * bytes_per_expert,
+                              shape.empty() ? std::vector<int64_t>{n_per_expert} : std::move(shape),
+                              bytes_per_expert,
+                              s_weight.name + ".e" + std::to_string(expert));
+    }
+
 } // namespace
 
 //w*x=y
 void TensorTool::gemm(const StorageTensor &s_weight, const GPUTensor &g_input_f32, const GPUTensor &g_output_f32,
                       CudaScratch &scratch, const std::string &lowp_key, const char *name) {
-    // DeepSeek 层内 GEMM 对逐层数值漂移非常敏感，默认沿用已验证正确的
-    // dequantize-to-F16 + cuBLAS 路径；量化直算保留为显式实验开关。
+    // DeepSeek 层内 GEMM 默认沿用已验证正确的 dequantize-to-F16 + cuBLAS；
+    // LOCAL_LLM_DEEPSEEK_QUANT_DIRECT=1 时，仅 decode GEMV 默认走 quant_direct_gemm。
     if (Quant::is_quantized_dtype(s_weight.dtype)) {
         const int m = static_cast<int>(g_input_f32.rows());
-        if (should_use_safe_dequant_gemm(name) && !should_force_quant_gemv(name) &&
-            !should_force_deepseek_prefill_quant_matmul(name, m)) {
+        if (should_use_safe_dequant_gemm(name, m)) {
             safe_dequant_gemm(s_weight, g_input_f32, g_output_f32, scratch, lowp_key, name);
             return;
         }
@@ -200,7 +143,7 @@ void TensorTool::safe_dequant_gemm(const StorageTensor &s_weight, const GPUTenso
     const int out_dim = static_cast<int>(s_weight.shape[0]);
     const int in_dim = static_cast<int>(s_weight.shape[1]);
     const int m = static_cast<int>(g_input_f32.rows());
-    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, false);
+    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight);
     if (q == nullptr) {
         throw std::runtime_error("TensorTool::safe_dequant_gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
     }
@@ -219,7 +162,7 @@ void TensorTool::quant_direct_gemm(const StorageTensor &s_weight, const GPUTenso
     const int out_dim = static_cast<int>(s_weight.shape[0]);
     const int in_dim = static_cast<int>(s_weight.shape[1]);
     const int m = static_cast<int>(g_input_f32.rows());
-    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, false);
+    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight);
     if (q == nullptr) {
         throw std::runtime_error("TensorTool::quant_direct_gemm 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
     }
@@ -298,8 +241,8 @@ void TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageT
                               const char *name) {
     const int ffn_dim = static_cast<int>(s_gate_weight.shape[0]);
     const int in_dim = static_cast<int>(s_gate_weight.shape[1]);
-    const CudaWeight *gate = global_cuda_weight_pool().cached_weight(s_gate_weight, false);
-    const CudaWeight *up = global_cuda_weight_pool().cached_weight(s_up_weight, false);
+    const CudaWeight *gate = global_cuda_weight_pool().cached_weight(s_gate_weight);
+    const CudaWeight *up = global_cuda_weight_pool().cached_weight(s_up_weight);
     if (gate == nullptr || up == nullptr) {
         throw std::runtime_error("TensorTool::quant_swiglu 量化权重超过 CudaWeightPool 上限");
     }
@@ -326,7 +269,7 @@ bool TensorTool::quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &
     const int in_dim = static_cast<int>(s_weight.shape[1]);
     if (g_input_f32.cols() != in_dim || g_output_f32.cols() != out_dim) return false;
 
-    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight, false);
+    const CudaWeight *q = global_cuda_weight_pool().cached_weight(s_weight);
     if (q == nullptr) {
         throw std::runtime_error("TensorTool::quant_gemv_add 量化权重超过 CudaWeightPool 上限: " + s_weight.name);
     }
@@ -344,7 +287,6 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
                                            const GPUTensor &g_out_f32, CudaScratch &scratch,
                                            int n_experts, int k, const char *name) {
     /*参数校验*/
-    if (!should_use_device_indexed_moe()) return device_indexed_moe_reject("disabled");
     if (g_input_f32.rows() != 1 || g_input_f32.dtype != DType::F32 || g_out_f32.dtype != DType::F32) {
         return device_indexed_moe_reject("not decode F32 input/output");
     }
@@ -375,71 +317,38 @@ bool TensorTool::moe_routed_decode_indexed(const StorageTensor &s_gate_exps, con
         return device_indexed_moe_reject("expert tensor dimensions mismatch");
     }
 
-    const GPUTensor g_gate_exps = s_gate_exps.to_gpu(false);
-    const GPUTensor g_up_exps = s_up_exps.to_gpu(false);
-    const GPUTensor g_down_exps = s_down_exps.to_gpu(false);
+    // Correctness-first indexed MoE: only keep route weights on device, but
+    // mirror the non-indexed decode path for expert math to avoid fused-kernel drift.
+    std::vector<int> expert_ids(static_cast<size_t>(k));
+    cuda_memcpy_d2h(expert_ids.data(), d_expert_ids,
+                    static_cast<size_t>(k) * sizeof(int), "ds.moe.indexed.idx");
 
-    const size_t gate_expert_bytes = s_gate_exps.nbytes / static_cast<size_t>(n_experts);
-    const size_t up_expert_bytes = s_up_exps.nbytes / static_cast<size_t>(n_experts);
-    const size_t down_expert_bytes = s_down_exps.nbytes / static_cast<size_t>(n_experts);
-    const size_t gate_row_bytes = gate_expert_bytes / static_cast<size_t>(ffn_dim);
-    const size_t up_row_bytes = up_expert_bytes / static_cast<size_t>(ffn_dim);
-    const size_t down_row_bytes = down_expert_bytes / static_cast<size_t>(hidden_size);
-
-    ScopedGpuTimer timer(name && name[0] ? name : "ds.gemm.e_indexed_moe",
-                         g_gate_exps.nbytes + g_up_exps.nbytes + g_down_exps.nbytes);
-    auto g_act_f32 = GPUTensor(scratch, scratch_key::kAct, {k, ffn_dim}, DType::F32);
-    if (should_use_moe_q8_1_swiglu(name)) {
-        const size_t input_q8_bytes = q8_1_row_bytes(in_dim);
-        uint8_t *d_input_q8_1 = scratch.ensure<uint8_t>(
-            std::string(scratch_key::kInputQ8_1) + ".moe.indexed", input_q8_bytes);
-        launch_quantize_q8_1(g_input_f32.data<float>(), d_input_q8_1, in_dim, 1);
-        launch_quant_swiglu_indexed_q8_1(s_gate_exps.dtype,
-                                         static_cast<const uint8_t *>(g_gate_exps.data()),
-                                         static_cast<const uint8_t *>(g_up_exps.data()),
-                                         gate_expert_bytes, up_expert_bytes,
-                                         gate_row_bytes, up_row_bytes, d_input_q8_1,
-                                         d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim);
-    } else if (should_use_moe_block_swiglu(name)) {
-        launch_quant_swiglu_indexed_block(s_gate_exps.dtype,
-                                          static_cast<const uint8_t *>(g_gate_exps.data()),
-                                          static_cast<const uint8_t *>(g_up_exps.data()),
-                                          gate_expert_bytes, up_expert_bytes,
-                                          gate_row_bytes, up_row_bytes, g_input_f32.data<float>(),
-                                          d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim,
-                                          false);
-    } else {
-        launch_quant_swiglu_indexed(s_gate_exps.dtype,
-                                    static_cast<const uint8_t *>(g_gate_exps.data()),
-                                    static_cast<const uint8_t *>(g_up_exps.data()),
-                                    gate_expert_bytes, up_expert_bytes,
-                                    gate_row_bytes, up_row_bytes, g_input_f32.data<float>(),
-                                    d_expert_ids, g_act_f32.data<float>(), k, ffn_dim, in_dim);
-    }
-
-    if (should_use_moe_f32_fused_down()) {
-        launch_quant_down_f32_indexed_accum(s_down_exps.dtype,
-                                            static_cast<const uint8_t *>(g_down_exps.data()),
-                                            down_expert_bytes, down_row_bytes, g_act_f32.data<float>(),
-                                            d_expert_ids, d_weights, g_out_f32.data<float>(),
-                                            k, hidden_size, ffn_dim);
-    } else {
-        const size_t q8_bytes = static_cast<size_t>(k) * q8_1_row_bytes(ffn_dim);
-        uint8_t *d_act_q8_1 = scratch.ensure<uint8_t>(std::string(scratch_key::kActLowp) + ".indexed.q8_1", q8_bytes);
-        launch_quantize_q8_1(g_act_f32.data<float>(), d_act_q8_1, ffn_dim, k);
-        if (should_use_moe_shared_q8_1_down()) {
-            launch_quant_down_q8_1_indexed_accum_shared(s_down_exps.dtype,
-                                                        static_cast<const uint8_t *>(g_down_exps.data()),
-                                                        down_expert_bytes, down_row_bytes, d_act_q8_1,
-                                                        d_expert_ids, d_weights, g_out_f32.data<float>(),
-                                                        k, hidden_size, ffn_dim);
-        } else {
-            launch_quant_down_q8_1_indexed_accum(s_down_exps.dtype,
-                                                 static_cast<const uint8_t *>(g_down_exps.data()),
-                                                 down_expert_bytes, down_row_bytes, d_act_q8_1,
-                                                 d_expert_ids, d_weights, g_out_f32.data<float>(),
-                                                 k, hidden_size, ffn_dim);
+    ScopedGpuTimer timer(name && name[0] ? name : "ds.gemm.e_indexed_moe", 0);
+    auto g_act_f32 = GPUTensor(scratch, scratch_key::kAct, {1, ffn_dim}, DType::F32);
+    auto g_expert_out_f32 = GPUTensor(scratch, scratch_key::kExpertOut, {1, hidden_size}, DType::F32);
+    for (int r = 0; r < k; ++r) {
+        const int expert_id = expert_ids[static_cast<size_t>(r)];
+        if (expert_id < 0 || expert_id >= n_experts) {
+            throw std::runtime_error("DeepSeek indexed MoE router 返回非法 expert id: route=" +
+                                     std::to_string(r) + " expert=" + std::to_string(expert_id));
         }
+
+        const StorageTensor s_gate = expert_tensor_view(s_gate_exps, expert_id, n_experts, {ffn_dim, in_dim});
+        const StorageTensor s_up = expert_tensor_view(s_up_exps, expert_id, n_experts, {ffn_dim, in_dim});
+        const StorageTensor s_down = expert_tensor_view(s_down_exps, expert_id, n_experts, {hidden_size, ffn_dim});
+
+        if (can_quant_swiglu(s_gate, s_up, g_input_f32, g_act_f32, "ds.gemm.e_swiglu")) {
+            quant_swiglu(s_gate, s_up, g_input_f32, g_act_f32, "ds.gemm.e_swiglu");
+        } else {
+            auto g_gate_out_f32 = GPUTensor(scratch, scratch_key::kGate, {1, ffn_dim}, DType::F32);
+            auto g_up_out_f32 = GPUTensor(scratch, scratch_key::kUp, {1, ffn_dim}, DType::F32);
+            gemm(s_gate, g_input_f32, g_gate_out_f32, scratch, scratch_key::kFfnInLowp, "ds.gemm.egate");
+            gemm(s_up, g_input_f32, g_up_out_f32, scratch, scratch_key::kFfnInLowp, "ds.gemm.eup");
+            silu_mul(g_gate_out_f32, g_up_out_f32, g_act_f32);
+        }
+
+        gemm(s_down, g_act_f32, g_expert_out_f32, scratch, scratch_key::kActLowp, "ds.gemm.edown");
+        moe_accumulate_device(g_expert_out_f32, d_weights + r, g_out_f32);
     }
     return true;
 }
