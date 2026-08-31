@@ -34,7 +34,7 @@ public:
     std::string decode_text(const std::vector<int> &ids) const override { return mf_->tokenizer_decode(ids); }
     SessionBase *create_session(const std::string &text) override;
     int prefill(SessionBase &session) override;
-    int decode(SessionBase &session) override;
+    int decode(SessionBase &session_base) override;
     std::string output(const SessionBase &session) const override;
     const MemoryUsageProvider &memory_usage(const SessionBase &session) const override;
 

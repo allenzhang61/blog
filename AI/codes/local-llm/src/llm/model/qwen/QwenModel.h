@@ -49,7 +49,7 @@ public:
     // prefill：在传入 session 中喂入整段输入 token，跑完各层，返回首个生成 token id。
     int prefill(SessionBase &session) override;
     // decode：喂入 session 中最后一个已生成 token，返回下一个 token id，复用传入的 session。
-    int decode(SessionBase &session) override;
+    int decode(SessionBase &session_base) override;
     std::string output(const SessionBase &session) const override;
 
     const MemoryUsageProvider &memory_usage(const SessionBase &session) const override;

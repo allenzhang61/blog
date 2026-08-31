@@ -167,8 +167,7 @@ public:
                                       int kv_lora, size_t row_bytes, int start_pos, bool store_raw_sum = false,
                                       void *stream = nullptr);
     static void mla_store_latent_q8_1_device_pos(const GPUTensor &g_kv_cache_f32, uint8_t *latent_q8_1_cache,
-                                                 int kv_lora, int qk_rope, size_t row_bytes, const int *d_pos,
-                                                 void *stream = nullptr);
+                                                 int kv_lora, int qk_rope, size_t row_bytes, const int *d_pos);
     static bool mla_absorb_components(const StorageTensor &s_kv_b_weight, const GPUTensor &g_q_f32,
                                       const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
                                       const GPUTensor &g_kv_cache_f32, const GPUTensor &g_q_abs_f32,
@@ -177,8 +176,7 @@ public:
                                       const GPUTensor &g_attn_f32,
                                       const GPUTensor &g_attn_xsum_delta_f32,
                                       int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
-                                      const int *d_pos, int max_seq_len, float softmax_scale,
-                                      void *stream = nullptr);
+                                      const int *d_pos, int max_seq_len, float softmax_scale);
     static bool mla_absorb_decode(const StorageTensor &s_kv_b_weight, const GPUTensor &g_q_f32,
                                   const uint8_t *latent_q8_1_cache, size_t latent_q8_1_row_bytes,
                                   const GPUTensor &g_kv_cache_f32, const GPUTensor &g_attn_f32,
@@ -191,7 +189,7 @@ public:
                                           const GPUTensor &g_attn_f32,
                                           int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
                                           const int *d_pos, int max_seq_len, float softmax_scale,
-                                          CudaScratch &scratch, void *stream = nullptr);
+                                          CudaScratch &scratch);
 
     static void moe_router_topk(const GPUTensor &g_router_logits_f32, const GPUTensor &g_top_idx_i32, const GPUTensor &g_top_w_f32,
                                 int n_experts, int k, float routed_scaling);
@@ -200,10 +198,10 @@ public:
     // 加权累加，权重从 device 读（d_weight 指向 device 端单个 float）：decode 时 top_w 留在 device，
     // 免去每层把权重回读到 host 造成的同步。
     static void moe_accumulate_device(const GPUTensor &g_expert_out_f32, const float *d_weight,
-                                      const GPUTensor &g_out_f32, void *stream = nullptr);
+                                      const GPUTensor &g_out_f32);
 
     // 对 logits[vocab] 求 argmax，把 token id 写到 device 端 d_out_idx（greedy 用，结果留在 device）。
-    static void argmax(const GPUTensor &g_logits_f32, int *d_out_idx, int vocab, void *stream = nullptr);
+    static void argmax(const GPUTensor &g_logits_f32, int *d_out_idx, int vocab);
 };
 
 #endif // LOCAL_LLM_TENSORTOOL_H

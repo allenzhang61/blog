@@ -10,10 +10,10 @@
 #include "backend/cuda/mem/Quant.h"
 #include "backend/cuda/ops/gemm.h"
 #include "backend/cuda/ops/kernel.cuh"
+#include "llm/model/deepseek/DeepseekRuntimeOptions.h"
 #include "tensor/GPUTensor.h"
 #include "utils/stats/ScopedTimer.h"
 
-#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -46,44 +46,26 @@ namespace {
         return g_device_weight.data<uint16_t>();
     }
 
-    bool env_flag_enabled(const char *key) {
-        const char *env = std::getenv(key);
-        return env != nullptr && std::atoi(env) > 0;
-    }
-
-    bool env_flag_default_enabled(const char *key) {
-        const char *env = std::getenv(key);
-        return env == nullptr || std::atoi(env) > 0;
-    }
-
     bool is_deepseek_gemm_op(const std::string &op_name) {
         return op_name.rfind("ds.gemm.", 0) == 0;
-    }
-
-    bool should_use_deepseek_quant_direct() {
-        return env_flag_default_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
     }
 
     bool should_use_safe_dequant_gemm(const char *name, int m) {
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
-        if (m == 1 && should_use_deepseek_quant_direct()) return false;
+        if (m == 1 && deepseek_runtime_options().quant_direct) return false;
         return true;
     }
 
     bool should_use_moe_fused_swiglu(const char *name) {
         const std::string op_name = name ? name : "";
         if (!is_deepseek_gemm_op(op_name)) return false;
-        return env_flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU") ||
-               should_use_deepseek_quant_direct();
-    }
-
-    bool debug_device_indexed_moe() {
-        return env_flag_enabled("LOCAL_LLM_DEBUG_DEVICE_INDEXED_MOE");
+        const DeepseekRuntimeOptions options = deepseek_runtime_options();
+        return options.experimental_moe_fused_swiglu || options.quant_direct;
     }
 
     bool device_indexed_moe_reject(const char *reason) {
-        if (debug_device_indexed_moe()) {
+        if (deepseek_runtime_options().debug_device_indexed_moe) {
             std::cerr << "[device-indexed-moe] fallback: " << reason << std::endl;
         }
         return false;
@@ -264,7 +246,7 @@ void TensorTool::quant_swiglu(const StorageTensor &s_gate_weight, const StorageT
 
 bool TensorTool::quant_gemv_add(const StorageTensor &s_weight, const GPUTensor &g_input_f32,
                                 const GPUTensor &g_output_f32, const char *name) {
-    if (!should_use_deepseek_quant_direct()) return false;
+    if (!deepseek_runtime_options().quant_direct) return false;
     if (g_input_f32.rows() != 1 || g_input_f32.dtype != DType::F32 || g_output_f32.rows() != 1 ||
         g_output_f32.dtype != DType::F32) {
         return false;
@@ -640,8 +622,7 @@ void TensorTool::mla_store_latent_q8_1(const GPUTensor &g_latent_f32, uint8_t *l
 }
 
 void TensorTool::mla_store_latent_q8_1_device_pos(const GPUTensor &g_kv_cache_f32, uint8_t *latent_q8_1_cache,
-                                                  int kv_lora, int qk_rope, size_t row_bytes, const int *d_pos,
-                                                  void *stream) {
+                                                  int kv_lora, int qk_rope, size_t row_bytes, const int *d_pos) {
     launch_mla_store_latent_q8_1_device_pos(g_kv_cache_f32.data<float>(), latent_q8_1_cache,
                                             kv_lora, qk_rope, row_bytes, d_pos);
 }
@@ -654,11 +635,10 @@ bool TensorTool::mla_absorb_components(const StorageTensor &s_kv_b_weight, const
                                        const GPUTensor &g_attn_f32,
                                        const GPUTensor &g_attn_xsum_delta_f32,
                                        int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
-                                       const int *d_pos, int max_seq_len, float softmax_scale,
-                                       void *stream) {
+                                       const int *d_pos, int max_seq_len, float softmax_scale) {
     if (latent_q8_1_cache == nullptr || latent_q8_1_row_bytes < q8_1_row_bytes(kv_lora)) return false;
     if (!Quant::is_quantized_dtype(s_kv_b_weight.dtype) || s_kv_b_weight.shape.size() != 2) {
-        if (std::getenv("LOCAL_LLM_DEBUG_DEEPSEEK_MLA_ABSORB_COMPARE")) {
+        if (deepseek_runtime_options().debug_mla_absorb_compare) {
             std::cerr << "[mla_absorb_compare] kv_b dtype/rank mismatch dtype="
                       << dtype_name(s_kv_b_weight.dtype) << " rank=" << s_kv_b_weight.shape.size() << "\n";
         }
@@ -666,7 +646,7 @@ bool TensorTool::mla_absorb_components(const StorageTensor &s_kv_b_weight, const
     }
     const int kvb_out = n_heads * (qk_nope + v_head);
     if (s_kv_b_weight.shape[0] != kvb_out || s_kv_b_weight.shape[1] != kv_lora) {
-        if (std::getenv("LOCAL_LLM_DEBUG_DEEPSEEK_MLA_ABSORB_COMPARE")) {
+        if (deepseek_runtime_options().debug_mla_absorb_compare) {
             std::cerr << "[mla_absorb_compare] kv_b shape mismatch: shape0=" << s_kv_b_weight.shape[0]
                       << " shape1=" << s_kv_b_weight.shape[1]
                       << " expected=" << kvb_out << "x" << kv_lora << "\n";
@@ -679,7 +659,7 @@ bool TensorTool::mla_absorb_components(const StorageTensor &s_kv_b_weight, const
         g_q_abs_xsum_delta_f32.numel() != n_heads * static_cast<int>(q8_1_row_bytes(kv_lora) / 36) ||
         g_attn_xsum_delta_f32.numel() != n_heads * static_cast<int>(q8_1_row_bytes(kv_lora) / 36) ||
         g_attn_scores_f32.numel() != n_heads * max_seq_len) {
-        if (std::getenv("LOCAL_LLM_DEBUG_DEEPSEEK_MLA_ABSORB_COMPARE")) {
+        if (deepseek_runtime_options().debug_mla_absorb_compare) {
             std::cerr << "[mla_absorb_compare] tensor shape mismatch q_numel=" << g_q_f32.numel()
                       << " attn_rows=" << g_attn_f32.rows()
                       << " q_abs_numel=" << g_q_abs_f32.numel()
@@ -755,7 +735,7 @@ bool TensorTool::mla_absorb_decode_v_cache(const StorageTensor &s_kv_b_weight, c
                                            const GPUTensor &g_attn_f32,
                                            int n_heads, int qk_nope, int qk_rope, int v_head, int kv_lora,
                                            const int *d_pos, int max_seq_len, float softmax_scale,
-                                           CudaScratch &scratch, void *stream) {
+                                           CudaScratch &scratch) {
     if (latent_q8_1_cache == nullptr || latent_q8_1_row_bytes < q8_1_row_bytes(kv_lora)) return false;
     if (!Quant::is_quantized_dtype(s_kv_b_weight.dtype) || s_kv_b_weight.shape.size() != 2) return false;
     const int kvb_out = n_heads * (qk_nope + v_head);
@@ -818,11 +798,11 @@ void TensorTool::moe_accumulate(const GPUTensor &g_expert_out_f32, float weight,
 }
 
 void TensorTool::moe_accumulate_device(const GPUTensor &g_expert_out_f32, const float *d_weight,
-                                       const GPUTensor &g_out_f32, void *stream) {
+                                       const GPUTensor &g_out_f32) {
     launch_moe_accumulate_device(g_expert_out_f32.data<float>(), d_weight, g_out_f32.data<float>(),
                                  static_cast<int>(g_out_f32.numel()));
 }
 
-void TensorTool::argmax(const GPUTensor &g_logits_f32, int *d_out_idx, int vocab, void *stream) {
+void TensorTool::argmax(const GPUTensor &g_logits_f32, int *d_out_idx, int vocab) {
     launch_argmax(g_logits_f32.data<float>(), vocab, d_out_idx);
 }

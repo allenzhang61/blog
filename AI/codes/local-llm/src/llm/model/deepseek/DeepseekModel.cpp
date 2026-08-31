@@ -8,35 +8,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
-#include <cstdlib>
 #include <iostream>
 #include <utility>
 
 #include "backend/cuda/common.h"
 #include "backend/cuda/graph/CudaGraph.h"
 #include "backend/cuda/mem/CudaScratch.h"
+#include "llm/model/deepseek/DeepseekRuntimeOptions.h"
 #include "llm/model/deepseek/DeepseekTrace.h"
 #include "tensor/GPUTensor.h"
 #include "tensor/TensorTool.h"
 #include "utils/stats/Profiler.h"
 #include "utils/stats/ScopedTimer.h"
-
-namespace {
-    bool deepseek_device_argmax_disabled() {
-        const char *env = std::getenv("LOCAL_LLM_DISABLE_DEEPSEEK_DEVICE_ARGMAX");
-        return env != nullptr && std::atoi(env) > 0;
-    }
-
-    bool deepseek_quant_direct_enabled() {
-        const char *env = std::getenv("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
-        return env == nullptr || std::atoi(env) > 0;
-    }
-
-    bool deepseek_cuda_graph_disabled() {
-        const char *env = std::getenv("LOCAL_LLM_DISABLE_DEEPSEEK_CUDA_GRAPH");
-        return env != nullptr && std::atoi(env) > 0;
-    }
-} // namespace
 
 DeepseekModel::DeepseekModel(std::unique_ptr<MF> mf, int max_output_tokens, const SamplingConfig &sampling)
     : mf_(std::move(mf)),
@@ -100,93 +83,111 @@ int DeepseekModel::prefill(SessionBase &session) {
     return forward_session(dynamic_cast<DeepseekSession &>(session), session.h_input_i32_, 0);
 }
 
-int DeepseekModel::decode(SessionBase &session) {
-    auto &deepseek_session = dynamic_cast<DeepseekSession &>(session);
-    const int prev_token_id = deepseek_session.prev_token_id();
-    const int pos = deepseek_session.decode_pos();
+int DeepseekModel::decode(SessionBase &session_base) {
+    auto &session = dynamic_cast<DeepseekSession &>(session_base);
+    const int prev_token_id = session.prev_token_id();
+    const int pos = session.decode_pos();
 
-    if (!sampler_.is_greedy() || deepseek_device_argmax_disabled()) {
+    if (!sampler_.is_greedy()) {
+        //temperature>0会进入这个分支
         const auto c_input_i32 = CPUTensor(&prev_token_id, {1}, DType::I32);
-        return forward_session(deepseek_session, c_input_i32, pos);
+        return forward_session(session, c_input_i32, pos);
     }
 
-    deepseek_session.d_token().set_data(prev_token_id, "deepseek decode token H2D 失败");
-    deepseek_session.d_pos().set_data(pos, "deepseek decode pos H2D 失败");
+    session.d_token().set_data(prev_token_id, "deepseek decode token H2D 失败");
+    session.d_pos().set_data(pos, "deepseek decode pos H2D 失败");
 
-    const bool graph_enabled = deepseek_quant_direct_enabled() && !deepseek_cuda_graph_disabled();
+    const bool graph_enabled = deepseek_runtime_options().quant_direct;
     const bool profile_this_step = Profiler::instance().capturing();
     if (!graph_enabled) {
-        eager_decode_greedy_device(deepseek_session, pos);
-        const CPUTensor h_next_token_i32 = deepseek_session.d_token().to_host(
-            deepseek_session.cpu_scratch, "deepseek.decode.token",
+        eager_decode_greedy_device(session, pos);
+        const CPUTensor h_next_token_i32 = session.d_token().to_host(
+            session.cpu_scratch, "deepseek.decode.token",
             "deepseek decode token D2H 失败");
         return h_next_token_i32.data<int>()[0];
     }
 
-    if (deepseek_session.decode_greedy_steps == 0 || profile_this_step) {
-        eager_decode_greedy_device(deepseek_session, pos);
+    // 如果是当前 session 的第一个 greedy decode step，或者 profiler 正在采样这一 step，就走 eager：
+    if (session.decode_greedy_steps == 0 || profile_this_step) {
+        eager_decode_greedy_device(session, pos);
+        // 如果这一步不是 profiler step，就把已有 graph 标记为失效。原因是刚才 eager 可能让 scratch buffer 扩容，
+        //      旧 graph 里捕获的指针可能不再可靠，所以下一步要重新录。
+        // 如果是 profiler step，则不标记 stale。因为 profiler 只是临时绕开 graph，为了让逐 kernel 计时能被 ScopedTimer 抓到；
+        //      它不应该破坏已经录好的 graph。
         if (!profile_this_step) {
-            mark_cuda_graph_stale(deepseek_session.decode_graph);
+            mark_cuda_graph_stale(session.decode_graph);
         }
     } else {
-        if (!deepseek_session.decode_graph.ready()) {
-            record_decode_graph(deepseek_session);
+        // 如果 CUDA Graph 还没准备好，就录一次 graph。record_decode_graph(session) 会把单步 decode 的 GPU 计算录下来
+        if (!session.decode_graph.ready()) {
+            record_decode_graph(session);
         }
-        launch_cuda_graph(deepseek_session.decode_graph, "deepseek decode graph launch 失败");
+        // 后续 decode step 就 replay 这个 graph，减少大量 kernel launch 开销。
+        launch_cuda_graph(session.decode_graph, "deepseek decode graph launch 失败");
     }
-    ++deepseek_session.decode_greedy_steps;
-    for (auto &kv : deepseek_session.kv_caches) {
+    // 记录这个 session 已经跑过一个 greedy decode step。这样下次不会再按“第一步”处理。
+    ++session.decode_greedy_steps;
+    // 更新每一层 KV cache 的有效长度。当前 decode 处理的位置是 pos，所以执行后有效序列长度变成：
+    // pos + 1
+    // 这个很重要，后面的 attention 要知道历史 cache 到哪里是有效的。
+    for (auto &kv: session.kv_caches) {
         kv.seq_len = pos + 1;
     }
 
-    const CPUTensor h_next_token_i32 = deepseek_session.d_token().to_host(
-        deepseek_session.cpu_scratch, "deepseek.decode.token",
+    const CPUTensor h_next_token_i32 = session.d_token().to_host(
+        session.cpu_scratch, "deepseek.decode.token",
         "deepseek decode token D2H 失败");
     return h_next_token_i32.data<int>()[0];
 }
 
-void DeepseekModel::eager_decode_greedy_device(DeepseekSession &deepseek_session, int pos) {
-    auto &scratch = deepseek_session.cuda_scratch;
+/*
+*   eager     = 直接逐个 kernel 执行，不走 CUDA Graph replay
+    decode    = 生成阶段每次只处理 1 个 token
+    greedy    = 只取概率最大的 token，也就是 argmax
+    device    = token 输入、argmax 输出尽量都留在 GPU 上
+ *
+ */
+void DeepseekModel::eager_decode_greedy_device(DeepseekSession &session, int pos) {
+    auto &scratch = session.cuda_scratch;
     const int64_t hidden_size = config_.hidden_size;
     const auto g_hidden_f32 = GPUTensor(scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
-    const GPUTensor &g_input_i32 = deepseek_session.d_token();
+    const GPUTensor &g_input_i32 = session.d_token();
     TensorTool::embedding_lookup(*weights_.s_token_embd, g_input_i32, g_hidden_f32);
-    deepseek_trace::tensor(deepseek_session, g_hidden_f32, "embedding", pos, -1);
+    deepseek_trace::tensor(session, g_hidden_f32, "embedding", pos, -1);
 
     for (int i = 0; i < config_.num_layers; ++i) {
-        deepseek_session.trace_pos = pos;
-        deepseek_session.trace_layer = i;
+        session.trace_pos = pos;
+        session.trace_layer = i;
         {
             ScopedCpuTimer t("ds.decode.mla_forward");
-            mla_layers_[i].forward(deepseek_session, g_hidden_f32, pos, /*use_device_pos=*/true);
+            mla_layers_[i].forward(session, g_hidden_f32, pos, /*use_device_pos=*/true);
         }
-        deepseek_trace::tensor(deepseek_session, g_hidden_f32, "mla", pos, i);
+        deepseek_trace::tensor(session, g_hidden_f32, "mla", pos, i);
         {
             ScopedCpuTimer t("ds.decode.mlp_forward");
             ScopedCpuTimer split_t(weights_.layers[i].is_moe
                                        ? "ds.decode.mlp_moe_forward"
                                        : "ds.decode.mlp_dense_forward");
-            mlp_layers_[i].forward(deepseek_session, g_hidden_f32);
+            mlp_layers_[i].forward(session, g_hidden_f32);
         }
-        deepseek_trace::tensor(deepseek_session, g_hidden_f32, "mlp", pos, i);
+        deepseek_trace::tensor(session, g_hidden_f32, "mlp", pos, i);
     }
-    deepseek_session.trace_pos = -1;
-    deepseek_session.trace_layer = -1;
+    session.trace_pos = -1;
+    session.trace_layer = -1;
 
     const auto g_normed_f32 = GPUTensor(scratch, scratch_key::kNormed, {1, hidden_size}, DType::F32);
     RMSNorm::forward(*weights_.s_output_norm, g_hidden_f32, g_normed_f32,
                      config_.rms_norm_eps, /*one_plus=*/false);
-    deepseek_trace::tensor(deepseek_session, g_normed_f32, "final_norm", pos, config_.num_layers);
+    deepseek_trace::tensor(session, g_normed_f32, "final_norm", pos, config_.num_layers);
     {
         ScopedCpuTimer t("ds.decode.lm_head_argmax_device");
-        deepseek_session.trace_pos = pos;
-        deepseek_session.trace_layer = config_.num_layers;
-        lm_head_.forward_argmax_device(*weights_.s_output, deepseek_session, g_normed_f32,
-                                       deepseek_session.d_token());
-        deepseek_session.trace_pos = -1;
-        deepseek_session.trace_layer = -1;
+        session.trace_pos = pos;
+        session.trace_layer = config_.num_layers;
+        lm_head_.forward_argmax_device(*weights_.s_output, session, g_normed_f32,
+                                       session.d_token());
+        session.trace_pos = -1;
+        session.trace_layer = -1;
     }
-
 }
 
 void DeepseekModel::record_decode_graph(DeepseekSession &deepseek_session) {

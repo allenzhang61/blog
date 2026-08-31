@@ -68,60 +68,60 @@ int QwenModel::prefill(SessionBase &session) {
     return lm_head_.forward(weights_.s_token_embd, qwen_session, g_normed_f32, sampler_);
 }
 
-int QwenModel::decode(SessionBase &session) {
-    auto &qwen_session = dynamic_cast<QwenSession &>(session);
-    const int prev_token_id = qwen_session.prev_token_id();
-    const int pos = qwen_session.decode_pos();
+int QwenModel::decode(SessionBase &session_base) {
+    auto &session = dynamic_cast<QwenSession &>(session_base);
+    const int prev_token_id = session.prev_token_id();
+    const int pos = session.decode_pos();
 
     // 非贪心（温度/top-k/top-p/重复惩罚）需 host 端 Sampler，无法走 GPU argmax 闭环，
     // 退回原逐 kernel launch 路径。
     if (!sampler_.is_greedy()) {
         const TextConfig &text_config = config_.data.text;
         const int64_t hidden_size = text_config.hidden_size;
-        CudaScratch &scratch = qwen_session.cuda_scratch;
+        CudaScratch &scratch = session.cuda_scratch;
 
         const auto g_hidden_f32 = GPUTensor(
             scratch, scratch_key::kHidden, {1, hidden_size}, DType::F32);
         const int token_id = prev_token_id;
         const auto c_input_view_i32 = CPUTensor(&token_id, {1}, DType::I32);
         embedding_.forward(weights_.s_token_embd, c_input_view_i32, g_hidden_f32, scratch);
-        for (DecoderLayer &layer : layers_) layer.decode(qwen_session, g_hidden_f32, pos);
+        for (DecoderLayer &layer : layers_) layer.decode(session, g_hidden_f32, pos);
         const auto g_normed_f32 = GPUTensor(
             scratch, scratch_key::kTokenHiddenA, {1, hidden_size}, DType::F32);
         RMSNorm::forward(weights_.s_output_norm, g_hidden_f32, g_normed_f32,
                          config_.data.text.rms_norm_eps, /*one_plus=*/true);
-        return lm_head_.forward(weights_.s_token_embd, qwen_session, g_normed_f32, sampler_);
+        return lm_head_.forward(weights_.s_token_embd, session, g_normed_f32, sampler_);
     }
 
     // === 贪心：CUDA Graph 路径 ===
     // 每步 graph 外把 host 侧的 pos / 输入 token 异步写入 device buffer（graph 内 kernel 只读它们）。
-    qwen_session.d_pos().set_data(pos, "decode pos H2D 失败");
-    qwen_session.d_token().set_data(prev_token_id, "decode token H2D 失败");
+    session.d_pos().set_data(pos, "decode pos H2D 失败");
+    session.d_token().set_data(prev_token_id, "decode token H2D 失败");
 
     // profile 采样步走 eager：graph replay 内的 kernel 不经 ScopedGpuTimer 埋点，
     // 无法拿到逐 kernel 细分；此步改走 eager 让 profiler 抓到每个 kernel 的耗时。
     // 非采样步仍走 graph，保持稳态吞吐口径不变。
     const bool profile_this_step = Profiler::instance().capturing();
 
-    if (qwen_session.decode_greedy_steps == 0 || profile_this_step) {
+    if (session.decode_greedy_steps == 0 || profile_this_step) {
         // 首步（或换 session / profile 采样步）走 eager：把所有 grow-only scratch 撑到
         // decode 稳态尺寸，避免随后 capture 期间触发非法的 cudaMalloc；同时 GPU argmax 把结果写回 d_token。
-        eager_decode_greedy_device(qwen_session);
+        eager_decode_greedy_device(session);
         // profile 采样步不使已建好的 graph 失效（它没改 scratch 尺寸，下步可继续 replay）。
         if (!profile_this_step) {
-            mark_cuda_graph_stale(qwen_session.decode_graph); // scratch 刚可能增长，之前若有 graph 也失效
+            mark_cuda_graph_stale(session.decode_graph); // scratch 刚可能增长，之前若有 graph 也失效
         }
     } else {
-        if (!qwen_session.decode_graph.ready()) {
-            record_decode_graph(qwen_session);
+        if (!session.decode_graph.ready()) {
+            record_decode_graph(session);
         }
-        launch_cuda_graph(qwen_session.decode_graph, "decode graph launch 失败");
+        launch_cuda_graph(session.decode_graph, "decode graph launch 失败");
     }
-    ++qwen_session.decode_greedy_steps;
+    ++session.decode_greedy_steps;
 
     // 取回 argmax 得到的下一个 token id（graph 外的一次 int D2H + 同流同步）。
     int next_token = 0;
-    cuda_memcpy_d2h(&next_token, qwen_session.d_token().data<int>(), sizeof(int), "decode token D2H 失败");
+    cuda_memcpy_d2h(&next_token, session.d_token().data<int>(), sizeof(int), "decode token D2H 失败");
     return next_token;
 }
 

@@ -7,6 +7,7 @@
 #include "backend/cuda/common.h"
 #include "backend/cuda/mem/CudaScratch.h"
 #include "llm/model/deepseek/DeepseekConfig.h"
+#include "llm/model/deepseek/DeepseekRuntimeOptions.h"
 #include "llm/model/deepseek/DeepseekSession.h"
 #include "llm/model/deepseek/DeepseekTrace.h"
 #include "llm/model/deepseek/DeepseekWeights.h"
@@ -24,31 +25,11 @@
 #include <vector>
 
 namespace {
-    bool use_mla_absorption() {
-        const char *env = std::getenv("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MLA_ABSORB");
-        return env != nullptr && std::atoi(env) > 0;
-    }
-
-    bool use_mla_absorption_hybrid() {
-        const char *env = std::getenv("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MLA_ABSORB_HYBRID");
-        return env != nullptr && std::atoi(env) > 0;
-    }
-
-    bool debug_mla_absorption_compare() {
-        const char *env = std::getenv("LOCAL_LLM_DEBUG_DEEPSEEK_MLA_ABSORB_COMPARE");
-        return env != nullptr && std::atoi(env) > 0;
-    }
-
-    bool use_deepseek_quant_direct() {
-        const char *direct = std::getenv("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT");
-        return direct == nullptr || std::atoi(direct) > 0;
-    }
-
     bool kv_b_prefill_uses_q8_raw_sum(DType dtype, int64_t input_size) {
         if (input_size <= 1) return false;
         if (dtype != DType::Q4_K && dtype != DType::Q6_K) return false;
-        const char *tiled = std::getenv("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_PREFILL_TILED_MMQ");
-        return use_deepseek_quant_direct() || (tiled != nullptr && std::atoi(tiled) > 0);
+        const DeepseekRuntimeOptions options = deepseek_runtime_options();
+        return options.quant_direct || options.experimental_prefill_tiled_mmq;
     }
 
     int env_int(const char *name, int fallback) {
@@ -160,7 +141,8 @@ namespace {
         static int emitted = 0;
         const int target_layer = env_int("LOCAL_LLM_DEBUG_DEEPSEEK_MLA_ABSORB_LAYER", 0);
         const int max_reports = env_int("LOCAL_LLM_DEBUG_DEEPSEEK_MLA_ABSORB_REPORTS", 1);
-        if (!debug_mla_absorption_compare() || layer != target_layer || emitted >= max_reports) return;
+        if (!deepseek_runtime_options().debug_mla_absorb_compare || layer != target_layer ||
+            emitted >= max_reports) return;
         ++emitted;
 
         auto &scratch = session.cuda_scratch;
@@ -376,7 +358,8 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
     }
     session.kv_caches[layer].seq_len = start_pos + static_cast<int>(input_size);
 
-    const bool absorb_decode = use_device_pos && input_size == 1 && use_mla_absorption();
+    const DeepseekRuntimeOptions options = deepseek_runtime_options();
+    const bool absorb_decode = use_device_pos && input_size == 1 && options.experimental_mla_absorb;
     auto &kv_cache = session.kv_caches[layer];
     uint8_t *latent_q8_1_cache = static_cast<uint8_t *>(kv_cache.latent_q8_1_cache.ptr);
     const size_t latent_q8_1_row_bytes = kv_cache.latent_q8_1_row_bytes;
@@ -440,7 +423,7 @@ void MLA::forward(DeepseekSession &session, const GPUTensor &g_hidden_f32, int s
     GPUTensor g_attn_f32 = GPUTensor(
         scratch, scratch_key::kAttn,
         {input_size, static_cast<int64_t>(n_heads * v_head)}, DType::F32);
-    if (absorb_decode && use_mla_absorption_hybrid() &&
+    if (absorb_decode && options.experimental_mla_absorb_hybrid &&
         TensorTool::mla_absorb_decode_v_cache(*lw_.s_attn_kv_b, g_q_f32, latent_q8_1_cache, latent_q8_1_row_bytes,
                                               g_kv_cache_f32, g_kv_b_cache_f32, g_attn_f32,
                                               n_heads, qk_nope, qk_rope, v_head, kv_lora,
