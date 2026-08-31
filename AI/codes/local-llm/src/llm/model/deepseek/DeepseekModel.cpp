@@ -97,7 +97,7 @@ int DeepseekModel::decode(SessionBase &session_base) {
     session.d_token().set_data(prev_token_id, "deepseek decode token H2D 失败");
     session.d_pos().set_data(pos, "deepseek decode pos H2D 失败");
 
-    const bool graph_enabled = deepseek_runtime_options().quant_direct;
+    const bool graph_enabled = deepseek_runtime_options().cuda_graph;
     const bool profile_this_step = Profiler::instance().capturing();
     if (!graph_enabled) {
         eager_decode_greedy_device(session, pos);

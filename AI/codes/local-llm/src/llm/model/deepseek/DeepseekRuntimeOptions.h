@@ -9,6 +9,7 @@
 
 struct DeepseekRuntimeOptions {
     bool quant_direct = true;
+    bool cuda_graph = true;
     bool experimental_moe_fused_swiglu = false;
     bool debug_device_indexed_moe = false;
     bool experimental_mla_absorb = false;
@@ -29,6 +30,7 @@ inline DeepseekRuntimeOptions deepseek_runtime_options() {
 
     return {
         /* .quant_direct = */ flag_default_enabled("LOCAL_LLM_DEEPSEEK_QUANT_DIRECT"),
+        /* .cuda_graph = */ flag_default_enabled("LOCAL_LLM_DEEPSEEK_CUDA_GRAPH"),
         /* .experimental_moe_fused_swiglu = */
         flag_enabled("LOCAL_LLM_EXPERIMENTAL_DEEPSEEK_MOE_FUSED_SWIGLU"),
         /* .debug_device_indexed_moe = */ flag_enabled("LOCAL_LLM_DEBUG_DEVICE_INDEXED_MOE"),
