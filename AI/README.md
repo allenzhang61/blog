@@ -281,6 +281,14 @@
   - [device info](chapter-15/15-004.md)
   - [内存架构](chapter-15/15-005.md)
   - [静态共享内存 vs 动态共享内存](chapter-15/15-006.md)
+  - [grid/block/thread](chapter-15/15-007.md)
+  - [host/global/device](chapter-15/15-008.md)
+  - [row major layout/column major layout](chapter-15/15-009.md)
+  - [blas](chapter-15/15-010.md)
+  - [现代 GPU 架构](chapter-15/15-011.md)
+  - [block scheduling / thread scheduling](chapter-15/15-012.md)
+  - [performance](chapter-15/15-013.md)
+  - []
 - GPU 性能优化
   - [矢量加速原理](chapter-09/09-001.ipynb)
   - GPU 硬件架构
@@ -373,6 +381,8 @@
 - 强化学习
   - https://web.stanford.edu/class/psych209/Readings/SuttonBartoIPRLBook2ndEd.pdf
   - https://datawhalechina.github.io/easy-rl/#/
+- cuda
+  - programming massively parallel processors - a hands on approach - 4rd
 - vLLM & cuda
-  - 大模型训练/推理框架：推理（vLLM、TensorRT-LLM、SGLang等）、机器学习框架（Tensorflow/PyTorch等）;Kubeflow
+  - 大模型训练/推理框架：机器学习框架（Tensorflow/PyTorch等）;Kubeflow
   - 定位和解决复杂系统性能瓶颈，运用各类性能分析工具（Perf、eBPF、Nsight等）；
