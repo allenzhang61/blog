@@ -288,7 +288,7 @@
   - [现代 GPU 架构](chapter-15/15-011.md)
   - [block scheduling / thread scheduling](chapter-15/15-012.md)
   - [performance](chapter-15/15-013.md)
-  - []
+  - [矩阵乘法与 tile 加速](chapter-15/15-014.md)
 - GPU 性能优化
   - [矢量加速原理](chapter-09/09-001.ipynb)
   - GPU 硬件架构
