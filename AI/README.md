@@ -289,6 +289,7 @@
   - [block scheduling / thread scheduling](chapter-15/15-012.md)
   - [performance](chapter-15/15-013.md)
   - [矩阵乘法与 tile 加速](chapter-15/15-014.md)
+  - [优化方法清单](chapter-15/15-015.md)
 - GPU 性能优化
   - [矢量加速原理](chapter-09/09-001.ipynb)
   - GPU 硬件架构
@@ -305,7 +306,32 @@
   - LLM 训练优化
   - LLM 推理优化
 
-#### AGI
+## 知识管理
+
+- [20-01 知识管理领域知名专家](20-01%20知识管理领域知名专家.md)
+
+## workflow
+
+## ray
+
+
+
+## agent
+
+- palantir
+  - [architecture overview](chapter-21/21-001.md)
+  - [AIP, Foundry, and Apollo](chapter-21/21-002.md)
+  - [The Ontology system](chapter-21/21-003.md)
+  - [Multimodal Data Plane (MMDP)](chapter-21/21-004.md)
+  - [Interoperability](chapter-21/21-005.md)
+  - [The Rubix substrate](chapter-21/21-006.md)
+  - [AIP architecture](chapter-21/21-007.md)
+- Apache Iceberg
+  - Apache Iceberg 是一种用于超大规模分析型数据集的开源高性能表格式（Table Format）。它最初由 Netflix 开发，随后捐赠给 Apache 软件基金会成为顶级项目。
+  - 它的核心定位是在对象存储（如 AWS S3、MinIO）或分布式文件系统（如 HDFS）之上的底层数据文件（如 Parquet、ORC、Avro）与上层计算引擎之间，提供类似传统关系型数据库（RDBMS）的表级抽象和管理能力。
+
+
+## 低优
 
 - arc-agi-3
   - [人是如何认识世界的](chapter-13/13-003.md)
@@ -316,17 +342,6 @@
   - [MuZero](chapter-13/13-005.md)
 - competitions
   - [ARC Prize 2026 - ARC-AGI-3](chapter-08/08-001.ipynb)
-
-## 知识管理
-
-- [20-01 知识管理领域知名专家](20-01%20知识管理领域知名专家.md)
-
-## workflow
-
-
-
-## 低优
-
 - 计算机视觉
   - ResNet
   - Vision Transformer
